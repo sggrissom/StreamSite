@@ -1,2 +1,1 @@
-import * as rpc from "vlens/rpc"
-
+import * as rpc from "vlens/rpc";

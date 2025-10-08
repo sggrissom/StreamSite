@@ -3,6 +3,7 @@ package stream
 import (
 	"log"
 	"net/http"
+	"stream/backend"
 	"stream/cfg"
 
 	"github.com/joho/godotenv"
@@ -31,6 +32,8 @@ func MakeApplication() *vbeam.Application {
 
 	db := OpenDB(cfg.DBPath)
 	var app = vbeam.NewApplication("Stream", db)
+
+	backend.RegisterStreamProxy(app)
 
 	return app
 }
