@@ -17,7 +17,7 @@ import (
 //go:embed dist
 var embedded embed.FS
 
-const Port = 8666
+const Port = 3000
 
 func main() {
 	// Create required directories

@@ -12,7 +12,7 @@ import (
 	"go.hasen.dev/vbeam/local_ui"
 )
 
-const Port = 8666
+const Port = 3000
 const Domain = "stream.localhost"
 const FEDist = ".serve/frontend"
 
