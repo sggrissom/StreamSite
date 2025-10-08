@@ -30,9 +30,18 @@ func MakeApplication() *vbeam.Application {
 		vbeam.InitRotatingLogger("stream")
 	}
 
+	// Log application startup
+	backend.LogInfo(backend.LogCategorySystem, "Stream application starting", map[string]interface{}{
+		"version":   "1.0.0",
+		"dbPath":    cfg.DBPath,
+		"staticDir": cfg.StaticDir,
+	})
+
 	db := OpenDB(cfg.DBPath)
 	var app = vbeam.NewApplication("Stream", db)
 
+	backend.SetupAuth(app)
+	backend.RegisterUserMethods(app)
 	backend.RegisterStreamProxy(app)
 
 	return app

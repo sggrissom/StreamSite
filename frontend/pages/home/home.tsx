@@ -1,13 +1,23 @@
 import * as preact from "preact";
+import * as vlens from "vlens";
 import * as rpc from "vlens/rpc";
+import * as core from "vlens/core";
 import * as server from "../../server";
 import { Header, Footer } from "../../layout";
+import "../../styles/global";
 import "./home-styles";
 
-type Data = {};
+type Data = {
+  authId: number;
+};
 
 export async function fetch(route: string, prefix: string) {
-  return rpc.ok<Data>({});
+  // Check if user is already authenticated
+  let [authResp, authErr] = await server.GetAuthContext({});
+
+  return rpc.ok<Data>({
+    authId: authResp?.id || 0,
+  });
 }
 
 export function view(
@@ -15,16 +25,28 @@ export function view(
   prefix: string,
   data: Data,
 ): preact.ComponentChild {
+  // Redirect to dashboard if already authenticated
+  if (data.authId > 0) {
+    core.setRoute("/dashboard");
+    return <div></div>;
+  }
   return (
     <div>
       <Header />
-      <main className="home-container">
-        <h1 className="home-title">Deploy test</h1>
-        <p className="home-description">we are so back</p>
-        <div className="stream-link-container">
-          <a href="/stream" className="stream-link">
-            Watch Live Stream
-          </a>
+      <main className="landing-container">
+        <div className="landing-content">
+          <h1 className="landing-title">Welcome to Stream</h1>
+          <p className="landing-description">
+            Sign in to access your stream or create a new account to get started.
+          </p>
+          <div className="landing-actions">
+            <a href="/login" className="btn btn-primary btn-large">
+              Sign In
+            </a>
+            <a href="/create-account" className="btn btn-large">
+              Create Account
+            </a>
+          </div>
         </div>
       </main>
       <Footer />

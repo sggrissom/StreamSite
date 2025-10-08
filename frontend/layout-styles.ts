@@ -1,0 +1,73 @@
+import { block } from "vlens/css";
+
+block(`
+.site-header {
+  padding: 1rem;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+`);
+
+block(`
+.site-nav {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+`);
+
+block(`
+.site-logo {
+  font-size: 1.25rem;
+  font-weight: bold;
+  color: var(--text);
+  text-decoration: none;
+  transition: color var(--transition-speed) ease;
+}
+`);
+
+block(`
+.site-logo:hover {
+  color: var(--accent);
+}
+`);
+
+block(`
+.logout-button {
+  padding: 0.5rem 1rem;
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all var(--transition-speed) ease;
+}
+`);
+
+block(`
+.logout-button:hover {
+  background: var(--hover-bg);
+  border-color: #dc2626;
+  color: #dc2626;
+}
+`);
+
+block(`
+.site-footer {
+  padding: 1rem;
+  text-align: center;
+  color: var(--muted);
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+`);
+
+block(`
+.site-footer p {
+  margin: 0;
+}
+`);

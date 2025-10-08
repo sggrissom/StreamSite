@@ -1,35 +1,71 @@
 import * as preact from "preact";
+import * as vlens from "vlens";
+import * as server from "./server";
+import "./layout-styles";
+
+const useAuthCheck = vlens.declareHook(() => {
+  const state = {
+    isAuthenticated: false,
+    isLoading: true
+  };
+
+  // Check auth on mount
+  server.GetAuthContext({}).then(([authResp, authErr]) => {
+    if (authResp && authResp.id > 0) {
+      state.isAuthenticated = true;
+    }
+    state.isLoading = false;
+    vlens.scheduleRedraw();
+  });
+
+  return state;
+});
+
+async function handleLogout(event: Event) {
+  event.preventDefault();
+
+  const nativeFetch = window.fetch.bind(window);
+  try {
+    const res = await nativeFetch("/api/logout", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+    });
+
+    const result = await res.json();
+    if (result.success) {
+      // Redirect to home page after logout
+      window.location.href = "/";
+    }
+  } catch (error) {
+    console.error("Logout failed:", error);
+    // Still redirect on error
+    window.location.href = "/";
+  }
+}
 
 export const Header = () => {
+  const auth = useAuthCheck();
+
   return (
-    <header
-      style={{
-        padding: "1rem",
-        background: "var(--surface)",
-        borderBottom: "1px solid var(--border)",
-      }}
-    >
-      <nav>
-        <a
-          href="/"
-          style={{
-            fontSize: "1.25rem",
-            fontWeight: "bold",
-            color: "var(--text)",
-            textDecoration: "none",
-          }}
-        >
+    <header className="site-header">
+      <nav className="site-nav">
+        <a href="/" className="site-logo">
           Stream
         </a>
+        {auth.isAuthenticated && (
+          <button onClick={handleLogout} className="logout-button">
+            Logout
+          </button>
+        )}
       </nav>
     </header>
   );
 };
 
 export const Footer = () => (
-  <footer
-    style={{ padding: "1rem", textAlign: "center", color: "var(--muted)" }}
-  >
+  <footer className="site-footer">
     <p>© 2025 Stream. All rights reserved.</p>
   </footer>
 );

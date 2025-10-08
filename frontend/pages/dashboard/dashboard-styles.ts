@@ -1,7 +1,7 @@
 import { block } from "vlens/css";
 
 block(`
-.landing-container {
+.dashboard-container {
   min-height: calc(100vh - 200px);
   display: flex;
   align-items: center;
@@ -11,14 +11,14 @@ block(`
 `);
 
 block(`
-.landing-content {
+.dashboard-content {
   text-align: center;
-  max-width: 500px;
+  max-width: 600px;
 }
 `);
 
 block(`
-.landing-title {
+.dashboard-title {
   font-size: 2.5rem;
   font-weight: 700;
   color: var(--text);
@@ -27,7 +27,7 @@ block(`
 `);
 
 block(`
-.landing-description {
+.dashboard-description {
   font-size: 1.1rem;
   color: var(--muted);
   margin: 0 0 2rem;
@@ -36,7 +36,7 @@ block(`
 `);
 
 block(`
-.landing-actions {
+.dashboard-actions {
   display: flex;
   flex-direction: column;
   gap: 1rem;
@@ -45,7 +45,7 @@ block(`
 `);
 
 block(`
-.landing-actions .btn {
+.dashboard-actions .btn {
   width: 100%;
   max-width: 280px;
 }
@@ -53,15 +53,15 @@ block(`
 
 block(`
 @media (max-width: 768px) {
-  .landing-container {
+  .dashboard-container {
     padding: 20px 16px;
   }
 
-  .landing-title {
+  .dashboard-title {
     font-size: 2rem;
   }
 
-  .landing-description {
+  .dashboard-description {
     font-size: 1rem;
   }
 }
