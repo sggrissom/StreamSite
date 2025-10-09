@@ -37,7 +37,8 @@ export function view(
         <div className="landing-content">
           <h1 className="landing-title">Welcome to Stream</h1>
           <p className="landing-description">
-            Sign in to access your stream or create a new account to get started.
+            Sign in to access your stream or create a new account to get
+            started.
           </p>
           <div className="landing-actions">
             <a href="/login" className="btn btn-primary btn-large">

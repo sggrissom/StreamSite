@@ -26,7 +26,7 @@ const useLoginForm = vlens.declareHook(
     remember: false,
     error: "",
     loading: false,
-  })
+  }),
 );
 
 export async function fetch(route: string, prefix: string) {
@@ -38,7 +38,11 @@ export async function fetch(route: string, prefix: string) {
   });
 }
 
-export function view(route: string, prefix: string, data: Data): preact.ComponentChild {
+export function view(
+  route: string,
+  prefix: string,
+  data: Data,
+): preact.ComponentChild {
   // Redirect to dashboard if already authenticated
   if (data.authId > 0) {
     core.setRoute("/dashboard");
@@ -136,7 +140,10 @@ const LoginPage = ({ form }: LoginPageProps) => (
           <span>or</span>
         </div>
 
-        <form className="auth-form" onSubmit={vlens.cachePartial(onLoginClicked, form)}>
+        <form
+          className="auth-form"
+          onSubmit={vlens.cachePartial(onLoginClicked, form)}
+        >
           <div className="form-group">
             <label htmlFor="email">Email Address</label>
             <input

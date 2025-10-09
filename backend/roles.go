@@ -28,11 +28,11 @@ type ListUsersRequest struct {
 }
 
 type UserListInfo struct {
-	Id        int      `json:"id"`
-	Name      string   `json:"name"`
-	Email     string   `json:"email"`
-	Role      UserRole `json:"role"`
-	RoleName  string   `json:"roleName"`
+	Id       int      `json:"id"`
+	Name     string   `json:"name"`
+	Email    string   `json:"email"`
+	Role     UserRole `json:"role"`
+	RoleName string   `json:"roleName"`
 }
 
 type ListUsersResponse struct {

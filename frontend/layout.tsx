@@ -7,7 +7,7 @@ const useAuthCheck = vlens.declareHook(() => {
   const state = {
     auth: null as server.AuthResponse | null,
     isAuthenticated: false,
-    isLoading: true
+    isLoading: true,
   };
 
   // Check auth on mount

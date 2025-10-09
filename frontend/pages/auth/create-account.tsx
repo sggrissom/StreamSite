@@ -28,7 +28,7 @@ const useCreateAccountForm = vlens.declareHook(
     confirmPassword: "",
     error: "",
     loading: false,
-  })
+  }),
 );
 
 export async function fetch(route: string, prefix: string) {
@@ -40,7 +40,11 @@ export async function fetch(route: string, prefix: string) {
   });
 }
 
-export function view(route: string, prefix: string, data: Data): preact.ComponentChild {
+export function view(
+  route: string,
+  prefix: string,
+  data: Data,
+): preact.ComponentChild {
   // Redirect to dashboard if already authenticated
   if (data.authId > 0) {
     core.setRoute("/dashboard");
@@ -149,7 +153,10 @@ const CreateAccountPage = ({ form }: CreateAccountPageProps) => (
           <span>or</span>
         </div>
 
-        <form className="auth-form" onSubmit={vlens.cachePartial(onCreateAccountClicked, form)}>
+        <form
+          className="auth-form"
+          onSubmit={vlens.cachePartial(onCreateAccountClicked, form)}
+        >
           <div className="form-group">
             <label htmlFor="name">Full Name</label>
             <input

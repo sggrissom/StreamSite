@@ -91,11 +91,7 @@ export function view(
             Welcome, {data.auth.name}! You have full Site Admin access.
           </p>
 
-          {s.error && (
-            <div className="error-message">
-              {s.error}
-            </div>
-          )}
+          {s.error && <div className="error-message">{s.error}</div>}
 
           <div className="admin-sections">
             <div className="admin-section full-width">
@@ -130,7 +126,10 @@ export function view(
                               disabled={s.updating}
                               onChange={(e) => {
                                 const target = e.target as HTMLSelectElement;
-                                handleRoleChange(user.id, parseInt(target.value));
+                                handleRoleChange(
+                                  user.id,
+                                  parseInt(target.value),
+                                );
                               }}
                               value={user.role}
                             >

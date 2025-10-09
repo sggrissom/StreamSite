@@ -57,7 +57,9 @@ export function view(
 
             <div className="admin-section">
               <h2>Class Schedule</h2>
-              <p>Create and manage class schedules and instructor assignments.</p>
+              <p>
+                Create and manage class schedules and instructor assignments.
+              </p>
               <div className="section-actions">
                 <button className="btn btn-primary">Manage Schedule</button>
               </div>
