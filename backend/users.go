@@ -113,6 +113,12 @@ func AddUserTx(tx *vbolt.Tx, req CreateAccountRequest, hash []byte) User {
 	user.Name = req.Name
 	user.Email = req.Email
 	user.Role = RoleUser // New users default to base user role
+
+	// First user (ID=1) is automatically set as Site Admin
+	if user.Id == 1 {
+		user.Role = RoleSiteAdmin
+	}
+
 	user.Creation = time.Now()
 	user.LastLogin = time.Now()
 
