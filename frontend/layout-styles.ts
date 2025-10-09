@@ -35,6 +35,33 @@ block(`
 `);
 
 block(`
+.nav-links {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+`);
+
+block(`
+.nav-link {
+  padding: 0.5rem 1rem;
+  color: var(--text);
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 500;
+  border-radius: 8px;
+  transition: all var(--transition-speed) ease;
+}
+`);
+
+block(`
+.nav-link:hover {
+  background: var(--hover-bg);
+  color: var(--accent);
+}
+`);
+
+block(`
 .logout-button {
   padding: 0.5rem 1rem;
   background: transparent;
@@ -69,5 +96,19 @@ block(`
 block(`
 .site-footer p {
   margin: 0;
+}
+`);
+
+block(`
+@media (max-width: 768px) {
+  .nav-links {
+    gap: 0.5rem;
+  }
+
+  .nav-link,
+  .logout-button {
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+  }
 }
 `);

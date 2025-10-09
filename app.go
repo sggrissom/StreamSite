@@ -42,6 +42,7 @@ func MakeApplication() *vbeam.Application {
 
 	backend.SetupAuth(app)
 	backend.RegisterUserMethods(app)
+	backend.RegisterRoleMethods(app)
 	backend.RegisterStreamProxy(app)
 
 	return app

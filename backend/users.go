@@ -11,6 +11,15 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
+// UserRole defines the authorization level of a user
+type UserRole int
+
+const (
+	RoleUser        UserRole = 0 // Base user - can access basic features
+	RoleStreamAdmin UserRole = 1 // Stream/Class/Studio admin - can manage streams
+	RoleSiteAdmin   UserRole = 2 // Site admin - full access to all features
+)
+
 func RegisterUserMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateAccount)
 	vbeam.RegisterProc(app, GetAuthContext)
@@ -44,10 +53,12 @@ type LoginResponse struct {
 }
 
 type AuthResponse struct {
-	Id      int    `json:"id"`
-	Name    string `json:"name"`
-	Email   string `json:"email"`
-	IsAdmin bool   `json:"isAdmin"`
+	Id            int      `json:"id"`
+	Name          string   `json:"name"`
+	Email         string   `json:"email"`
+	Role          UserRole `json:"role"`
+	IsStreamAdmin bool     `json:"isStreamAdmin"` // Quick check for stream admin or higher
+	IsSiteAdmin   bool     `json:"isSiteAdmin"`   // Quick check for site admin
 }
 
 // Database types
@@ -55,6 +66,7 @@ type User struct {
 	Id        int       `json:"id"`
 	Name      string    `json:"name"`
 	Email     string    `json:"email"`
+	Role      UserRole  `json:"role"`
 	Creation  time.Time `json:"creation"`
 	LastLogin time.Time `json:"lastLogin"`
 }
@@ -65,6 +77,7 @@ func PackUser(self *User, buf *vpack.Buffer) {
 	vpack.Int(&self.Id, buf)
 	vpack.String(&self.Name, buf)
 	vpack.String(&self.Email, buf)
+	vpack.Int((*int)(&self.Role), buf)
 	vpack.Time(&self.Creation, buf)
 	vpack.Time(&self.LastLogin, buf)
 }
@@ -99,6 +112,7 @@ func AddUserTx(tx *vbolt.Tx, req CreateAccountRequest, hash []byte) User {
 	user.Id = vbolt.NextIntId(tx, UsersBkt)
 	user.Name = req.Name
 	user.Email = req.Email
+	user.Role = RoleUser // New users default to base user role
 	user.Creation = time.Now()
 	user.LastLogin = time.Now()
 
@@ -113,10 +127,12 @@ func AddUserTx(tx *vbolt.Tx, req CreateAccountRequest, hash []byte) User {
 
 func GetAuthResponseFromUser(user User) AuthResponse {
 	return AuthResponse{
-		Id:      user.Id,
-		Name:    user.Name,
-		Email:   user.Email,
-		IsAdmin: user.Id == 1, // First user is admin
+		Id:            user.Id,
+		Name:          user.Name,
+		Email:         user.Email,
+		Role:          user.Role,
+		IsStreamAdmin: user.Role >= RoleStreamAdmin, // Stream admin or site admin
+		IsSiteAdmin:   user.Role == RoleSiteAdmin,   // Site admin only
 	}
 }
 

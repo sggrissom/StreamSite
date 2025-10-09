@@ -97,8 +97,8 @@ func GetUserFromContext(r *http.Request) (User, bool) {
 	return user, ok
 }
 
-// RequireAdmin wraps a handler and ensures the user is an admin
-func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
+// RequireSiteAdmin wraps a handler and ensures the user is a site admin
+func RequireSiteAdmin(next http.HandlerFunc) http.HandlerFunc {
 	return AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		user, ok := GetUserFromContext(r)
 		if !ok {
@@ -106,8 +106,26 @@ func RequireAdmin(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 
-		if user.Id != 1 { // Admin check (first user is admin)
-			RespondForbiddenError(w, r, "Admin access required")
+		if user.Role != RoleSiteAdmin {
+			RespondForbiddenError(w, r, "Site admin access required")
+			return
+		}
+
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireStreamAdmin wraps a handler and ensures the user is at least a stream admin
+func RequireStreamAdmin(next http.HandlerFunc) http.HandlerFunc {
+	return AuthMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		user, ok := GetUserFromContext(r)
+		if !ok {
+			RespondAuthError(w, r, "Authentication required")
+			return
+		}
+
+		if user.Role < RoleStreamAdmin {
+			RespondForbiddenError(w, r, "Stream admin access required")
 			return
 		}
 

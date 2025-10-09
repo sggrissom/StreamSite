@@ -5,6 +5,7 @@ import "./layout-styles";
 
 const useAuthCheck = vlens.declareHook(() => {
   const state = {
+    auth: null as server.AuthResponse | null,
     isAuthenticated: false,
     isLoading: true
   };
@@ -12,6 +13,7 @@ const useAuthCheck = vlens.declareHook(() => {
   // Check auth on mount
   server.GetAuthContext({}).then(([authResp, authErr]) => {
     if (authResp && authResp.id > 0) {
+      state.auth = authResp;
       state.isAuthenticated = true;
     }
     state.isLoading = false;
@@ -46,7 +48,7 @@ async function handleLogout(event: Event) {
 }
 
 export const Header = () => {
-  const auth = useAuthCheck();
+  const authState = useAuthCheck();
 
   return (
     <header className="site-header">
@@ -54,10 +56,25 @@ export const Header = () => {
         <a href="/" className="site-logo">
           Stream
         </a>
-        {auth.isAuthenticated && (
-          <button onClick={handleLogout} className="logout-button">
-            Logout
-          </button>
+        {authState.isAuthenticated && authState.auth && (
+          <div className="nav-links">
+            <a href="/dashboard" className="nav-link">
+              Dashboard
+            </a>
+            {authState.auth.isStreamAdmin && (
+              <a href="/stream-admin" className="nav-link">
+                Stream Admin
+              </a>
+            )}
+            {authState.auth.isSiteAdmin && (
+              <a href="/site-admin" className="nav-link">
+                Site Admin
+              </a>
+            )}
+            <button onClick={handleLogout} className="logout-button">
+              Logout
+            </button>
+          </div>
         )}
       </nav>
     </header>

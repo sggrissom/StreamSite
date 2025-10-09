@@ -7,6 +7,8 @@ async function main() {
     vlens.routeHandler("/login", () => import("@app/pages/auth/login")),
     vlens.routeHandler("/create-account", () => import("@app/pages/auth/create-account")),
     vlens.routeHandler("/dashboard", () => import("@app/pages/dashboard/dashboard")),
+    vlens.routeHandler("/stream-admin", () => import("@app/pages/stream-admin/stream-admin")),
+    vlens.routeHandler("/site-admin", () => import("@app/pages/site-admin/site-admin")),
     vlens.routeHandler("/stream", () => import("@app/pages/stream/stream")),
     vlens.routeHandler("/", () => import("@app/pages/home/home")),
   ]);
