@@ -332,6 +332,19 @@ type GetStudioResponse struct {
 	MyRoleName string     `json:"myRoleName"`
 }
 
+type GetStudioDashboardRequest struct {
+	StudioId int `json:"studioId"`
+}
+
+type GetStudioDashboardResponse struct {
+	Success    bool       `json:"success"`
+	Error      string     `json:"error,omitempty"`
+	Studio     Studio     `json:"studio,omitempty"`
+	MyRole     StudioRole `json:"myRole"`
+	MyRoleName string     `json:"myRoleName"`
+	Rooms      []Room     `json:"rooms,omitempty"`
+}
+
 type UpdateStudioRequest struct {
 	StudioId    int    `json:"studioId"`
 	Name        string `json:"name"`
@@ -555,6 +568,63 @@ func GetStudio(ctx *vbeam.Context, req GetStudioRequest) (resp GetStudioResponse
 	resp.Studio = studio
 	resp.MyRole = role
 	resp.MyRoleName = GetStudioRoleName(role)
+	return
+}
+
+func GetStudioDashboard(ctx *vbeam.Context, req GetStudioDashboardRequest) (resp GetStudioDashboardResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, req.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has permission to view this studio
+	role := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
+
+	// Site admins can view all studios
+	if caller.Role != RoleSiteAdmin && role == -1 {
+		resp.Success = false
+		resp.Error = "You do not have permission to view this studio"
+		return
+	}
+
+	// Site admins who aren't members get Owner role for display purposes
+	if caller.Role == RoleSiteAdmin && role == -1 {
+		role = StudioRoleOwner
+	}
+
+	// Get all rooms for this studio
+	var roomIds []int
+	vbolt.ReadTermTargets(ctx.Tx, RoomsByStudioIdx, studio.Id, &roomIds, vbolt.Window{})
+
+	var rooms []Room
+	for _, roomId := range roomIds {
+		room := GetRoom(ctx.Tx, roomId)
+		if room.Id != 0 {
+			rooms = append(rooms, room)
+		}
+	}
+
+	// If no rooms found, initialize empty slice
+	if rooms == nil {
+		rooms = []Room{}
+	}
+
+	resp.Success = true
+	resp.Studio = studio
+	resp.MyRole = role
+	resp.MyRoleName = GetStudioRoleName(role)
+	resp.Rooms = rooms
 	return
 }
 
@@ -1099,6 +1169,7 @@ func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateStudio)
 	vbeam.RegisterProc(app, ListMyStudios)
 	vbeam.RegisterProc(app, GetStudio)
+	vbeam.RegisterProc(app, GetStudioDashboard)
 	vbeam.RegisterProc(app, UpdateStudio)
 	vbeam.RegisterProc(app, DeleteStudio)
 	vbeam.RegisterProc(app, CreateRoom)

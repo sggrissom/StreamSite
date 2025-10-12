@@ -86,6 +86,19 @@ export interface GetStudioResponse {
   myRoleName: string;
 }
 
+export interface GetStudioDashboardRequest {
+  studioId: number;
+}
+
+export interface GetStudioDashboardResponse {
+  success: boolean;
+  error: string;
+  studio: Studio;
+  myRole: StudioRole;
+  myRoleName: string;
+  rooms: Room[];
+}
+
 export interface UpdateStudioRequest {
   studioId: number;
   name: string;
@@ -259,6 +272,15 @@ export async function GetStudio(
   data: GetStudioRequest,
 ): Promise<rpc.Response<GetStudioResponse>> {
   return await rpc.call<GetStudioResponse>("GetStudio", JSON.stringify(data));
+}
+
+export async function GetStudioDashboard(
+  data: GetStudioDashboardRequest,
+): Promise<rpc.Response<GetStudioDashboardResponse>> {
+  return await rpc.call<GetStudioDashboardResponse>(
+    "GetStudioDashboard",
+    JSON.stringify(data),
+  );
 }
 
 export async function UpdateStudio(

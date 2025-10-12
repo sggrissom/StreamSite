@@ -14,6 +14,7 @@ async function main() {
       () => import("@app/pages/dashboard/dashboard"),
     ),
     vlens.routeHandler("/studios", () => import("@app/pages/studios/studios")),
+    vlens.routeHandler("/studio/", () => import("@app/pages/studio/studio")),
     vlens.routeHandler(
       "/stream-admin",
       () => import("@app/pages/stream-admin/stream-admin"),
