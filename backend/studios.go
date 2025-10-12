@@ -332,6 +332,28 @@ type GetStudioResponse struct {
 	MyRoleName string     `json:"myRoleName"`
 }
 
+type UpdateStudioRequest struct {
+	StudioId    int    `json:"studioId"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	MaxRooms    int    `json:"maxRooms"`
+}
+
+type UpdateStudioResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	Studio  Studio `json:"studio,omitempty"`
+}
+
+type DeleteStudioRequest struct {
+	StudioId int `json:"studioId"`
+}
+
+type DeleteStudioResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
 // API Procedures
 
 func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudioResponse, err error) {
@@ -475,9 +497,170 @@ func GetStudio(ctx *vbeam.Context, req GetStudioRequest) (resp GetStudioResponse
 	return
 }
 
+func UpdateStudio(ctx *vbeam.Context, req UpdateStudioRequest) (resp UpdateStudioResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, req.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has Admin+ permission
+	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
+		resp.Success = false
+		resp.Error = "Only studio admins can update studios"
+		return
+	}
+
+	// Validate input
+	if req.Name == "" {
+		resp.Success = false
+		resp.Error = "Studio name is required"
+		return
+	}
+
+	if req.MaxRooms <= 0 {
+		resp.Success = false
+		resp.Error = "Maximum rooms must be at least 1"
+		return
+	}
+
+	if req.MaxRooms > 50 {
+		resp.Success = false
+		resp.Error = "Maximum rooms cannot exceed 50"
+		return
+	}
+
+	// Update studio fields
+	vbeam.UseWriteTx(ctx)
+
+	studio.Name = req.Name
+	studio.Description = req.Description
+	studio.MaxRooms = req.MaxRooms
+
+	vbolt.Write(ctx.Tx, StudiosBkt, studio.Id, &studio)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log studio update
+	LogInfo(LogCategorySystem, "Studio updated", map[string]interface{}{
+		"studioId":   studio.Id,
+		"studioName": studio.Name,
+		"updatedBy":  caller.Id,
+		"userEmail":  caller.Email,
+		"maxRooms":   req.MaxRooms,
+	})
+
+	resp.Success = true
+	resp.Studio = studio
+	return
+}
+
+func DeleteStudio(ctx *vbeam.Context, req DeleteStudioRequest) (resp DeleteStudioResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, req.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has Owner permission
+	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleOwner) {
+		resp.Success = false
+		resp.Error = "Only studio owners can delete studios"
+		return
+	}
+
+	vbeam.UseWriteTx(ctx)
+
+	// Cascade delete all related data
+
+	// 1. Delete all rooms and their stream keys
+	rooms := ListStudioRooms(ctx.Tx, studio.Id)
+	for _, room := range rooms {
+		// Remove stream key lookup
+		vbolt.Delete(ctx.Tx, RoomStreamKeyBkt, room.StreamKey)
+		// Unindex room from studio
+		vbolt.SetTargetSingleTerm(ctx.Tx, RoomsByStudioIdx, room.Id, -1)
+		// Delete room
+		vbolt.Delete(ctx.Tx, RoomsBkt, room.Id)
+	}
+
+	// 2. Delete all streams
+	var streamIds []int
+	vbolt.ReadTermTargets(ctx.Tx, StreamsByStudioIdx, studio.Id, &streamIds, vbolt.Window{})
+	for _, streamId := range streamIds {
+		stream := GetStream(ctx.Tx, streamId)
+		if stream.Id > 0 {
+			// Unindex from both studio and room indexes
+			vbolt.SetTargetSingleTerm(ctx.Tx, StreamsByStudioIdx, streamId, -1)
+			vbolt.SetTargetSingleTerm(ctx.Tx, StreamsByRoomIdx, streamId, -1)
+			// Delete stream
+			vbolt.Delete(ctx.Tx, StreamsBkt, streamId)
+		}
+	}
+
+	// 3. Delete all memberships
+	memberships := ListStudioMembers(ctx.Tx, studio.Id)
+	for _, membership := range memberships {
+		// Get membership ID (we need to find it by iterating user's memberships)
+		var membershipIds []int
+		vbolt.ReadTermTargets(ctx.Tx, MembershipByUserIdx, membership.UserId, &membershipIds, vbolt.Window{})
+		for _, membershipId := range membershipIds {
+			m := GetMembership(ctx.Tx, membershipId)
+			if m.StudioId == studio.Id {
+				// Unindex from both user and studio indexes
+				vbolt.SetTargetSingleTerm(ctx.Tx, MembershipByUserIdx, membershipId, -1)
+				vbolt.SetTargetSingleTerm(ctx.Tx, MembershipByStudioIdx, membershipId, -1)
+				// Delete membership
+				vbolt.Delete(ctx.Tx, MembershipBkt, membershipId)
+			}
+		}
+	}
+
+	// 4. Delete the studio itself
+	vbolt.Delete(ctx.Tx, StudiosBkt, studio.Id)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log studio deletion
+	LogInfo(LogCategorySystem, "Studio deleted", map[string]interface{}{
+		"studioId":           studio.Id,
+		"studioName":         studio.Name,
+		"deletedBy":          caller.Id,
+		"userEmail":          caller.Email,
+		"roomsDeleted":       len(rooms),
+		"streamsDeleted":     len(streamIds),
+		"membershipsDeleted": len(memberships),
+	})
+
+	resp.Success = true
+	return
+}
+
 // RegisterStudioMethods registers studio-related API procedures
 func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateStudio)
 	vbeam.RegisterProc(app, ListMyStudios)
 	vbeam.RegisterProc(app, GetStudio)
+	vbeam.RegisterProc(app, UpdateStudio)
+	vbeam.RegisterProc(app, DeleteStudio)
 }

@@ -767,3 +767,345 @@ func TestStudioPermissions(t *testing.T) {
 		}
 	})
 }
+
+// Test UpdateStudio - valid updates work correctly
+func TestUpdateStudio(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create a studio owner (StreamAdmin)
+		ownerUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Owner",
+			Email: "owner@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, ownerUser.Id, &ownerUser)
+
+		// Create studio
+		studio := Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Original Name",
+			Description: "Original Description",
+			MaxRooms:    5,
+			OwnerId:     ownerUser.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add owner membership
+		ownerMembership := StudioMembership{
+			UserId:   ownerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		ownerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, ownerMembershipId, &ownerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, ownerMembershipId, ownerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, ownerMembershipId, studio.Id)
+
+		// Update studio fields
+		studio.Name = "Updated Name"
+		studio.Description = "Updated Description"
+		studio.MaxRooms = 10
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Verify update
+		updated := GetStudioById(tx, studio.Id)
+		if updated.Name != "Updated Name" {
+			t.Errorf("Expected name 'Updated Name', got '%s'", updated.Name)
+		}
+		if updated.Description != "Updated Description" {
+			t.Errorf("Expected description 'Updated Description', got '%s'", updated.Description)
+		}
+		if updated.MaxRooms != 10 {
+			t.Errorf("Expected maxRooms 10, got %d", updated.MaxRooms)
+		}
+	})
+}
+
+// Test UpdateStudio permissions - only Admin+ can update
+func TestUpdateStudioPermissions(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create users with different roles
+		adminUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Admin User",
+			Email: "admin@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+
+		memberUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Member User",
+			Email: "member@test.com",
+			Role:  RoleUser,
+		}
+		vbolt.Write(tx, UsersBkt, memberUser.Id, &memberUser)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  adminUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Add member membership
+		memberMembership := StudioMembership{
+			UserId:   memberUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleMember,
+			JoinedAt: time.Now(),
+		}
+		memberMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, memberMembershipId, &memberMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, memberMembershipId, memberUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, memberMembershipId, studio.Id)
+
+		// Admin should have permission to update
+		if !HasStudioPermission(tx, adminUser.Id, studio.Id, StudioRoleAdmin) {
+			t.Error("Admin should have permission to update studio")
+		}
+
+		// Member should NOT have permission to update
+		if HasStudioPermission(tx, memberUser.Id, studio.Id, StudioRoleAdmin) {
+			t.Error("Member should not have permission to update studio")
+		}
+	})
+}
+
+// Test DeleteStudio cascade delete
+func TestDeleteStudioCascade(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create owner user
+		ownerUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Owner",
+			Email: "owner@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, ownerUser.Id, &ownerUser)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  ownerUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add owner membership
+		ownerMembership := StudioMembership{
+			UserId:   ownerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		ownerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, ownerMembershipId, &ownerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, ownerMembershipId, ownerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, ownerMembershipId, studio.Id)
+
+		// Create a room
+		streamKey, _ := GenerateStreamKey()
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Room 1",
+			StreamKey:  streamKey,
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, streamKey, &room.Id)
+
+		// Create a stream
+		stream := Stream{
+			Id:          vbolt.NextIntId(tx, StreamsBkt),
+			StudioId:    studio.Id,
+			RoomId:      room.Id,
+			Title:       "Test Stream",
+			Description: "Test",
+			StartTime:   time.Now(),
+			CreatedBy:   ownerUser.Id,
+		}
+		vbolt.Write(tx, StreamsBkt, stream.Id, &stream)
+		vbolt.SetTargetSingleTerm(tx, StreamsByStudioIdx, stream.Id, studio.Id)
+		vbolt.SetTargetSingleTerm(tx, StreamsByRoomIdx, stream.Id, room.Id)
+
+		// Perform cascade delete
+		// 1. Delete all rooms
+		rooms := ListStudioRooms(tx, studio.Id)
+		for _, r := range rooms {
+			vbolt.Delete(tx, RoomStreamKeyBkt, r.StreamKey)
+			vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, r.Id, -1)
+			vbolt.Delete(tx, RoomsBkt, r.Id)
+		}
+
+		// 2. Delete all streams
+		var streamIds []int
+		vbolt.ReadTermTargets(tx, StreamsByStudioIdx, studio.Id, &streamIds, vbolt.Window{})
+		for _, sid := range streamIds {
+			vbolt.SetTargetSingleTerm(tx, StreamsByStudioIdx, sid, -1)
+			vbolt.SetTargetSingleTerm(tx, StreamsByRoomIdx, sid, -1)
+			vbolt.Delete(tx, StreamsBkt, sid)
+		}
+
+		// 3. Delete all memberships
+		memberships := ListStudioMembers(tx, studio.Id)
+		for _, membership := range memberships {
+			var membershipIds []int
+			vbolt.ReadTermTargets(tx, MembershipByUserIdx, membership.UserId, &membershipIds, vbolt.Window{})
+			for _, mid := range membershipIds {
+				m := GetMembership(tx, mid)
+				if m.StudioId == studio.Id {
+					vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, mid, -1)
+					vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, mid, -1)
+					vbolt.Delete(tx, MembershipBkt, mid)
+				}
+			}
+		}
+
+		// 4. Delete studio
+		vbolt.Delete(tx, StudiosBkt, studio.Id)
+
+		// Verify everything is deleted
+		deletedStudio := GetStudioById(tx, studio.Id)
+		if deletedStudio.Id != 0 {
+			t.Error("Studio should be deleted")
+		}
+
+		deletedRoom := GetRoom(tx, room.Id)
+		if deletedRoom.Id != 0 {
+			t.Error("Room should be deleted")
+		}
+
+		deletedStream := GetStream(tx, stream.Id)
+		if deletedStream.Id != 0 {
+			t.Error("Stream should be deleted")
+		}
+
+		// Check stream key is gone
+		var roomIdFromKey int
+		vbolt.Read(tx, RoomStreamKeyBkt, streamKey, &roomIdFromKey)
+		if roomIdFromKey != 0 {
+			t.Error("Stream key should be deleted")
+		}
+
+		// Check membership is gone
+		deletedMembership := GetMembership(tx, ownerMembershipId)
+		if deletedMembership.UserId != 0 {
+			t.Error("Membership should be deleted")
+		}
+
+		// Check indexes are cleaned up
+		var roomIdsFromIdx []int
+		vbolt.ReadTermTargets(tx, RoomsByStudioIdx, studio.Id, &roomIdsFromIdx, vbolt.Window{})
+		if len(roomIdsFromIdx) != 0 {
+			t.Errorf("RoomsByStudioIdx should be empty, got %d entries", len(roomIdsFromIdx))
+		}
+
+		var streamIdsFromIdx []int
+		vbolt.ReadTermTargets(tx, StreamsByStudioIdx, studio.Id, &streamIdsFromIdx, vbolt.Window{})
+		if len(streamIdsFromIdx) != 0 {
+			t.Errorf("StreamsByStudioIdx should be empty, got %d entries", len(streamIdsFromIdx))
+		}
+	})
+}
+
+// Test DeleteStudio permissions - only Owner can delete
+func TestDeleteStudioPermissions(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create users
+		ownerUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Owner",
+			Email: "owner@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, ownerUser.Id, &ownerUser)
+
+		adminUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Admin",
+			Email: "admin@test.com",
+			Role:  RoleUser,
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  ownerUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add owner membership
+		ownerMembership := StudioMembership{
+			UserId:   ownerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		ownerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, ownerMembershipId, &ownerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, ownerMembershipId, ownerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, ownerMembershipId, studio.Id)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Owner should have permission to delete
+		if !HasStudioPermission(tx, ownerUser.Id, studio.Id, StudioRoleOwner) {
+			t.Error("Owner should have permission to delete studio")
+		}
+
+		// Admin should NOT have permission to delete (needs Owner role)
+		if HasStudioPermission(tx, adminUser.Id, studio.Id, StudioRoleOwner) {
+			t.Error("Admin should not have owner permission to delete studio")
+		}
+	})
+}
