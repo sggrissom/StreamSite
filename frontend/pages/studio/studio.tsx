@@ -22,11 +22,74 @@ function getRoleBadgeClass(role: number): string {
   return `studio-role role-${role}`;
 }
 
+type CreateRoomModal = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  error: string;
+  name: string;
+  studioId: number;
+};
+
+const useCreateRoomModal = vlens.declareHook(
+  (): CreateRoomModal => ({
+    isOpen: false,
+    isSubmitting: false,
+    error: "",
+    name: "",
+    studioId: 0,
+  }),
+);
+
+function openRoomModal(modal: CreateRoomModal, studioId: number) {
+  modal.isOpen = true;
+  modal.error = "";
+  modal.name = "";
+  modal.studioId = studioId;
+  vlens.scheduleRedraw();
+}
+
+function closeRoomModal(modal: CreateRoomModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  vlens.scheduleRedraw();
+}
+
+async function submitCreateRoom(modal: CreateRoomModal) {
+  if (!modal.name.trim()) {
+    modal.error = "Room name is required";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.isSubmitting = true;
+  modal.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.CreateRoom({
+    studioId: modal.studioId,
+    name: modal.name.trim(),
+  });
+
+  modal.isSubmitting = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to create room";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  // Success - close modal and reload page
+  closeRoomModal(modal);
+  window.location.reload();
+}
+
 export function view(
   route: string,
   prefix: string,
   data: Data,
 ): preact.ComponentChild {
+  const roomModal = useCreateRoomModal();
+
   // Handle errors or missing data
   if (!data || !data.success) {
     return (
@@ -118,7 +181,10 @@ export function view(
             <div className="rooms-header">
               <h2 className="section-title">Rooms</h2>
               {canManageRooms && rooms.length < studio.maxRooms && (
-                <button className="btn btn-primary btn-sm" disabled>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => openRoomModal(roomModal, studio.id)}
+                >
                   Create Room
                 </button>
               )}
@@ -134,7 +200,10 @@ export function view(
                     : "This studio doesn't have any rooms yet."}
                 </p>
                 {canManageRooms && (
-                  <button className="btn btn-primary" disabled>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => openRoomModal(roomModal, studio.id)}
+                  >
                     Create First Room
                   </button>
                 )}
@@ -194,6 +263,67 @@ export function view(
               </div>
             )}
           </div>
+
+          {/* Create Room Modal */}
+          {roomModal.isOpen && (
+            <div
+              className="modal-overlay"
+              onClick={() => closeRoomModal(roomModal)}
+            >
+              <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="modal-header">
+                  <h2 className="modal-title">Create New Room</h2>
+                  <button
+                    className="modal-close"
+                    onClick={() => closeRoomModal(roomModal)}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="modal-body">
+                  {roomModal.error && (
+                    <div className="error-message">{roomModal.error}</div>
+                  )}
+
+                  <div className="form-group">
+                    <label htmlFor="room-name">Room Name *</label>
+                    <input
+                      id="room-name"
+                      type="text"
+                      className="form-input"
+                      placeholder="e.g., Main Stage, Studio A"
+                      {...vlens.attrsBindInput(vlens.ref(roomModal, "name"))}
+                      disabled={roomModal.isSubmitting}
+                    />
+                    <small className="form-help">
+                      Choose a descriptive name for this streaming room
+                    </small>
+                  </div>
+                </div>
+
+                <div className="modal-footer">
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => closeRoomModal(roomModal)}
+                    disabled={roomModal.isSubmitting}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    className="btn btn-primary"
+                    onClick={() => submitCreateRoom(roomModal)}
+                    disabled={roomModal.isSubmitting}
+                  >
+                    {roomModal.isSubmitting ? "Creating..." : "Create Room"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       </main>
       <Footer />
