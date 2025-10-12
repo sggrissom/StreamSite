@@ -733,6 +733,60 @@ block(`
 }
 `);
 
+// Delete Warning/Confirmation Styles
+block(`
+.delete-warning {
+  padding: 1rem;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+}
+`);
+
+block(`
+.delete-confirmation {
+  padding: 1rem;
+  background: #fee;
+  border: 1px solid #fcc;
+  border-radius: 6px;
+}
+`);
+
+block(`
+.warning-text {
+  margin: 0 0 1rem 0;
+  color: #92400e;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+`);
+
+block(`
+.delete-confirmation .confirmation-text {
+  margin: 0 0 1rem 0;
+  color: #c00;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+`);
+
+block(`
+.room-info {
+  padding: 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+`);
+
+block(`
+.room-info strong {
+  color: var(--muted);
+  margin-right: 0.5rem;
+}
+`);
+
 // Responsive Design
 block(`
 @media (max-width: 768px) {

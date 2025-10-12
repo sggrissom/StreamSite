@@ -3,6 +3,7 @@ import * as vlens from "vlens";
 import * as core from "vlens/core";
 import * as server from "../../server";
 import { Header, Footer } from "../../layout";
+import { Modal } from "../../components/Modal";
 import "../../styles/global";
 import "./studios-styles";
 
@@ -166,87 +167,70 @@ export function view(
             </div>
           )}
 
-          {modal.isOpen && (
-            <div className="modal-overlay" onClick={() => closeModal(modal)}>
-              <div
-                className="modal-content"
-                onClick={(e) => e.stopPropagation()}
-              >
-                <div className="modal-header">
-                  <h2 className="modal-title">Create New Studio</h2>
-                  <button
-                    className="modal-close"
-                    onClick={() => closeModal(modal)}
-                  >
-                    ×
-                  </button>
-                </div>
-
-                <div className="modal-body">
-                  {modal.error && (
-                    <div className="error-message">{modal.error}</div>
-                  )}
-
-                  <div className="form-group">
-                    <label htmlFor="studio-name">Studio Name *</label>
-                    <input
-                      id="studio-name"
-                      type="text"
-                      className="form-input"
-                      placeholder="Enter studio name"
-                      {...vlens.attrsBindInput(vlens.ref(modal, "name"))}
-                      disabled={modal.isSubmitting}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="studio-description">Description</label>
-                    <textarea
-                      id="studio-description"
-                      className="form-input"
-                      placeholder="Enter studio description (optional)"
-                      rows={3}
-                      {...vlens.attrsBindInput(vlens.ref(modal, "description"))}
-                      disabled={modal.isSubmitting}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label htmlFor="studio-max-rooms">Max Rooms *</label>
-                    <input
-                      id="studio-max-rooms"
-                      type="number"
-                      className="form-input"
-                      min="1"
-                      max="100"
-                      {...vlens.attrsBindInput(vlens.ref(modal, "maxRooms"))}
-                      disabled={modal.isSubmitting}
-                    />
-                    <small className="form-help">
-                      Maximum number of streaming rooms (1-100)
-                    </small>
-                  </div>
-                </div>
-
-                <div className="modal-footer">
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => closeModal(modal)}
-                    disabled={modal.isSubmitting}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => submitCreateStudio(modal)}
-                    disabled={modal.isSubmitting}
-                  >
-                    {modal.isSubmitting ? "Creating..." : "Create Studio"}
-                  </button>
-                </div>
-              </div>
+          <Modal
+            isOpen={modal.isOpen}
+            title="Create New Studio"
+            onClose={() => closeModal(modal)}
+            error={modal.error}
+            footer={
+              <>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => closeModal(modal)}
+                  disabled={modal.isSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => submitCreateStudio(modal)}
+                  disabled={modal.isSubmitting}
+                >
+                  {modal.isSubmitting ? "Creating..." : "Create Studio"}
+                </button>
+              </>
+            }
+          >
+            <div className="form-group">
+              <label htmlFor="studio-name">Studio Name *</label>
+              <input
+                id="studio-name"
+                type="text"
+                className="form-input"
+                placeholder="Enter studio name"
+                {...vlens.attrsBindInput(vlens.ref(modal, "name"))}
+                disabled={modal.isSubmitting}
+              />
             </div>
-          )}
+
+            <div className="form-group">
+              <label htmlFor="studio-description">Description</label>
+              <textarea
+                id="studio-description"
+                className="form-input"
+                placeholder="Enter studio description (optional)"
+                rows={3}
+                {...vlens.attrsBindInput(vlens.ref(modal, "description"))}
+                disabled={modal.isSubmitting}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="studio-max-rooms">Max Rooms *</label>
+              <input
+                id="studio-max-rooms"
+                type="number"
+                className="form-input"
+                min="1"
+                max="100"
+                {...vlens.attrsBindInput(vlens.ref(modal, "maxRooms"))}
+                disabled={modal.isSubmitting}
+              />
+              <small className="form-help">
+                Maximum number of streaming rooms (1-100)
+              </small>
+            </div>
+          </Modal>
         </div>
       </main>
       <Footer />
