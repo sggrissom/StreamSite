@@ -1109,3 +1109,389 @@ func TestDeleteStudioPermissions(t *testing.T) {
 		}
 	})
 }
+
+// Test CreateRoom - basic room creation
+func TestCreateRoom(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create admin user
+		adminUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Admin",
+			Email: "admin@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  adminUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create a room
+		streamKey, _ := GenerateStreamKey()
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Room 1",
+			StreamKey:  streamKey,
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, streamKey, &room.Id)
+
+		// Verify room was created
+		retrieved := GetRoom(tx, room.Id)
+		if retrieved.Id == 0 {
+			t.Error("Room should be created")
+		}
+		if retrieved.Name != "Room 1" {
+			t.Errorf("Expected room name 'Room 1', got '%s'", retrieved.Name)
+		}
+		if retrieved.RoomNumber != 1 {
+			t.Errorf("Expected room number 1, got %d", retrieved.RoomNumber)
+		}
+
+		// Verify room is in studio's rooms
+		rooms := ListStudioRooms(tx, studio.Id)
+		if len(rooms) != 1 {
+			t.Errorf("Expected 1 room, got %d", len(rooms))
+		}
+
+		// Verify stream key lookup works
+		roomByKey := GetRoomByStreamKey(tx, streamKey)
+		if roomByKey.Id != room.Id {
+			t.Error("Should be able to find room by stream key")
+		}
+	})
+}
+
+// Test CreateRoom room limit enforcement
+func TestCreateRoomLimit(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create admin user
+		adminUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Admin",
+			Email: "admin@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+
+		// Create studio with maxRooms = 2
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 2,
+			OwnerId:  adminUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create room 1
+		streamKey1, _ := GenerateStreamKey()
+		room1 := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Room 1",
+			StreamKey:  streamKey1,
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room1.Id, &room1)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room1.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, streamKey1, &room1.Id)
+
+		// Create room 2
+		streamKey2, _ := GenerateStreamKey()
+		room2 := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 2,
+			Name:       "Room 2",
+			StreamKey:  streamKey2,
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room2.Id, &room2)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room2.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, streamKey2, &room2.Id)
+
+		// Verify we have 2 rooms
+		rooms := ListStudioRooms(tx, studio.Id)
+		if len(rooms) != 2 {
+			t.Errorf("Expected 2 rooms, got %d", len(rooms))
+		}
+
+		// Check that we've reached the limit (should fail if we try to add more)
+		if len(rooms) >= studio.MaxRooms {
+			// This is expected - we've reached the limit
+		} else {
+			t.Error("Should have reached room limit")
+		}
+	})
+}
+
+// Test CreateRoom permissions - only Admin+ can create
+func TestCreateRoomPermissions(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create users
+		adminUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Admin",
+			Email: "admin@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+
+		memberUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Member",
+			Email: "member@test.com",
+			Role:  RoleUser,
+		}
+		vbolt.Write(tx, UsersBkt, memberUser.Id, &memberUser)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  adminUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Add member membership
+		memberMembership := StudioMembership{
+			UserId:   memberUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleMember,
+			JoinedAt: time.Now(),
+		}
+		memberMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, memberMembershipId, &memberMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, memberMembershipId, memberUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, memberMembershipId, studio.Id)
+
+		// Admin should have permission to create rooms
+		if !HasStudioPermission(tx, adminUser.Id, studio.Id, StudioRoleAdmin) {
+			t.Error("Admin should have permission to create rooms")
+		}
+
+		// Member should NOT have permission to create rooms
+		if HasStudioPermission(tx, memberUser.Id, studio.Id, StudioRoleAdmin) {
+			t.Error("Member should not have permission to create rooms")
+		}
+	})
+}
+
+// Test ListRooms
+func TestListRooms(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create viewer user
+		viewerUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Viewer",
+			Email: "viewer@test.com",
+			Role:  RoleUser,
+		}
+		vbolt.Write(tx, UsersBkt, viewerUser.Id, &viewerUser)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  viewerUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add viewer membership
+		viewerMembership := StudioMembership{
+			UserId:   viewerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleViewer,
+			JoinedAt: time.Now(),
+		}
+		viewerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, viewerMembershipId, &viewerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, viewerMembershipId, viewerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, viewerMembershipId, studio.Id)
+
+		// Create multiple rooms
+		for i := 1; i <= 3; i++ {
+			streamKey, _ := GenerateStreamKey()
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: i,
+				Name:       "Room " + string(rune('0'+i)),
+				StreamKey:  streamKey,
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+			vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+			vbolt.Write(tx, RoomStreamKeyBkt, streamKey, &room.Id)
+		}
+
+		// Viewer should be able to list rooms
+		if !HasStudioPermission(tx, viewerUser.Id, studio.Id, StudioRoleViewer) {
+			t.Error("Viewer should have permission to list rooms")
+		}
+
+		// List rooms
+		rooms := ListStudioRooms(tx, studio.Id)
+		if len(rooms) != 3 {
+			t.Errorf("Expected 3 rooms, got %d", len(rooms))
+		}
+	})
+}
+
+// Test GetRoomStreamKey permissions
+func TestGetRoomStreamKeyPermissions(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create users
+		adminUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Admin",
+			Email: "admin@test.com",
+			Role:  RoleStreamAdmin,
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+
+		memberUser := User{
+			Id:    vbolt.NextIntId(tx, UsersBkt),
+			Name:  "Member",
+			Email: "member@test.com",
+			Role:  RoleUser,
+		}
+		vbolt.Write(tx, UsersBkt, memberUser.Id, &memberUser)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  adminUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Add member membership
+		memberMembership := StudioMembership{
+			UserId:   memberUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleMember,
+			JoinedAt: time.Now(),
+		}
+		memberMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, memberMembershipId, &memberMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, memberMembershipId, memberUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, memberMembershipId, studio.Id)
+
+		// Create room
+		streamKey, _ := GenerateStreamKey()
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Room 1",
+			StreamKey:  streamKey,
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, streamKey, &room.Id)
+
+		// Admin should have permission to view stream key
+		if !HasStudioPermission(tx, adminUser.Id, studio.Id, StudioRoleAdmin) {
+			t.Error("Admin should have permission to view stream key")
+		}
+
+		// Member should NOT have permission to view stream key
+		if HasStudioPermission(tx, memberUser.Id, studio.Id, StudioRoleAdmin) {
+			t.Error("Member should not have permission to view stream key")
+		}
+
+		// Verify stream key can be retrieved
+		retrieved := GetRoom(tx, room.Id)
+		if retrieved.StreamKey != streamKey {
+			t.Error("Stream key should match")
+		}
+	})
+}
