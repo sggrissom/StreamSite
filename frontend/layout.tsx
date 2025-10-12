@@ -61,6 +61,9 @@ export const Header = () => {
             <a href="/dashboard" className="nav-link">
               Dashboard
             </a>
+            <a href="/studios" className="nav-link">
+              Studios
+            </a>
             {authState.auth.isStreamAdmin && (
               <a href="/stream-admin" className="nav-link">
                 Stream Admin

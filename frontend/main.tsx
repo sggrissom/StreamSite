@@ -13,6 +13,7 @@ async function main() {
       "/dashboard",
       () => import("@app/pages/dashboard/dashboard"),
     ),
+    vlens.routeHandler("/studios", () => import("@app/pages/studios/studios")),
     vlens.routeHandler(
       "/stream-admin",
       () => import("@app/pages/stream-admin/stream-admin"),

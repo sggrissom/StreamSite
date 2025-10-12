@@ -43,6 +43,9 @@ export function view(
             <a href="/stream" className="btn btn-primary btn-large">
               Watch Live Stream
             </a>
+            <a href="/studios" className="btn btn-secondary btn-large">
+              My Studios
+            </a>
           </div>
         </div>
       </main>
