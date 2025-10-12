@@ -385,6 +385,27 @@ type GetRoomStreamKeyResponse struct {
 	StreamKey string `json:"streamKey,omitempty"`
 }
 
+type UpdateRoomRequest struct {
+	RoomId int    `json:"roomId"`
+	Name   string `json:"name"`
+}
+
+type UpdateRoomResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	Room    Room   `json:"room,omitempty"`
+}
+
+type RegenerateStreamKeyRequest struct {
+	RoomId int `json:"roomId"`
+}
+
+type RegenerateStreamKeyResponse struct {
+	Success   bool   `json:"success"`
+	Error     string `json:"error,omitempty"`
+	StreamKey string `json:"streamKey,omitempty"`
+}
+
 // API Procedures
 
 func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudioResponse, err error) {
@@ -845,6 +866,142 @@ func GetRoomStreamKey(ctx *vbeam.Context, req GetRoomStreamKeyRequest) (resp Get
 	return
 }
 
+func UpdateRoom(ctx *vbeam.Context, req UpdateRoomRequest) (resp UpdateRoomResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get room
+	room := GetRoom(ctx.Tx, req.RoomId)
+	if room.Id == 0 {
+		resp.Success = false
+		resp.Error = "Room not found"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, room.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has Admin+ permission
+	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
+		resp.Success = false
+		resp.Error = "Only studio admins can update rooms"
+		return
+	}
+
+	// Validate input
+	if req.Name == "" {
+		resp.Success = false
+		resp.Error = "Room name is required"
+		return
+	}
+
+	vbeam.UseWriteTx(ctx)
+
+	// Update room name
+	room.Name = req.Name
+	vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log room update
+	LogInfo(LogCategorySystem, "Room updated", map[string]interface{}{
+		"roomId":     room.Id,
+		"roomName":   room.Name,
+		"studioId":   studio.Id,
+		"studioName": studio.Name,
+		"updatedBy":  caller.Id,
+		"userEmail":  caller.Email,
+	})
+
+	resp.Success = true
+	resp.Room = room
+	return
+}
+
+func RegenerateStreamKey(ctx *vbeam.Context, req RegenerateStreamKeyRequest) (resp RegenerateStreamKeyResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get room
+	room := GetRoom(ctx.Tx, req.RoomId)
+	if room.Id == 0 {
+		resp.Success = false
+		resp.Error = "Room not found"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, room.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has Admin+ permission
+	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
+		resp.Success = false
+		resp.Error = "Only studio admins can regenerate stream keys"
+		return
+	}
+
+	// Generate new stream key
+	newStreamKey, err := GenerateStreamKey()
+	if err != nil {
+		resp.Success = false
+		resp.Error = "Failed to generate stream key"
+		return
+	}
+
+	vbeam.UseWriteTx(ctx)
+
+	// Store old key for logging
+	oldStreamKey := room.StreamKey
+
+	// Delete old stream key lookup
+	vbolt.Delete(ctx.Tx, RoomStreamKeyBkt, oldStreamKey)
+
+	// Update room with new stream key
+	room.StreamKey = newStreamKey
+	vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
+
+	// Add new stream key lookup
+	vbolt.Write(ctx.Tx, RoomStreamKeyBkt, newStreamKey, &room.Id)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log stream key regeneration (for security audit)
+	LogInfo(LogCategorySystem, "Stream key regenerated", map[string]interface{}{
+		"roomId":        room.Id,
+		"roomName":      room.Name,
+		"studioId":      studio.Id,
+		"studioName":    studio.Name,
+		"regeneratedBy": caller.Id,
+		"userEmail":     caller.Email,
+		"oldKeyPrefix":  oldStreamKey[:8] + "...", // Only log prefix for security
+		"newKeyPrefix":  newStreamKey[:8] + "...",
+	})
+
+	resp.Success = true
+	resp.StreamKey = newStreamKey
+	return
+}
+
 // RegisterStudioMethods registers studio-related API procedures
 func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateStudio)
@@ -855,4 +1012,6 @@ func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateRoom)
 	vbeam.RegisterProc(app, ListRooms)
 	vbeam.RegisterProc(app, GetRoomStreamKey)
+	vbeam.RegisterProc(app, UpdateRoom)
+	vbeam.RegisterProc(app, RegenerateStreamKey)
 }
