@@ -153,7 +153,9 @@ export function view(
               <h2>System Settings</h2>
               <p>Configure site-wide settings and preferences.</p>
               <div className="section-actions">
-                <button className="btn btn-secondary">Manage Settings</button>
+                <a href="/settings" className="btn btn-secondary">
+                  Manage Settings
+                </a>
               </div>
             </div>
 

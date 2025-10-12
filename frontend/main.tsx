@@ -21,6 +21,10 @@ async function main() {
       "/site-admin",
       () => import("@app/pages/site-admin/site-admin"),
     ),
+    vlens.routeHandler(
+      "/settings",
+      () => import("@app/pages/settings/settings"),
+    ),
     vlens.routeHandler("/stream", () => import("@app/pages/stream/stream")),
     vlens.routeHandler("/", () => import("@app/pages/home/home")),
   ]);
