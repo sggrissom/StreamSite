@@ -406,6 +406,15 @@ type RegenerateStreamKeyResponse struct {
 	StreamKey string `json:"streamKey,omitempty"`
 }
 
+type DeleteRoomRequest struct {
+	RoomId int `json:"roomId"`
+}
+
+type DeleteRoomResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+}
+
 // API Procedures
 
 func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudioResponse, err error) {
@@ -1002,6 +1011,89 @@ func RegenerateStreamKey(ctx *vbeam.Context, req RegenerateStreamKeyRequest) (re
 	return
 }
 
+func DeleteRoom(ctx *vbeam.Context, req DeleteRoomRequest) (resp DeleteRoomResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get room
+	room := GetRoom(ctx.Tx, req.RoomId)
+	if room.Id == 0 {
+		resp.Success = false
+		resp.Error = "Room not found"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, room.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has Admin+ permission
+	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
+		resp.Success = false
+		resp.Error = "Only studio admins can delete rooms"
+		return
+	}
+
+	// Check if room is actively streaming
+	if room.IsActive {
+		resp.Success = false
+		resp.Error = "Cannot delete room while it is actively streaming"
+		return
+	}
+
+	vbeam.UseWriteTx(ctx)
+
+	// Cascade delete all related data
+
+	// 1. Delete all streams for this room
+	var streamIds []int
+	vbolt.ReadTermTargets(ctx.Tx, StreamsByRoomIdx, room.Id, &streamIds, vbolt.Window{})
+	for _, streamId := range streamIds {
+		stream := GetStream(ctx.Tx, streamId)
+		if stream.Id > 0 {
+			// Unindex from both room and studio indexes
+			vbolt.SetTargetSingleTerm(ctx.Tx, StreamsByRoomIdx, streamId, -1)
+			vbolt.SetTargetSingleTerm(ctx.Tx, StreamsByStudioIdx, streamId, -1)
+			// Delete stream
+			vbolt.Delete(ctx.Tx, StreamsBkt, streamId)
+		}
+	}
+
+	// 2. Remove stream key lookup
+	vbolt.Delete(ctx.Tx, RoomStreamKeyBkt, room.StreamKey)
+
+	// 3. Unindex room from studio
+	vbolt.SetTargetSingleTerm(ctx.Tx, RoomsByStudioIdx, room.Id, -1)
+
+	// 4. Delete the room itself
+	vbolt.Delete(ctx.Tx, RoomsBkt, room.Id)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log room deletion
+	LogInfo(LogCategorySystem, "Room deleted", map[string]interface{}{
+		"roomId":         room.Id,
+		"roomName":       room.Name,
+		"studioId":       studio.Id,
+		"studioName":     studio.Name,
+		"deletedBy":      caller.Id,
+		"userEmail":      caller.Email,
+		"streamsDeleted": len(streamIds),
+	})
+
+	resp.Success = true
+	return
+}
+
 // RegisterStudioMethods registers studio-related API procedures
 func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateStudio)
@@ -1014,4 +1106,5 @@ func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, GetRoomStreamKey)
 	vbeam.RegisterProc(app, UpdateRoom)
 	vbeam.RegisterProc(app, RegenerateStreamKey)
+	vbeam.RegisterProc(app, DeleteRoom)
 }
