@@ -83,12 +83,129 @@ async function submitCreateRoom(modal: CreateRoomModal) {
   window.location.reload();
 }
 
+type StreamKeyModal = {
+  isOpen: boolean;
+  isLoading: boolean;
+  error: string;
+  roomId: number;
+  roomName: string;
+  streamKey: string;
+  showConfirmRegenerate: boolean;
+  isRegenerating: boolean;
+  copySuccess: boolean;
+};
+
+const useStreamKeyModal = vlens.declareHook(
+  (): StreamKeyModal => ({
+    isOpen: false,
+    isLoading: false,
+    error: "",
+    roomId: 0,
+    roomName: "",
+    streamKey: "",
+    showConfirmRegenerate: false,
+    isRegenerating: false,
+    copySuccess: false,
+  }),
+);
+
+async function openStreamKeyModal(
+  modal: StreamKeyModal,
+  roomId: number,
+  roomName: string,
+) {
+  modal.isOpen = true;
+  modal.isLoading = true;
+  modal.error = "";
+  modal.roomId = roomId;
+  modal.roomName = roomName;
+  modal.streamKey = "";
+  modal.showConfirmRegenerate = false;
+  modal.isRegenerating = false;
+  modal.copySuccess = false;
+  vlens.scheduleRedraw();
+
+  // Fetch stream key
+  const [resp, err] = await server.GetRoomStreamKey({ roomId });
+
+  modal.isLoading = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to load stream key";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.streamKey = resp.streamKey || "";
+  vlens.scheduleRedraw();
+}
+
+function closeStreamKeyModal(modal: StreamKeyModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  modal.streamKey = "";
+  modal.showConfirmRegenerate = false;
+  vlens.scheduleRedraw();
+}
+
+async function copyStreamKey(modal: StreamKeyModal) {
+  try {
+    await navigator.clipboard.writeText(modal.streamKey);
+    modal.copySuccess = true;
+    vlens.scheduleRedraw();
+
+    // Reset copy success after 2 seconds
+    setTimeout(() => {
+      modal.copySuccess = false;
+      vlens.scheduleRedraw();
+    }, 2000);
+  } catch (err) {
+    modal.error = "Failed to copy to clipboard";
+    vlens.scheduleRedraw();
+  }
+}
+
+function showRegenerateConfirmation(modal: StreamKeyModal) {
+  modal.showConfirmRegenerate = true;
+  modal.error = "";
+  vlens.scheduleRedraw();
+}
+
+function hideRegenerateConfirmation(modal: StreamKeyModal) {
+  modal.showConfirmRegenerate = false;
+  vlens.scheduleRedraw();
+}
+
+async function confirmRegenerateStreamKey(modal: StreamKeyModal) {
+  modal.isRegenerating = true;
+  modal.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.RegenerateStreamKey({
+    roomId: modal.roomId,
+  });
+
+  modal.isRegenerating = false;
+  modal.showConfirmRegenerate = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to regenerate stream key";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.streamKey = resp.streamKey || "";
+  modal.copySuccess = false;
+  vlens.scheduleRedraw();
+}
+
 export function view(
   route: string,
   prefix: string,
   data: Data,
 ): preact.ComponentChild {
   const roomModal = useCreateRoomModal();
+  const streamKeyModal = useStreamKeyModal();
 
   // Handle errors or missing data
   if (!data || !data.success) {
@@ -233,7 +350,16 @@ export function view(
                     <div className="room-actions">
                       {canManageRooms && (
                         <>
-                          <button className="btn btn-secondary btn-sm" disabled>
+                          <button
+                            className="btn btn-secondary btn-sm"
+                            onClick={() =>
+                              openStreamKeyModal(
+                                streamKeyModal,
+                                room.id,
+                                room.name,
+                              )
+                            }
+                          >
                             View Stream Key
                           </button>
                           <button className="btn btn-secondary btn-sm" disabled>
@@ -319,6 +445,121 @@ export function view(
                     disabled={roomModal.isSubmitting}
                   >
                     {roomModal.isSubmitting ? "Creating..." : "Create Room"}
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Stream Key Modal */}
+          {streamKeyModal.isOpen && (
+            <div
+              className="modal-overlay"
+              onClick={() => closeStreamKeyModal(streamKeyModal)}
+            >
+              <div
+                className="modal-content"
+                onClick={(e) => e.stopPropagation()}
+              >
+                <div className="modal-header">
+                  <h2 className="modal-title">Stream Key</h2>
+                  <button
+                    className="modal-close"
+                    onClick={() => closeStreamKeyModal(streamKeyModal)}
+                  >
+                    ×
+                  </button>
+                </div>
+
+                <div className="modal-body">
+                  {streamKeyModal.error && (
+                    <div className="error-message">{streamKeyModal.error}</div>
+                  )}
+
+                  <div className="form-group">
+                    <label>Room</label>
+                    <div className="stream-key-room-name">
+                      {streamKeyModal.roomName}
+                    </div>
+                  </div>
+
+                  {streamKeyModal.isLoading ? (
+                    <div className="stream-key-loading">Loading...</div>
+                  ) : (
+                    streamKeyModal.streamKey && (
+                      <>
+                        <div className="form-group">
+                          <label>Stream Key</label>
+                          <div className="stream-key-display">
+                            {streamKeyModal.streamKey}
+                          </div>
+                          <small className="form-help">
+                            Use this key in your streaming software (OBS, etc.)
+                          </small>
+                        </div>
+
+                        <div className="stream-key-actions">
+                          <button
+                            className="btn btn-primary"
+                            onClick={() => copyStreamKey(streamKeyModal)}
+                            disabled={streamKeyModal.copySuccess}
+                          >
+                            {streamKeyModal.copySuccess
+                              ? "Copied!"
+                              : "Copy to Clipboard"}
+                          </button>
+                          <button
+                            className="btn btn-secondary"
+                            onClick={() =>
+                              showRegenerateConfirmation(streamKeyModal)
+                            }
+                            disabled={streamKeyModal.isRegenerating}
+                          >
+                            Regenerate Key
+                          </button>
+                        </div>
+
+                        {streamKeyModal.showConfirmRegenerate && (
+                          <div className="confirmation-dialog">
+                            <p className="confirmation-text">
+                              ⚠️ Are you sure you want to regenerate the stream
+                              key? The old key will stop working immediately.
+                            </p>
+                            <div className="confirmation-actions">
+                              <button
+                                className="btn btn-secondary btn-sm"
+                                onClick={() =>
+                                  hideRegenerateConfirmation(streamKeyModal)
+                                }
+                                disabled={streamKeyModal.isRegenerating}
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                className="btn btn-danger btn-sm"
+                                onClick={() =>
+                                  confirmRegenerateStreamKey(streamKeyModal)
+                                }
+                                disabled={streamKeyModal.isRegenerating}
+                              >
+                                {streamKeyModal.isRegenerating
+                                  ? "Regenerating..."
+                                  : "Yes, Regenerate"}
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )
+                  )}
+                </div>
+
+                <div className="modal-footer">
+                  <button
+                    className="btn btn-secondary"
+                    onClick={() => closeStreamKeyModal(streamKeyModal)}
+                  >
+                    Close
                   </button>
                 </div>
               </div>

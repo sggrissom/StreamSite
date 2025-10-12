@@ -649,6 +649,90 @@ block(`
 }
 `);
 
+// Stream Key Styles
+block(`
+.stream-key-room-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--hero);
+  padding: 0.75rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+`);
+
+block(`
+.stream-key-display {
+  font-family: 'Courier New', monospace;
+  font-size: 0.95rem;
+  padding: 1rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  word-break: break-all;
+  color: var(--text);
+  user-select: all;
+}
+`);
+
+block(`
+.stream-key-loading {
+  text-align: center;
+  padding: 2rem;
+  color: var(--muted);
+  font-size: 1rem;
+}
+`);
+
+block(`
+.stream-key-actions {
+  display: flex;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+`);
+
+block(`
+.confirmation-dialog {
+  margin-top: 1.5rem;
+  padding: 1rem;
+  background: #fffbeb;
+  border: 1px solid #fcd34d;
+  border-radius: 6px;
+}
+`);
+
+block(`
+.confirmation-text {
+  margin: 0 0 1rem 0;
+  color: #92400e;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+`);
+
+block(`
+.confirmation-actions {
+  display: flex;
+  gap: 0.75rem;
+  justify-content: flex-end;
+}
+`);
+
+block(`
+.btn-danger {
+  background: #dc2626;
+  color: white;
+}
+`);
+
+block(`
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+`);
+
 // Responsive Design
 block(`
 @media (max-width: 768px) {
@@ -707,6 +791,22 @@ block(`
   }
 
   .modal-footer .btn {
+    width: 100%;
+  }
+
+  .stream-key-actions {
+    flex-direction: column;
+  }
+
+  .stream-key-actions .btn {
+    width: 100%;
+  }
+
+  .confirmation-actions {
+    flex-direction: column-reverse;
+  }
+
+  .confirmation-actions .btn {
     width: 100%;
   }
 }
