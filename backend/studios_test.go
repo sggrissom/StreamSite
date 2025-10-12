@@ -235,8 +235,8 @@ func TestGenerateStreamKey(t *testing.T) {
 	}
 }
 
-// Test GetStudio
-func TestGetStudio(t *testing.T) {
+// Test GetStudioById
+func TestGetStudioById(t *testing.T) {
 	db := setupTestDB(t)
 	defer db.Close()
 
@@ -253,16 +253,16 @@ func TestGetStudio(t *testing.T) {
 		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
 
 		// Test retrieval
-		retrieved := GetStudio(tx, studio.Id)
+		retrieved := GetStudioById(tx, studio.Id)
 		if retrieved.Id != studio.Id {
-			t.Errorf("GetStudio failed: got ID %d, want %d", retrieved.Id, studio.Id)
+			t.Errorf("GetStudioById failed: got ID %d, want %d", retrieved.Id, studio.Id)
 		}
 		if retrieved.Name != studio.Name {
-			t.Errorf("GetStudio failed: got name %s, want %s", retrieved.Name, studio.Name)
+			t.Errorf("GetStudioById failed: got name %s, want %s", retrieved.Name, studio.Name)
 		}
 
 		// Test non-existent studio
-		notFound := GetStudio(tx, 999)
+		notFound := GetStudioById(tx, 999)
 		if notFound.Id != 0 {
 			t.Errorf("Expected zero-value studio for non-existent ID, got %v", notFound)
 		}
@@ -529,6 +529,241 @@ func TestStreamIndexes(t *testing.T) {
 		vbolt.ReadTermTargets(tx, StreamsByRoomIdx, roomId, &roomStreamIds, vbolt.Window{})
 		if len(roomStreamIds) != 3 {
 			t.Errorf("Expected 3 streams for room, got %d", len(roomStreamIds))
+		}
+	})
+}
+
+// Business Logic Tests
+
+// Test studio creation and membership workflow
+func TestStudioCreationWorkflow(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	var ownerUserId int
+	var studioId int
+
+	// Create everything in one transaction then verify
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create user
+		user := createTestUser(t, tx, "owner@test.com", RoleStreamAdmin)
+		ownerUserId = user.Id
+
+		// Create studio
+		studio := Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "A test studio",
+			MaxRooms:    10,
+			OwnerId:     ownerUserId,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+		studioId = studio.Id
+
+		// Create owner membership
+		membership := StudioMembership{
+			UserId:   ownerUserId,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		membershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, ownerUserId)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studio.Id)
+
+		// Verify within same transaction
+		retrieved := GetStudioById(tx, studioId)
+		if retrieved.Id == 0 {
+			t.Error("Studio should exist")
+		}
+		if retrieved.Name != "Test Studio" {
+			t.Errorf("Studio name mismatch: got %s, want %s", retrieved.Name, "Test Studio")
+		}
+		if retrieved.MaxRooms != 10 {
+			t.Errorf("MaxRooms mismatch: got %d, want %d", retrieved.MaxRooms, 10)
+		}
+
+		// Verify membership and role
+		role := GetUserStudioRole(tx, ownerUserId, studioId)
+		if role != StudioRoleOwner {
+			t.Errorf("Expected owner role, got %d", role)
+		}
+	})
+}
+
+// Test listing user studios with roles
+func TestListUserStudiosWithRoles(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	var user1Id, user2Id, studio1Id, studio2Id int
+
+	// Create users and studios, then verify in same transaction
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		user1 := createTestUser(t, tx, "user1@test.com", RoleUser)
+		user2 := createTestUser(t, tx, "user2@test.com", RoleUser)
+		user1Id = user1.Id
+		user2Id = user2.Id
+
+		// Create two studios
+		studio1 := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Studio 1",
+			MaxRooms: 5,
+			OwnerId:  user1Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio1.Id, &studio1)
+		studio1Id = studio1.Id
+
+		studio2 := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Studio 2",
+			MaxRooms: 5,
+			OwnerId:  user2Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio2.Id, &studio2)
+		studio2Id = studio2.Id
+
+		// User1 is owner of studio1
+		membership1 := StudioMembership{
+			UserId:   user1Id,
+			StudioId: studio1Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		membershipId1 := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, membershipId1, &membership1)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId1, user1Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId1, studio1Id)
+
+		// User2 is owner of studio2
+		membership2 := StudioMembership{
+			UserId:   user2Id,
+			StudioId: studio2Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		membershipId2 := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, membershipId2, &membership2)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId2, user2Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId2, studio2Id)
+
+		// User1 is also a member of studio2
+		membership3 := StudioMembership{
+			UserId:   user1Id,
+			StudioId: studio2Id,
+			Role:     StudioRoleMember,
+			JoinedAt: time.Now(),
+		}
+		membershipId3 := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, membershipId3, &membership3)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId3, user1Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId3, studio2Id)
+
+		// Test user1 sees both studios with correct roles
+		studios := ListUserStudios(tx, user1Id)
+		if len(studios) != 2 {
+			t.Errorf("User1 should see 2 studios, got %d", len(studios))
+		}
+
+		roleMap := make(map[int]StudioRole)
+		for _, studio := range studios {
+			roleMap[studio.Id] = GetUserStudioRole(tx, user1Id, studio.Id)
+		}
+
+		if roleMap[studio1Id] != StudioRoleOwner {
+			t.Errorf("User1 should be owner of studio1, got role %d", roleMap[studio1Id])
+		}
+		if roleMap[studio2Id] != StudioRoleMember {
+			t.Errorf("User1 should be member of studio2, got role %d", roleMap[studio2Id])
+		}
+
+		// Test user2 sees only studio2
+		studios2 := ListUserStudios(tx, user2Id)
+		if len(studios2) != 1 {
+			t.Errorf("User2 should see 1 studio, got %d", len(studios2))
+		}
+		if len(studios2) > 0 && studios2[0].Id != studio2Id {
+			t.Errorf("User2 should see studio2, got %d", studios2[0].Id)
+		}
+	})
+}
+
+// Test permission checking
+func TestStudioPermissions(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	var ownerUser, memberUser, nonMemberUser, siteAdminUser User
+	var studioId int
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		ownerUser = createTestUser(t, tx, "owner@test.com", RoleUser)
+		memberUser = createTestUser(t, tx, "member@test.com", RoleUser)
+		nonMemberUser = createTestUser(t, tx, "nonmember@test.com", RoleUser)
+		siteAdminUser = createTestUser(t, tx, "siteadmin@test.com", RoleSiteAdmin)
+
+		// Create a studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  ownerUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+		studioId = studio.Id
+
+		// Add owner membership
+		ownerMembership := StudioMembership{
+			UserId:   ownerUser.Id,
+			StudioId: studioId,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		ownerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, ownerMembershipId, &ownerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, ownerMembershipId, ownerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, ownerMembershipId, studioId)
+
+		// Add member membership
+		memberMembership := StudioMembership{
+			UserId:   memberUser.Id,
+			StudioId: studioId,
+			Role:     StudioRoleMember,
+			JoinedAt: time.Now(),
+		}
+		memberMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, memberMembershipId, &memberMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, memberMembershipId, memberUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, memberMembershipId, studioId)
+
+		// Test permissions within same transaction
+		// Owner has full permissions
+		if !HasStudioPermission(tx, ownerUser.Id, studioId, StudioRoleOwner) {
+			t.Error("Owner should have owner permission")
+		}
+
+		// Member has member permission but not owner
+		if !HasStudioPermission(tx, memberUser.Id, studioId, StudioRoleMember) {
+			t.Error("Member should have member permission")
+		}
+		if HasStudioPermission(tx, memberUser.Id, studioId, StudioRoleOwner) {
+			t.Error("Member should not have owner permission")
+		}
+
+		// Non-member has no permissions
+		if HasStudioPermission(tx, nonMemberUser.Id, studioId, StudioRoleViewer) {
+			t.Error("Non-member should not have any permissions")
+		}
+
+		// Site admin has all permissions even without membership
+		if !HasStudioPermission(tx, siteAdminUser.Id, studioId, StudioRoleOwner) {
+			t.Error("Site admin should have owner permission")
 		}
 	})
 }

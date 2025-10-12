@@ -6,6 +6,7 @@ import (
 	"stream/cfg"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 	"go.hasen.dev/vpack"
 )
@@ -174,8 +175,8 @@ func GenerateStreamKey() (string, error) {
 	return base64.URLEncoding.EncodeToString(bytes), nil
 }
 
-// GetStudio retrieves a studio by ID
-func GetStudio(tx *vbolt.Tx, studioId int) (studio Studio) {
+// GetStudioById retrieves a studio by ID
+func GetStudioById(tx *vbolt.Tx, studioId int) (studio Studio) {
 	vbolt.Read(tx, StudiosBkt, studioId, &studio)
 	return
 }
@@ -248,7 +249,7 @@ func ListUserStudios(tx *vbolt.Tx, userId int) []Studio {
 
 	for _, membershipId := range membershipIds {
 		membership := GetMembership(tx, membershipId)
-		studio := GetStudio(tx, membership.StudioId)
+		studio := GetStudioById(tx, membership.StudioId)
 		if studio.Id > 0 {
 			studios = append(studios, studio)
 		}
@@ -289,4 +290,194 @@ func ListStudioMembers(tx *vbolt.Tx, studioId int) []StudioMembership {
 	}
 
 	return memberships
+}
+
+// API Request/Response types
+
+type CreateStudioRequest struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	MaxRooms    int    `json:"maxRooms"` // Optional, will use default if 0
+}
+
+type CreateStudioResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	Studio  Studio `json:"studio,omitempty"`
+}
+
+type ListMyStudiosRequest struct {
+	// Empty for now
+}
+
+type StudioWithRole struct {
+	Studio
+	MyRole     StudioRole `json:"myRole"`
+	MyRoleName string     `json:"myRoleName"`
+}
+
+type ListMyStudiosResponse struct {
+	Studios []StudioWithRole `json:"studios"`
+}
+
+type GetStudioRequest struct {
+	StudioId int `json:"studioId"`
+}
+
+type GetStudioResponse struct {
+	Success    bool       `json:"success"`
+	Error      string     `json:"error,omitempty"`
+	Studio     Studio     `json:"studio,omitempty"`
+	MyRole     StudioRole `json:"myRole"`
+	MyRoleName string     `json:"myRoleName"`
+}
+
+// API Procedures
+
+func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudioResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Only StreamAdmin or higher can create studios
+	if caller.Role < RoleStreamAdmin {
+		resp.Success = false
+		resp.Error = "Only stream admins can create studios"
+		return
+	}
+
+	// Validate input
+	if req.Name == "" {
+		resp.Success = false
+		resp.Error = "Studio name is required"
+		return
+	}
+
+	// Use default max rooms if not specified
+	maxRooms := req.MaxRooms
+	if maxRooms <= 0 {
+		maxRooms = cfg.DefaultMaxRooms
+	}
+
+	if maxRooms > 50 {
+		resp.Success = false
+		resp.Error = "Maximum rooms cannot exceed 50"
+		return
+	}
+
+	// Create studio
+	vbeam.UseWriteTx(ctx)
+
+	studio := Studio{
+		Id:          vbolt.NextIntId(ctx.Tx, StudiosBkt),
+		Name:        req.Name,
+		Description: req.Description,
+		MaxRooms:    maxRooms,
+		OwnerId:     caller.Id,
+		Creation:    time.Now(),
+	}
+
+	vbolt.Write(ctx.Tx, StudiosBkt, studio.Id, &studio)
+
+	// Create owner membership for the creator
+	membership := StudioMembership{
+		UserId:   caller.Id,
+		StudioId: studio.Id,
+		Role:     StudioRoleOwner,
+		JoinedAt: time.Now(),
+	}
+	membershipId := vbolt.NextIntId(ctx.Tx, MembershipBkt)
+	vbolt.Write(ctx.Tx, MembershipBkt, membershipId, &membership)
+	vbolt.SetTargetSingleTerm(ctx.Tx, MembershipByUserIdx, membershipId, caller.Id)
+	vbolt.SetTargetSingleTerm(ctx.Tx, MembershipByStudioIdx, membershipId, studio.Id)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log studio creation
+	LogInfo(LogCategorySystem, "Studio created", map[string]interface{}{
+		"studioId":   studio.Id,
+		"studioName": studio.Name,
+		"ownerId":    caller.Id,
+		"ownerEmail": caller.Email,
+		"maxRooms":   maxRooms,
+	})
+
+	resp.Success = true
+	resp.Studio = studio
+	return
+}
+
+func ListMyStudios(ctx *vbeam.Context, req ListMyStudiosRequest) (resp ListMyStudiosResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		err = authErr
+		return
+	}
+
+	// Get all studios user is a member of
+	studios := ListUserStudios(ctx.Tx, caller.Id)
+
+	// Build response with role information
+	resp.Studios = make([]StudioWithRole, 0, len(studios))
+	for _, studio := range studios {
+		role := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
+		resp.Studios = append(resp.Studios, StudioWithRole{
+			Studio:     studio,
+			MyRole:     role,
+			MyRoleName: GetStudioRoleName(role),
+		})
+	}
+
+	return
+}
+
+func GetStudio(ctx *vbeam.Context, req GetStudioRequest) (resp GetStudioResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, req.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has permission to view this studio
+	role := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
+
+	// Site admins can view all studios
+	if caller.Role != RoleSiteAdmin && role == -1 {
+		resp.Success = false
+		resp.Error = "You do not have permission to view this studio"
+		return
+	}
+
+	// Site admins who aren't members get Owner role for display purposes
+	if caller.Role == RoleSiteAdmin && role == -1 {
+		role = StudioRoleOwner
+	}
+
+	resp.Success = true
+	resp.Studio = studio
+	resp.MyRole = role
+	resp.MyRoleName = GetStudioRoleName(role)
+	return
+}
+
+// RegisterStudioMethods registers studio-related API procedures
+func RegisterStudioMethods(app *vbeam.Application) {
+	vbeam.RegisterProc(app, CreateStudio)
+	vbeam.RegisterProc(app, ListMyStudios)
+	vbeam.RegisterProc(app, GetStudio)
 }
