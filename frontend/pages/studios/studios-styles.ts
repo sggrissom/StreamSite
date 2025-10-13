@@ -230,42 +230,6 @@ block(`
 }
 `);
 
-// Button styles
-block(`
-.btn {
-  padding: 0.75rem 1.5rem;
-  border: none;
-  border-radius: 6px;
-  font-size: 1rem;
-  font-weight: 500;
-  cursor: pointer;
-  text-decoration: none;
-  display: inline-block;
-  text-align: center;
-  transition: all 0.2s ease;
-}
-`);
-
-block(`
-.btn-primary {
-  background: var(--primary-accent);
-  color: var(--button-text);
-}
-`);
-
-block(`
-.btn-primary:hover {
-  background: var(--primary-accent-hover);
-}
-`);
-
-block(`
-.btn-sm {
-  padding: 0.5rem 1rem;
-  font-size: 0.9rem;
-}
-`);
-
 // Responsive adjustments
 block(`
 @media (max-width: 768px) {
@@ -493,27 +457,6 @@ block(`
   justify-content: flex-end;
   padding: 1.5rem;
   border-top: 1px solid var(--border);
-}
-`);
-
-block(`
-.btn-secondary {
-  background: var(--border);
-  color: var(--text);
-}
-`);
-
-block(`
-.btn-secondary:hover {
-  background: var(--text-secondary);
-  color: var(--surface);
-}
-`);
-
-block(`
-.btn:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
 }
 `);
 

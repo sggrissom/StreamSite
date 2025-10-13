@@ -1,4 +1,4 @@
-import * as rpc from "vlens/rpc";
+import * as rpc from "vlens/rpc"
 
 export type UserRole = number;
 export const RoleUser: UserRole = 0;
@@ -16,484 +16,395 @@ export const ErrLoginFailure = "LoginFailure";
 export const ErrAuthFailure = "AuthFailure";
 
 export interface CreateAccountRequest {
-  name: string;
-  email: string;
-  password: string;
-  confirmPassword: string;
+    name: string
+    email: string
+    password: string
+    confirmPassword: string
 }
 
 export interface CreateAccountResponse {
-  success: boolean;
-  error: string;
-  token: string;
-  auth: AuthResponse;
+    success: boolean
+    error: string
+    token: string
+    auth: AuthResponse
 }
 
-export interface Empty {}
+export interface Empty {
+}
 
 export interface AuthResponse {
-  id: number;
-  name: string;
-  email: string;
-  role: UserRole;
-  isStreamAdmin: boolean;
-  isSiteAdmin: boolean;
+    id: number
+    name: string
+    email: string
+    role: UserRole
+    isStreamAdmin: boolean
+    isSiteAdmin: boolean
 }
 
 export interface SetUserRoleRequest {
-  userId: number;
-  role: UserRole;
+    userId: number
+    role: UserRole
 }
 
 export interface SetUserRoleResponse {
-  success: boolean;
-  error: string;
+    success: boolean
+    error: string
 }
 
-export interface ListUsersRequest {}
+export interface ListUsersRequest {
+}
 
 export interface ListUsersResponse {
-  users: UserListInfo[];
+    users: UserListInfo[]
 }
 
 export interface CreateStudioRequest {
-  name: string;
-  description: string;
-  maxRooms: number;
+    name: string
+    description: string
+    maxRooms: number
 }
 
 export interface CreateStudioResponse {
-  success: boolean;
-  error: string;
-  studio: Studio;
+    success: boolean
+    error: string
+    studio: Studio
 }
 
-export interface ListMyStudiosRequest {}
+export interface ListMyStudiosRequest {
+}
 
 export interface ListMyStudiosResponse {
-  studios: StudioWithRole[];
+    studios: StudioWithRole[]
 }
 
 export interface GetStudioRequest {
-  studioId: number;
+    studioId: number
 }
 
 export interface GetStudioResponse {
-  success: boolean;
-  error: string;
-  studio: Studio;
-  myRole: StudioRole;
-  myRoleName: string;
+    success: boolean
+    error: string
+    studio: Studio
+    myRole: StudioRole
+    myRoleName: string
 }
 
 export interface GetStudioDashboardRequest {
-  studioId: number;
+    studioId: number
 }
 
 export interface GetStudioDashboardResponse {
-  success: boolean;
-  error: string;
-  studio: Studio;
-  myRole: StudioRole;
-  myRoleName: string;
-  rooms: Room[];
-  members: MemberWithDetails[];
+    success: boolean
+    error: string
+    studio: Studio
+    myRole: StudioRole
+    myRoleName: string
+    rooms: Room[]
+    members: MemberWithDetails[]
 }
 
 export interface UpdateStudioRequest {
-  studioId: number;
-  name: string;
-  description: string;
-  maxRooms: number;
+    studioId: number
+    name: string
+    description: string
+    maxRooms: number
 }
 
 export interface UpdateStudioResponse {
-  success: boolean;
-  error: string;
-  studio: Studio;
+    success: boolean
+    error: string
+    studio: Studio
 }
 
 export interface DeleteStudioRequest {
-  studioId: number;
+    studioId: number
 }
 
 export interface DeleteStudioResponse {
-  success: boolean;
-  error: string;
+    success: boolean
+    error: string
 }
 
 export interface CreateRoomRequest {
-  studioId: number;
-  name: string;
+    studioId: number
+    name: string
 }
 
 export interface CreateRoomResponse {
-  success: boolean;
-  error: string;
-  room: Room;
+    success: boolean
+    error: string
+    room: Room
 }
 
 export interface ListRoomsRequest {
-  studioId: number;
+    studioId: number
 }
 
 export interface ListRoomsResponse {
-  success: boolean;
-  error: string;
-  rooms: Room[];
+    success: boolean
+    error: string
+    rooms: Room[]
 }
 
 export interface GetRoomDetailsRequest {
-  roomId: number;
+    roomId: number
 }
 
 export interface GetRoomDetailsResponse {
-  success: boolean;
-  error: string;
-  room: Room;
-  studioName: string;
-  myRole: StudioRole;
-  myRoleName: string;
+    success: boolean
+    error: string
+    room: Room
+    studioName: string
+    myRole: StudioRole
+    myRoleName: string
 }
 
 export interface GetRoomStreamKeyRequest {
-  roomId: number;
+    roomId: number
 }
 
 export interface GetRoomStreamKeyResponse {
-  success: boolean;
-  error: string;
-  streamKey: string;
+    success: boolean
+    error: string
+    streamKey: string
 }
 
 export interface UpdateRoomRequest {
-  roomId: number;
-  name: string;
+    roomId: number
+    name: string
 }
 
 export interface UpdateRoomResponse {
-  success: boolean;
-  error: string;
-  room: Room;
+    success: boolean
+    error: string
+    room: Room
 }
 
 export interface RegenerateStreamKeyRequest {
-  roomId: number;
+    roomId: number
 }
 
 export interface RegenerateStreamKeyResponse {
-  success: boolean;
-  error: string;
-  streamKey: string;
+    success: boolean
+    error: string
+    streamKey: string
 }
 
 export interface DeleteRoomRequest {
-  roomId: number;
+    roomId: number
 }
 
 export interface DeleteRoomResponse {
-  success: boolean;
-  error: string;
+    success: boolean
+    error: string
 }
 
 export interface AddStudioMemberRequest {
-  studioId: number;
-  userId: number;
-  userEmail: string;
-  role: StudioRole;
+    studioId: number
+    userId: number
+    userEmail: string
+    role: StudioRole
 }
 
 export interface AddStudioMemberResponse {
-  success: boolean;
-  error: string;
-  membership: StudioMembership;
+    success: boolean
+    error: string
+    membership: StudioMembership
 }
 
 export interface RemoveStudioMemberRequest {
-  studioId: number;
-  userId: number;
+    studioId: number
+    userId: number
 }
 
 export interface RemoveStudioMemberResponse {
-  success: boolean;
-  error: string;
+    success: boolean
+    error: string
 }
 
 export interface UpdateStudioMemberRoleRequest {
-  studioId: number;
-  userId: number;
-  newRole: StudioRole;
+    studioId: number
+    userId: number
+    newRole: StudioRole
 }
 
 export interface UpdateStudioMemberRoleResponse {
-  success: boolean;
-  error: string;
-  membership: StudioMembership;
+    success: boolean
+    error: string
+    membership: StudioMembership
 }
 
 export interface ListStudioMembersRequest {
-  studioId: number;
+    studioId: number
 }
 
 export interface ListStudioMembersResponse {
-  success: boolean;
-  error: string;
-  members: MemberWithDetails[];
+    success: boolean
+    error: string
+    members: MemberWithDetails[]
 }
 
 export interface LeaveStudioRequest {
-  studioId: number;
+    studioId: number
 }
 
 export interface LeaveStudioResponse {
-  success: boolean;
-  error: string;
+    success: boolean
+    error: string
 }
 
-export interface GetStreamStatusRequest {}
+export interface GetStreamStatusRequest {
+}
 
 export interface GetStreamStatusResponse {
-  isLive: boolean;
-  lastChecked: string;
+    isLive: boolean
+    lastChecked: string
 }
 
 export interface UserListInfo {
-  id: number;
-  name: string;
-  email: string;
-  role: UserRole;
-  roleName: string;
+    id: number
+    name: string
+    email: string
+    role: UserRole
+    roleName: string
 }
 
 export interface Studio {
-  id: number;
-  name: string;
-  description: string;
-  maxRooms: number;
-  ownerId: number;
-  creation: string;
+    id: number
+    name: string
+    description: string
+    maxRooms: number
+    ownerId: number
+    creation: string
 }
 
 export interface StudioWithRole {
-  id: number;
-  name: string;
-  description: string;
-  maxRooms: number;
-  ownerId: number;
-  creation: string;
-  myRole: StudioRole;
-  myRoleName: string;
+    id: number
+    name: string
+    description: string
+    maxRooms: number
+    ownerId: number
+    creation: string
+    myRole: StudioRole
+    myRoleName: string
 }
 
 export interface Room {
-  id: number;
-  studioId: number;
-  roomNumber: number;
-  name: string;
-  streamKey: string;
-  isActive: boolean;
-  creation: string;
+    id: number
+    studioId: number
+    roomNumber: number
+    name: string
+    streamKey: string
+    isActive: boolean
+    creation: string
 }
 
 export interface MemberWithDetails {
-  userId: number;
-  studioId: number;
-  role: StudioRole;
-  joinedAt: string;
-  userName: string;
-  userEmail: string;
-  roleName: string;
+    userId: number
+    studioId: number
+    role: StudioRole
+    joinedAt: string
+    userName: string
+    userEmail: string
+    roleName: string
 }
 
 export interface StudioMembership {
-  userId: number;
-  studioId: number;
-  role: StudioRole;
-  joinedAt: string;
+    userId: number
+    studioId: number
+    role: StudioRole
+    joinedAt: string
 }
 
-export async function CreateAccount(
-  data: CreateAccountRequest,
-): Promise<rpc.Response<CreateAccountResponse>> {
-  return await rpc.call<CreateAccountResponse>(
-    "CreateAccount",
-    JSON.stringify(data),
-  );
+export async function CreateAccount(data: CreateAccountRequest): Promise<rpc.Response<CreateAccountResponse>> {
+    return await rpc.call<CreateAccountResponse>('CreateAccount', JSON.stringify(data));
 }
 
-export async function GetAuthContext(
-  data: Empty,
-): Promise<rpc.Response<AuthResponse>> {
-  return await rpc.call<AuthResponse>("GetAuthContext", JSON.stringify(data));
+export async function GetAuthContext(data: Empty): Promise<rpc.Response<AuthResponse>> {
+    return await rpc.call<AuthResponse>('GetAuthContext', JSON.stringify(data));
 }
 
-export async function SetUserRole(
-  data: SetUserRoleRequest,
-): Promise<rpc.Response<SetUserRoleResponse>> {
-  return await rpc.call<SetUserRoleResponse>(
-    "SetUserRole",
-    JSON.stringify(data),
-  );
+export async function SetUserRole(data: SetUserRoleRequest): Promise<rpc.Response<SetUserRoleResponse>> {
+    return await rpc.call<SetUserRoleResponse>('SetUserRole', JSON.stringify(data));
 }
 
-export async function ListUsers(
-  data: ListUsersRequest,
-): Promise<rpc.Response<ListUsersResponse>> {
-  return await rpc.call<ListUsersResponse>("ListUsers", JSON.stringify(data));
+export async function ListUsers(data: ListUsersRequest): Promise<rpc.Response<ListUsersResponse>> {
+    return await rpc.call<ListUsersResponse>('ListUsers', JSON.stringify(data));
 }
 
-export async function CreateStudio(
-  data: CreateStudioRequest,
-): Promise<rpc.Response<CreateStudioResponse>> {
-  return await rpc.call<CreateStudioResponse>(
-    "CreateStudio",
-    JSON.stringify(data),
-  );
+export async function CreateStudio(data: CreateStudioRequest): Promise<rpc.Response<CreateStudioResponse>> {
+    return await rpc.call<CreateStudioResponse>('CreateStudio', JSON.stringify(data));
 }
 
-export async function ListMyStudios(
-  data: ListMyStudiosRequest,
-): Promise<rpc.Response<ListMyStudiosResponse>> {
-  return await rpc.call<ListMyStudiosResponse>(
-    "ListMyStudios",
-    JSON.stringify(data),
-  );
+export async function ListMyStudios(data: ListMyStudiosRequest): Promise<rpc.Response<ListMyStudiosResponse>> {
+    return await rpc.call<ListMyStudiosResponse>('ListMyStudios', JSON.stringify(data));
 }
 
-export async function GetStudio(
-  data: GetStudioRequest,
-): Promise<rpc.Response<GetStudioResponse>> {
-  return await rpc.call<GetStudioResponse>("GetStudio", JSON.stringify(data));
+export async function GetStudio(data: GetStudioRequest): Promise<rpc.Response<GetStudioResponse>> {
+    return await rpc.call<GetStudioResponse>('GetStudio', JSON.stringify(data));
 }
 
-export async function GetStudioDashboard(
-  data: GetStudioDashboardRequest,
-): Promise<rpc.Response<GetStudioDashboardResponse>> {
-  return await rpc.call<GetStudioDashboardResponse>(
-    "GetStudioDashboard",
-    JSON.stringify(data),
-  );
+export async function GetStudioDashboard(data: GetStudioDashboardRequest): Promise<rpc.Response<GetStudioDashboardResponse>> {
+    return await rpc.call<GetStudioDashboardResponse>('GetStudioDashboard', JSON.stringify(data));
 }
 
-export async function UpdateStudio(
-  data: UpdateStudioRequest,
-): Promise<rpc.Response<UpdateStudioResponse>> {
-  return await rpc.call<UpdateStudioResponse>(
-    "UpdateStudio",
-    JSON.stringify(data),
-  );
+export async function UpdateStudio(data: UpdateStudioRequest): Promise<rpc.Response<UpdateStudioResponse>> {
+    return await rpc.call<UpdateStudioResponse>('UpdateStudio', JSON.stringify(data));
 }
 
-export async function DeleteStudio(
-  data: DeleteStudioRequest,
-): Promise<rpc.Response<DeleteStudioResponse>> {
-  return await rpc.call<DeleteStudioResponse>(
-    "DeleteStudio",
-    JSON.stringify(data),
-  );
+export async function DeleteStudio(data: DeleteStudioRequest): Promise<rpc.Response<DeleteStudioResponse>> {
+    return await rpc.call<DeleteStudioResponse>('DeleteStudio', JSON.stringify(data));
 }
 
-export async function CreateRoom(
-  data: CreateRoomRequest,
-): Promise<rpc.Response<CreateRoomResponse>> {
-  return await rpc.call<CreateRoomResponse>("CreateRoom", JSON.stringify(data));
+export async function CreateRoom(data: CreateRoomRequest): Promise<rpc.Response<CreateRoomResponse>> {
+    return await rpc.call<CreateRoomResponse>('CreateRoom', JSON.stringify(data));
 }
 
-export async function ListRooms(
-  data: ListRoomsRequest,
-): Promise<rpc.Response<ListRoomsResponse>> {
-  return await rpc.call<ListRoomsResponse>("ListRooms", JSON.stringify(data));
+export async function ListRooms(data: ListRoomsRequest): Promise<rpc.Response<ListRoomsResponse>> {
+    return await rpc.call<ListRoomsResponse>('ListRooms', JSON.stringify(data));
 }
 
-export async function GetRoomDetails(
-  data: GetRoomDetailsRequest,
-): Promise<rpc.Response<GetRoomDetailsResponse>> {
-  return await rpc.call<GetRoomDetailsResponse>(
-    "GetRoomDetails",
-    JSON.stringify(data),
-  );
+export async function GetRoomDetails(data: GetRoomDetailsRequest): Promise<rpc.Response<GetRoomDetailsResponse>> {
+    return await rpc.call<GetRoomDetailsResponse>('GetRoomDetails', JSON.stringify(data));
 }
 
-export async function GetRoomStreamKey(
-  data: GetRoomStreamKeyRequest,
-): Promise<rpc.Response<GetRoomStreamKeyResponse>> {
-  return await rpc.call<GetRoomStreamKeyResponse>(
-    "GetRoomStreamKey",
-    JSON.stringify(data),
-  );
+export async function GetRoomStreamKey(data: GetRoomStreamKeyRequest): Promise<rpc.Response<GetRoomStreamKeyResponse>> {
+    return await rpc.call<GetRoomStreamKeyResponse>('GetRoomStreamKey', JSON.stringify(data));
 }
 
-export async function UpdateRoom(
-  data: UpdateRoomRequest,
-): Promise<rpc.Response<UpdateRoomResponse>> {
-  return await rpc.call<UpdateRoomResponse>("UpdateRoom", JSON.stringify(data));
+export async function UpdateRoom(data: UpdateRoomRequest): Promise<rpc.Response<UpdateRoomResponse>> {
+    return await rpc.call<UpdateRoomResponse>('UpdateRoom', JSON.stringify(data));
 }
 
-export async function RegenerateStreamKey(
-  data: RegenerateStreamKeyRequest,
-): Promise<rpc.Response<RegenerateStreamKeyResponse>> {
-  return await rpc.call<RegenerateStreamKeyResponse>(
-    "RegenerateStreamKey",
-    JSON.stringify(data),
-  );
+export async function RegenerateStreamKey(data: RegenerateStreamKeyRequest): Promise<rpc.Response<RegenerateStreamKeyResponse>> {
+    return await rpc.call<RegenerateStreamKeyResponse>('RegenerateStreamKey', JSON.stringify(data));
 }
 
-export async function DeleteRoom(
-  data: DeleteRoomRequest,
-): Promise<rpc.Response<DeleteRoomResponse>> {
-  return await rpc.call<DeleteRoomResponse>("DeleteRoom", JSON.stringify(data));
+export async function DeleteRoom(data: DeleteRoomRequest): Promise<rpc.Response<DeleteRoomResponse>> {
+    return await rpc.call<DeleteRoomResponse>('DeleteRoom', JSON.stringify(data));
 }
 
-export async function AddStudioMember(
-  data: AddStudioMemberRequest,
-): Promise<rpc.Response<AddStudioMemberResponse>> {
-  return await rpc.call<AddStudioMemberResponse>(
-    "AddStudioMember",
-    JSON.stringify(data),
-  );
+export async function AddStudioMember(data: AddStudioMemberRequest): Promise<rpc.Response<AddStudioMemberResponse>> {
+    return await rpc.call<AddStudioMemberResponse>('AddStudioMember', JSON.stringify(data));
 }
 
-export async function RemoveStudioMember(
-  data: RemoveStudioMemberRequest,
-): Promise<rpc.Response<RemoveStudioMemberResponse>> {
-  return await rpc.call<RemoveStudioMemberResponse>(
-    "RemoveStudioMember",
-    JSON.stringify(data),
-  );
+export async function RemoveStudioMember(data: RemoveStudioMemberRequest): Promise<rpc.Response<RemoveStudioMemberResponse>> {
+    return await rpc.call<RemoveStudioMemberResponse>('RemoveStudioMember', JSON.stringify(data));
 }
 
-export async function UpdateStudioMemberRole(
-  data: UpdateStudioMemberRoleRequest,
-): Promise<rpc.Response<UpdateStudioMemberRoleResponse>> {
-  return await rpc.call<UpdateStudioMemberRoleResponse>(
-    "UpdateStudioMemberRole",
-    JSON.stringify(data),
-  );
+export async function UpdateStudioMemberRole(data: UpdateStudioMemberRoleRequest): Promise<rpc.Response<UpdateStudioMemberRoleResponse>> {
+    return await rpc.call<UpdateStudioMemberRoleResponse>('UpdateStudioMemberRole', JSON.stringify(data));
 }
 
-export async function ListStudioMembersAPI(
-  data: ListStudioMembersRequest,
-): Promise<rpc.Response<ListStudioMembersResponse>> {
-  return await rpc.call<ListStudioMembersResponse>(
-    "ListStudioMembersAPI",
-    JSON.stringify(data),
-  );
+export async function ListStudioMembersAPI(data: ListStudioMembersRequest): Promise<rpc.Response<ListStudioMembersResponse>> {
+    return await rpc.call<ListStudioMembersResponse>('ListStudioMembersAPI', JSON.stringify(data));
 }
 
-export async function LeaveStudio(
-  data: LeaveStudioRequest,
-): Promise<rpc.Response<LeaveStudioResponse>> {
-  return await rpc.call<LeaveStudioResponse>(
-    "LeaveStudio",
-    JSON.stringify(data),
-  );
+export async function LeaveStudio(data: LeaveStudioRequest): Promise<rpc.Response<LeaveStudioResponse>> {
+    return await rpc.call<LeaveStudioResponse>('LeaveStudio', JSON.stringify(data));
 }
 
-export async function GetStreamStatus(
-  data: GetStreamStatusRequest,
-): Promise<rpc.Response<GetStreamStatusResponse>> {
-  return await rpc.call<GetStreamStatusResponse>(
-    "GetStreamStatus",
-    JSON.stringify(data),
-  );
+export async function GetStreamStatus(data: GetStreamStatusRequest): Promise<rpc.Response<GetStreamStatusResponse>> {
+    return await rpc.call<GetStreamStatusResponse>('GetStreamStatus', JSON.stringify(data));
 }
+

@@ -76,6 +76,41 @@ block(`
 }
 `);
 
+block(`
+.btn-sm {
+  padding: 0.5rem 1rem;
+  font-size: 0.9rem;
+}
+`);
+
+block(`
+.btn-secondary {
+  background: var(--surface);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+`);
+
+block(`
+.btn-secondary:hover:not(:disabled) {
+  background: var(--hover-bg);
+}
+`);
+
+block(`
+.btn-danger {
+  background: #dc2626;
+  color: white;
+  border: none;
+}
+`);
+
+block(`
+.btn-danger:hover:not(:disabled) {
+  background: #b91c1c;
+}
+`);
+
 // Form Styles
 block(`
 .form-group {
