@@ -327,6 +327,149 @@ async function confirmDeleteRoom(modal: DeleteRoomModal) {
   window.location.reload();
 }
 
+type EditStudioModal = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  error: string;
+  studioId: number;
+  studioName: string;
+  studioDescription: string;
+  maxRooms: number;
+};
+
+const useEditStudioModal = vlens.declareHook(
+  (): EditStudioModal => ({
+    isOpen: false,
+    isSubmitting: false,
+    error: "",
+    studioId: 0,
+    studioName: "",
+    studioDescription: "",
+    maxRooms: 5,
+  }),
+);
+
+function openEditStudioModal(
+  modal: EditStudioModal,
+  studioId: number,
+  name: string,
+  description: string,
+  maxRooms: number,
+) {
+  modal.isOpen = true;
+  modal.error = "";
+  modal.studioId = studioId;
+  modal.studioName = name;
+  modal.studioDescription = description;
+  modal.maxRooms = maxRooms;
+  vlens.scheduleRedraw();
+}
+
+function closeEditStudioModal(modal: EditStudioModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  vlens.scheduleRedraw();
+}
+
+async function submitEditStudio(modal: EditStudioModal) {
+  if (!modal.studioName.trim()) {
+    modal.error = "Studio name is required";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  if (modal.maxRooms < 1) {
+    modal.error = "Max rooms must be at least 1";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.isSubmitting = true;
+  modal.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.UpdateStudio({
+    studioId: modal.studioId,
+    name: modal.studioName.trim(),
+    description: modal.studioDescription.trim(),
+    maxRooms: modal.maxRooms,
+  });
+
+  modal.isSubmitting = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to update studio";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  // Success - close modal and reload page
+  closeEditStudioModal(modal);
+  window.location.reload();
+}
+
+type DeleteStudioModal = {
+  isOpen: boolean;
+  isDeleting: boolean;
+  error: string;
+  studioId: number;
+  studioName: string;
+  isOwner: boolean;
+};
+
+const useDeleteStudioModal = vlens.declareHook(
+  (): DeleteStudioModal => ({
+    isOpen: false,
+    isDeleting: false,
+    error: "",
+    studioId: 0,
+    studioName: "",
+    isOwner: false,
+  }),
+);
+
+function openDeleteStudioModal(
+  modal: DeleteStudioModal,
+  studioId: number,
+  studioName: string,
+  isOwner: boolean,
+) {
+  modal.isOpen = true;
+  modal.error = "";
+  modal.studioId = studioId;
+  modal.studioName = studioName;
+  modal.isOwner = isOwner;
+  vlens.scheduleRedraw();
+}
+
+function closeDeleteStudioModal(modal: DeleteStudioModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  vlens.scheduleRedraw();
+}
+
+async function confirmDeleteStudio(modal: DeleteStudioModal) {
+  modal.isDeleting = true;
+  modal.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.DeleteStudio({
+    studioId: modal.studioId,
+  });
+
+  modal.isDeleting = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to delete studio";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  // Success - redirect to studios list
+  closeDeleteStudioModal(modal);
+  window.location.href = "/studios";
+}
+
 export function view(
   route: string,
   prefix: string,
@@ -336,6 +479,8 @@ export function view(
   const streamKeyModal = useStreamKeyModal();
   const editRoomModal = useEditRoomModal();
   const deleteRoomModal = useDeleteRoomModal();
+  const editStudioModal = useEditStudioModal();
+  const deleteStudioModal = useDeleteStudioModal();
 
   // Handle errors or missing data
   if (!data || !data.success) {
@@ -411,12 +556,38 @@ export function view(
             </div>
           </div>
 
-          {/* Action Buttons Placeholder */}
+          {/* Action Buttons */}
           {canManageRooms && (
             <div className="studio-actions">
-              <button className="btn btn-secondary" disabled>
+              <button
+                className="btn btn-secondary"
+                onClick={() =>
+                  openEditStudioModal(
+                    editStudioModal,
+                    studio.id,
+                    studio.name,
+                    studio.description || "",
+                    studio.maxRooms,
+                  )
+                }
+              >
                 Edit Studio
               </button>
+              {myRole === 3 && (
+                <button
+                  className="btn btn-danger"
+                  onClick={() =>
+                    openDeleteStudioModal(
+                      deleteStudioModal,
+                      studio.id,
+                      studio.name,
+                      true,
+                    )
+                  }
+                >
+                  Delete Studio
+                </button>
+              )}
               <button className="btn btn-secondary" disabled>
                 Manage Members
               </button>
@@ -757,6 +928,126 @@ export function view(
                 </p>
                 <div className="room-info">
                   <strong>Room:</strong> {deleteRoomModal.roomName}
+                </div>
+              </div>
+            )}
+          </Modal>
+
+          {/* Edit Studio Modal */}
+          <Modal
+            isOpen={editStudioModal.isOpen}
+            title="Edit Studio"
+            onClose={() => closeEditStudioModal(editStudioModal)}
+            error={editStudioModal.error}
+            footer={
+              <>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => closeEditStudioModal(editStudioModal)}
+                  disabled={editStudioModal.isSubmitting}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={() => submitEditStudio(editStudioModal)}
+                  disabled={editStudioModal.isSubmitting}
+                >
+                  {editStudioModal.isSubmitting ? "Saving..." : "Save Changes"}
+                </button>
+              </>
+            }
+          >
+            <div className="form-group">
+              <label htmlFor="edit-studio-name">Studio Name *</label>
+              <input
+                id="edit-studio-name"
+                type="text"
+                className="form-input"
+                placeholder="Enter studio name"
+                {...vlens.attrsBindInput(
+                  vlens.ref(editStudioModal, "studioName"),
+                )}
+                disabled={editStudioModal.isSubmitting}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="edit-studio-description">Description</label>
+              <textarea
+                id="edit-studio-description"
+                className="form-input"
+                placeholder="Enter studio description (optional)"
+                rows={3}
+                {...vlens.attrsBindInput(
+                  vlens.ref(editStudioModal, "studioDescription"),
+                )}
+                disabled={editStudioModal.isSubmitting}
+              />
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="edit-studio-max-rooms">Max Rooms *</label>
+              <input
+                id="edit-studio-max-rooms"
+                type="number"
+                min="1"
+                className="form-input"
+                {...vlens.attrsBindInput(
+                  vlens.ref(editStudioModal, "maxRooms"),
+                )}
+                disabled={editStudioModal.isSubmitting}
+              />
+              <small className="form-help">
+                Maximum number of streaming rooms allowed for this studio
+              </small>
+            </div>
+          </Modal>
+
+          {/* Delete Studio Modal */}
+          <Modal
+            isOpen={deleteStudioModal.isOpen}
+            title="Delete Studio"
+            onClose={() => closeDeleteStudioModal(deleteStudioModal)}
+            error={deleteStudioModal.error}
+            footer={
+              <>
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => closeDeleteStudioModal(deleteStudioModal)}
+                  disabled={deleteStudioModal.isDeleting}
+                >
+                  Cancel
+                </button>
+                {deleteStudioModal.isOwner && (
+                  <button
+                    className="btn btn-danger"
+                    onClick={() => confirmDeleteStudio(deleteStudioModal)}
+                    disabled={deleteStudioModal.isDeleting}
+                  >
+                    {deleteStudioModal.isDeleting
+                      ? "Deleting..."
+                      : "Delete Studio"}
+                  </button>
+                )}
+              </>
+            }
+          >
+            {!deleteStudioModal.isOwner ? (
+              <div className="delete-warning">
+                <p className="warning-text">
+                  ⚠️ Only the studio owner can delete the studio.
+                </p>
+              </div>
+            ) : (
+              <div className="delete-confirmation">
+                <p className="confirmation-text">
+                  ⚠️ Are you sure you want to delete this studio? This will also
+                  delete all rooms, streams, and memberships. This action cannot
+                  be undone.
+                </p>
+                <div className="room-info">
+                  <strong>Studio:</strong> {deleteStudioModal.studioName}
                 </div>
               </div>
             )}
