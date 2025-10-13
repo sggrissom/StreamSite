@@ -317,6 +317,19 @@ type GetRoomDetailsResponse struct {
 	MyRoleName string     `json:"myRoleName"`
 }
 
+type RoomWithStudio struct {
+	Room
+	StudioName string `json:"studioName"`
+}
+
+type ListMyAccessibleRoomsRequest struct {
+	// Empty for now
+}
+
+type ListMyAccessibleRoomsResponse struct {
+	Rooms []RoomWithStudio `json:"rooms"`
+}
+
 // API Procedures
 
 func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudioResponse, err error) {
@@ -863,6 +876,35 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 	return
 }
 
+func ListMyAccessibleRooms(ctx *vbeam.Context, req ListMyAccessibleRoomsRequest) (resp ListMyAccessibleRoomsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		err = authErr
+		return
+	}
+
+	// Get all studios user is a member of
+	studios := ListUserStudios(ctx.Tx, caller.Id)
+
+	// Collect all rooms from all studios
+	resp.Rooms = make([]RoomWithStudio, 0)
+	for _, studio := range studios {
+		// Get all rooms for this studio
+		rooms := ListStudioRooms(ctx.Tx, studio.Id)
+
+		// Add each room with studio information
+		for _, room := range rooms {
+			resp.Rooms = append(resp.Rooms, RoomWithStudio{
+				Room:       room,
+				StudioName: studio.Name,
+			})
+		}
+	}
+
+	return
+}
+
 func GetRoomStreamKey(ctx *vbeam.Context, req GetRoomStreamKeyRequest) (resp GetRoomStreamKeyResponse, err error) {
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
@@ -1130,6 +1172,7 @@ func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateRoom)
 	vbeam.RegisterProc(app, ListRooms)
 	vbeam.RegisterProc(app, GetRoomDetails)
+	vbeam.RegisterProc(app, ListMyAccessibleRooms)
 	vbeam.RegisterProc(app, GetRoomStreamKey)
 	vbeam.RegisterProc(app, UpdateRoom)
 	vbeam.RegisterProc(app, RegenerateStreamKey)

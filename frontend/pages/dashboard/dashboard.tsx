@@ -8,19 +8,19 @@ import "./dashboard-styles";
 
 type Data = {
   authId: number;
-  streamStatus: server.GetStreamStatusResponse | null;
+  rooms: server.ListMyAccessibleRoomsResponse | null;
 };
 
 export async function fetch(route: string, prefix: string) {
   // Check if user is authenticated
   let [authResp, authErr] = await server.GetAuthContext({});
 
-  // Check stream status
-  let [statusResp, statusErr] = await server.GetStreamStatus({});
+  // Get accessible rooms
+  let [roomsResp, roomsErr] = await server.ListMyAccessibleRooms({});
 
   return rpc.ok<Data>({
     authId: authResp?.id || 0,
-    streamStatus: statusResp || null,
+    rooms: roomsResp || null,
   });
 }
 
@@ -35,7 +35,8 @@ export function view(
     return <div></div>;
   }
 
-  const isLive = data.streamStatus?.isLive || false;
+  const rooms = data.rooms?.rooms || [];
+  const liveRooms = rooms.filter((r) => r.isActive);
 
   return (
     <div>
@@ -44,36 +45,80 @@ export function view(
         <div className="dashboard-content">
           <h1 className="dashboard-title">Welcome to Stream</h1>
           <p className="dashboard-description">
-            You're all set! Ready to watch the stream?
+            Access your streaming rooms and watch live content.
           </p>
 
-          {/* Stream status badge */}
-          {data.streamStatus && (
-            <div className="stream-status-badge">
-              <span
-                className={`stream-status-dot ${isLive ? "status-live" : "status-offline"}`}
-              ></span>
-              <span
-                className={`stream-status-text ${isLive ? "status-live" : "status-offline"}`}
-              >
-                {isLive ? "LIVE NOW" : "OFFLINE"}
-              </span>
-            </div>
-          )}
-
           <div className="dashboard-actions">
-            {isLive ? (
-              <a href="/stream" className="btn btn-primary btn-large">
-                Watch Live Stream
-              </a>
-            ) : (
-              <button className="btn btn-primary btn-large" disabled>
-                Stream Offline
-              </button>
-            )}
-            <a href="/studios" className="btn btn-secondary btn-large">
+            <a href="/studios" className="btn btn-primary btn-large">
               My Studios
             </a>
+          </div>
+
+          {/* Rooms section */}
+          <div className="dashboard-rooms-section">
+            <h2 className="section-title">
+              My Rooms
+              {liveRooms.length > 0 && (
+                <span className="live-count"> ({liveRooms.length} live)</span>
+              )}
+            </h2>
+
+            {rooms.length === 0 ? (
+              <div className="rooms-empty">
+                <div className="empty-icon">🎬</div>
+                <h3>No Rooms Available</h3>
+                <p>
+                  You don't have access to any rooms yet. Join a studio to get
+                  started.
+                </p>
+                <a href="/studios" className="btn btn-primary">
+                  Browse Studios
+                </a>
+              </div>
+            ) : (
+              <div className="rooms-grid">
+                {rooms.map((room) => (
+                  <div
+                    key={room.id}
+                    className={`room-card ${room.isActive ? "room-live" : ""}`}
+                  >
+                    <div className="room-header">
+                      <div className="room-studio">{room.studioName}</div>
+                      {room.isActive && (
+                        <span className="room-status active">🔴 Live</span>
+                      )}
+                    </div>
+
+                    <h3 className="room-name">{room.name}</h3>
+
+                    <div className="room-meta">
+                      <span className="meta-item">Room #{room.roomNumber}</span>
+                    </div>
+
+                    <div className="room-actions">
+                      {room.isActive ? (
+                        <a
+                          href={`/stream/${room.id}`}
+                          className="btn btn-primary btn-sm"
+                        >
+                          Watch Stream
+                        </a>
+                      ) : (
+                        <button className="btn btn-secondary btn-sm" disabled>
+                          Offline
+                        </button>
+                      )}
+                      <a
+                        href={`/studio/${room.studioId}`}
+                        className="btn btn-secondary btn-sm"
+                      >
+                        View Studio
+                      </a>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
       </main>

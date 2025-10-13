@@ -159,6 +159,13 @@ export interface GetRoomDetailsResponse {
     myRoleName: string
 }
 
+export interface ListMyAccessibleRoomsRequest {
+}
+
+export interface ListMyAccessibleRoomsResponse {
+    rooms: RoomWithStudio[]
+}
+
 export interface GetRoomStreamKeyRequest {
     roomId: number
 }
@@ -309,6 +316,17 @@ export interface MemberWithDetails {
     roleName: string
 }
 
+export interface RoomWithStudio {
+    id: number
+    studioId: number
+    roomNumber: number
+    name: string
+    streamKey: string
+    isActive: boolean
+    creation: string
+    studioName: string
+}
+
 export interface StudioMembership {
     userId: number
     studioId: number
@@ -366,6 +384,10 @@ export async function ListRooms(data: ListRoomsRequest): Promise<rpc.Response<Li
 
 export async function GetRoomDetails(data: GetRoomDetailsRequest): Promise<rpc.Response<GetRoomDetailsResponse>> {
     return await rpc.call<GetRoomDetailsResponse>('GetRoomDetails', JSON.stringify(data));
+}
+
+export async function ListMyAccessibleRooms(data: ListMyAccessibleRoomsRequest): Promise<rpc.Response<ListMyAccessibleRoomsResponse>> {
+    return await rpc.call<ListMyAccessibleRoomsResponse>('ListMyAccessibleRooms', JSON.stringify(data));
 }
 
 export async function GetRoomStreamKey(data: GetRoomStreamKeyRequest): Promise<rpc.Response<GetRoomStreamKeyResponse>> {

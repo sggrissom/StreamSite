@@ -384,6 +384,14 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                 </div>
 
                 <div className="room-actions">
+                  {room.isActive && (
+                    <a
+                      href={`/stream/${room.id}`}
+                      className="btn btn-primary btn-sm"
+                    >
+                      Watch Stream
+                    </a>
+                  )}
                   {canManageRooms && (
                     <>
                       <button
@@ -416,11 +424,6 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                         Delete
                       </button>
                     </>
-                  )}
-                  {!canManageRooms && room.isActive && (
-                    <button className="btn btn-primary btn-sm" disabled>
-                      Watch Stream
-                    </button>
                   )}
                 </div>
               </div>
