@@ -304,6 +304,19 @@ type DeleteRoomResponse struct {
 	Error   string `json:"error,omitempty"`
 }
 
+type GetRoomDetailsRequest struct {
+	RoomId int `json:"roomId"`
+}
+
+type GetRoomDetailsResponse struct {
+	Success    bool       `json:"success"`
+	Error      string     `json:"error,omitempty"`
+	Room       Room       `json:"room,omitempty"`
+	StudioName string     `json:"studioName,omitempty"`
+	MyRole     StudioRole `json:"myRole"`
+	MyRoleName string     `json:"myRoleName"`
+}
+
 // API Procedures
 
 func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudioResponse, err error) {
@@ -802,6 +815,54 @@ func ListRooms(ctx *vbeam.Context, req ListRoomsRequest) (resp ListRoomsResponse
 	return
 }
 
+func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoomDetailsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Get room
+	room := GetRoom(ctx.Tx, req.RoomId)
+	if room.Id == 0 {
+		resp.Success = false
+		resp.Error = "Room not found"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, room.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Check if user has permission to view this studio (Viewer+)
+	role := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
+
+	// Site admins can view all studios/rooms
+	if caller.Role != RoleSiteAdmin && role == -1 {
+		resp.Success = false
+		resp.Error = "You do not have permission to view this room"
+		return
+	}
+
+	// Site admins who aren't members get Owner role for display purposes
+	if caller.Role == RoleSiteAdmin && role == -1 {
+		role = StudioRoleOwner
+	}
+
+	resp.Success = true
+	resp.Room = room
+	resp.StudioName = studio.Name
+	resp.MyRole = role
+	resp.MyRoleName = GetStudioRoleName(role)
+	return
+}
+
 func GetRoomStreamKey(ctx *vbeam.Context, req GetRoomStreamKeyRequest) (resp GetRoomStreamKeyResponse, err error) {
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
@@ -1068,6 +1129,7 @@ func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, DeleteStudio)
 	vbeam.RegisterProc(app, CreateRoom)
 	vbeam.RegisterProc(app, ListRooms)
+	vbeam.RegisterProc(app, GetRoomDetails)
 	vbeam.RegisterProc(app, GetRoomStreamKey)
 	vbeam.RegisterProc(app, UpdateRoom)
 	vbeam.RegisterProc(app, RegenerateStreamKey)

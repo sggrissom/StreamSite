@@ -143,6 +143,19 @@ export interface ListRoomsResponse {
   rooms: Room[];
 }
 
+export interface GetRoomDetailsRequest {
+  roomId: number;
+}
+
+export interface GetRoomDetailsResponse {
+  success: boolean;
+  error: string;
+  room: Room;
+  studioName: string;
+  myRole: StudioRole;
+  myRoleName: string;
+}
+
 export interface GetRoomStreamKeyRequest {
   roomId: number;
 }
@@ -390,6 +403,15 @@ export async function ListRooms(
   data: ListRoomsRequest,
 ): Promise<rpc.Response<ListRoomsResponse>> {
   return await rpc.call<ListRoomsResponse>("ListRooms", JSON.stringify(data));
+}
+
+export async function GetRoomDetails(
+  data: GetRoomDetailsRequest,
+): Promise<rpc.Response<GetRoomDetailsResponse>> {
+  return await rpc.call<GetRoomDetailsResponse>(
+    "GetRoomDetails",
+    JSON.stringify(data),
+  );
 }
 
 export async function GetRoomStreamKey(

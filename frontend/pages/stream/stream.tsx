@@ -1,10 +1,11 @@
 import * as preact from "preact";
 import * as rpc from "vlens/rpc";
 import * as vlens from "vlens";
+import * as server from "../../server";
 import { Header, Footer } from "../../layout";
 import "./stream-styles";
 
-type Data = {};
+type Data = server.GetRoomDetailsResponse | {};
 
 type StreamState = {
   videoElement: HTMLVideoElement | null;
@@ -100,8 +101,25 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
     .catch((e) => console.warn("Failed to load hls.js", e));
 }
 
+function extractRoomIdFromRoute(route: string): number | null {
+  // Route format: /stream or /stream/:roomId
+  const parts = route.split("/").filter((p) => p);
+  if (parts.length >= 2 && parts[0] === "stream") {
+    const roomId = parseInt(parts[1]);
+    return isNaN(roomId) ? null : roomId;
+  }
+  return null;
+}
+
 export async function fetch(route: string, prefix: string) {
-  return rpc.ok<Data>({});
+  const roomId = extractRoomIdFromRoute(route);
+
+  if (roomId) {
+    return server.GetRoomDetails({ roomId });
+  }
+
+  // No roomId - return empty response for generic stream
+  return rpc.ok({});
 }
 
 export function view(
@@ -111,11 +129,37 @@ export function view(
 ): preact.ComponentChild {
   const state = useStreamPlayer();
 
+  // Check if we have room details (vs empty object)
+  const hasRoomDetails = data && "room" in data && data.success;
+  const roomDetails = hasRoomDetails
+    ? (data as server.GetRoomDetailsResponse)
+    : null;
+
   return (
     <div>
       <Header />
       <main className="stream-container">
-        <h1 className="stream-title">Live Stream</h1>
+        {roomDetails && roomDetails.room ? (
+          <div className="stream-context">
+            <div className="context-header">
+              <div className="context-info">
+                <h2 className="context-studio">{roomDetails.studioName}</h2>
+                <h1 className="context-room">{roomDetails.room.name}</h1>
+              </div>
+              <div className="context-meta">
+                <span className={`role-badge role-${roomDetails.myRole}`}>
+                  {roomDetails.myRoleName}
+                </span>
+                <span className="room-number">
+                  Room #{roomDetails.room.roomNumber}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : (
+          <h1 className="stream-title">Live Stream</h1>
+        )}
+
         <div className="video-container">
           <video
             ref={state.onVideoRef}
@@ -127,6 +171,17 @@ export function view(
             className="video-player"
           />
         </div>
+
+        {roomDetails && roomDetails.room && (
+          <div className="stream-actions">
+            <a
+              href={`/studio/${roomDetails.room.studioId}`}
+              className="btn btn-secondary"
+            >
+              ← Back to Studio
+            </a>
+          </div>
+        )}
       </main>
       <Footer />
     </div>

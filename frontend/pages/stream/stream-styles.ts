@@ -18,6 +18,119 @@ block(`
 `);
 
 block(`
+.stream-context {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin-bottom: 2rem;
+}
+`);
+
+block(`
+.context-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 1.5rem;
+}
+`);
+
+block(`
+.context-info {
+  flex: 1;
+}
+`);
+
+block(`
+.context-studio {
+  font-size: 0.875rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin: 0 0 0.5rem 0;
+}
+`);
+
+block(`
+.context-room {
+  font-size: 1.75rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+`);
+
+block(`
+.context-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  align-items: flex-end;
+}
+`);
+
+block(`
+.role-badge {
+  display: inline-block;
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  background: var(--background);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+}
+`);
+
+block(`
+.role-badge.role-0 {
+  background: #e3f2fd;
+  border-color: #90caf9;
+  color: #1565c0;
+}
+`);
+
+block(`
+.role-badge.role-1 {
+  background: #e8f5e9;
+  border-color: #81c784;
+  color: #2e7d32;
+}
+`);
+
+block(`
+.role-badge.role-2 {
+  background: #fff3e0;
+  border-color: #ffb74d;
+  color: #e65100;
+}
+`);
+
+block(`
+.role-badge.role-3 {
+  background: #f3e5f5;
+  border-color: #ba68c8;
+  color: #6a1b9a;
+}
+`);
+
+block(`
+.room-number {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 0.25rem 0.75rem;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+`);
+
+block(`
 .video-container {
   margin-top: 2rem;
 }
@@ -33,6 +146,14 @@ block(`
 `);
 
 block(`
+.stream-actions {
+  margin-top: 1.5rem;
+  display: flex;
+  gap: 1rem;
+}
+`);
+
+block(`
 @media (max-width: 768px) {
   .stream-container {
     padding: 1rem;
@@ -40,6 +161,23 @@ block(`
 
   .stream-title {
     font-size: 1.5rem;
+  }
+
+  .context-header {
+    flex-direction: column;
+  }
+
+  .context-room {
+    font-size: 1.5rem;
+  }
+
+  .context-meta {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .stream-actions {
+    flex-direction: column;
   }
 }
 `);
