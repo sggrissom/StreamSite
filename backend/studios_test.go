@@ -1929,3 +1929,124 @@ func TestDeleteRoomCascadeStreams(t *testing.T) {
 		}
 	})
 }
+
+func TestGetStudioDashboardIncludesMembers(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create owner user
+		owner := createTestUser(t, tx, "owner@test.com", RoleStreamAdmin)
+
+		// Create member user
+		member := createTestUser(t, tx, "member@test.com", RoleUser)
+
+		// Create admin user
+		admin := createTestUser(t, tx, "admin@test.com", RoleUser)
+
+		// Create studio
+		studio := Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "Test Description",
+			MaxRooms:    3,
+			OwnerId:     owner.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add owner membership
+		ownerMembership := StudioMembership{
+			UserId:   owner.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		ownerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, ownerMembershipId, &ownerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, ownerMembershipId, owner.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, ownerMembershipId, studio.Id)
+
+		// Add member
+		memberMembership := StudioMembership{
+			UserId:   member.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleMember,
+			JoinedAt: time.Now(),
+		}
+		memberMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, memberMembershipId, &memberMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, memberMembershipId, member.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, memberMembershipId, studio.Id)
+
+		// Add admin
+		adminMembership := StudioMembership{
+			UserId:   admin.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, admin.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create a room
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-key-123",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, room.StreamKey, &room.Id)
+
+		// Test that ListStudioMembers retrieves all members
+		members := ListStudioMembers(tx, studio.Id)
+		if len(members) != 3 {
+			t.Errorf("Expected 3 members, got %d", len(members))
+		}
+
+		// Verify member details can be retrieved
+		memberMap := make(map[int]StudioMembership)
+		for _, m := range members {
+			memberMap[m.UserId] = m
+		}
+
+		// Check owner
+		if ownerMember, ok := memberMap[owner.Id]; !ok {
+			t.Error("Owner not found in members list")
+		} else {
+			if ownerMember.Role != StudioRoleOwner {
+				t.Errorf("Expected owner role %d, got %d", StudioRoleOwner, ownerMember.Role)
+			}
+			// Verify user details can be retrieved
+			ownerUser := GetUser(tx, ownerMember.UserId)
+			if ownerUser.Name != owner.Name {
+				t.Errorf("Expected owner name %s, got %s", owner.Name, ownerUser.Name)
+			}
+		}
+
+		// Check member
+		if memMember, ok := memberMap[member.Id]; !ok {
+			t.Error("Member not found in members list")
+		} else {
+			if memMember.Role != StudioRoleMember {
+				t.Errorf("Expected member role %d, got %d", StudioRoleMember, memMember.Role)
+			}
+		}
+
+		// Check admin
+		if adminMember, ok := memberMap[admin.Id]; !ok {
+			t.Error("Admin not found in members list")
+		} else {
+			if adminMember.Role != StudioRoleAdmin {
+				t.Errorf("Expected admin role %d, got %d", StudioRoleAdmin, adminMember.Role)
+			}
+		}
+	})
+}

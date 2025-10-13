@@ -143,9 +143,10 @@ func ListStudioMembers(tx *vbolt.Tx, studioId int) []StudioMembership {
 // API Request/Response types
 
 type AddStudioMemberRequest struct {
-	StudioId int        `json:"studioId"`
-	UserId   int        `json:"userId"`
-	Role     StudioRole `json:"role"`
+	StudioId  int        `json:"studioId"`
+	UserId    int        `json:"userId,omitempty"`    // Optional: use this OR userEmail
+	UserEmail string     `json:"userEmail,omitempty"` // Optional: use this OR userId
+	Role      StudioRole `json:"role"`
 }
 
 type AddStudioMemberResponse struct {
@@ -228,8 +229,20 @@ func AddStudioMember(ctx *vbeam.Context, req AddStudioMemberRequest) (resp AddSt
 		return
 	}
 
+	// Determine target user ID
+	targetUserId := req.UserId
+	if req.UserEmail != "" {
+		// Look up user by email
+		vbolt.Read(ctx.Tx, EmailBkt, req.UserEmail, &targetUserId)
+		if targetUserId == 0 {
+			resp.Success = false
+			resp.Error = "No user found with that email address"
+			return
+		}
+	}
+
 	// Validate target user exists
-	targetUser := GetUser(ctx.Tx, req.UserId)
+	targetUser := GetUser(ctx.Tx, targetUserId)
 	if targetUser.Id == 0 {
 		resp.Success = false
 		resp.Error = "User not found"
@@ -251,7 +264,7 @@ func AddStudioMember(ctx *vbeam.Context, req AddStudioMemberRequest) (resp AddSt
 	}
 
 	// Check if user is already a member
-	existingRole := GetUserStudioRole(ctx.Tx, req.UserId, studio.Id)
+	existingRole := GetUserStudioRole(ctx.Tx, targetUserId, studio.Id)
 	if existingRole != -1 {
 		resp.Success = false
 		resp.Error = "User is already a member of this studio"
@@ -262,14 +275,14 @@ func AddStudioMember(ctx *vbeam.Context, req AddStudioMemberRequest) (resp AddSt
 
 	// Create membership
 	membership := StudioMembership{
-		UserId:   req.UserId,
+		UserId:   targetUserId,
 		StudioId: studio.Id,
 		Role:     req.Role,
 		JoinedAt: time.Now(),
 	}
 	membershipId := vbolt.NextIntId(ctx.Tx, MembershipBkt)
 	vbolt.Write(ctx.Tx, MembershipBkt, membershipId, &membership)
-	vbolt.SetTargetSingleTerm(ctx.Tx, MembershipByUserIdx, membershipId, req.UserId)
+	vbolt.SetTargetSingleTerm(ctx.Tx, MembershipByUserIdx, membershipId, targetUserId)
 	vbolt.SetTargetSingleTerm(ctx.Tx, MembershipByStudioIdx, membershipId, studio.Id)
 
 	vbolt.TxCommit(ctx.Tx)
@@ -278,7 +291,7 @@ func AddStudioMember(ctx *vbeam.Context, req AddStudioMemberRequest) (resp AddSt
 	LogInfo(LogCategorySystem, "Studio member added", map[string]interface{}{
 		"studioId":      studio.Id,
 		"studioName":    studio.Name,
-		"addedUserId":   req.UserId,
+		"addedUserId":   targetUserId,
 		"addedUserName": targetUser.Name,
 		"role":          GetStudioRoleName(req.Role),
 		"addedBy":       caller.Id,

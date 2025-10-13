@@ -212,12 +212,13 @@ type GetStudioDashboardRequest struct {
 }
 
 type GetStudioDashboardResponse struct {
-	Success    bool       `json:"success"`
-	Error      string     `json:"error,omitempty"`
-	Studio     Studio     `json:"studio,omitempty"`
-	MyRole     StudioRole `json:"myRole"`
-	MyRoleName string     `json:"myRoleName"`
-	Rooms      []Room     `json:"rooms,omitempty"`
+	Success    bool                `json:"success"`
+	Error      string              `json:"error,omitempty"`
+	Studio     Studio              `json:"studio,omitempty"`
+	MyRole     StudioRole          `json:"myRole"`
+	MyRoleName string              `json:"myRoleName"`
+	Rooms      []Room              `json:"rooms,omitempty"`
+	Members    []MemberWithDetails `json:"members,omitempty"`
 }
 
 type UpdateStudioRequest struct {
@@ -495,11 +496,29 @@ func GetStudioDashboard(ctx *vbeam.Context, req GetStudioDashboardRequest) (resp
 		rooms = []Room{}
 	}
 
+	// Get all members for this studio
+	memberships := ListStudioMembers(ctx.Tx, studio.Id)
+
+	// Enhance with user details
+	members := make([]MemberWithDetails, 0, len(memberships))
+	for _, membership := range memberships {
+		user := GetUser(ctx.Tx, membership.UserId)
+		if user.Id > 0 {
+			members = append(members, MemberWithDetails{
+				StudioMembership: membership,
+				UserName:         user.Name,
+				UserEmail:        user.Email,
+				RoleName:         GetStudioRoleName(membership.Role),
+			})
+		}
+	}
+
 	resp.Success = true
 	resp.Studio = studio
 	resp.MyRole = role
 	resp.MyRoleName = GetStudioRoleName(role)
 	resp.Rooms = rooms
+	resp.Members = members
 	return
 }
 

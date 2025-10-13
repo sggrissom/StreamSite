@@ -97,6 +97,7 @@ export interface GetStudioDashboardResponse {
   myRole: StudioRole;
   myRoleName: string;
   rooms: Room[];
+  members: MemberWithDetails[];
 }
 
 export interface UpdateStudioRequest {
@@ -185,6 +186,7 @@ export interface DeleteRoomResponse {
 export interface AddStudioMemberRequest {
   studioId: number;
   userId: number;
+  userEmail: string;
   role: StudioRole;
 }
 
@@ -280,13 +282,6 @@ export interface Room {
   creation: string;
 }
 
-export interface StudioMembership {
-  userId: number;
-  studioId: number;
-  role: StudioRole;
-  joinedAt: string;
-}
-
 export interface MemberWithDetails {
   userId: number;
   studioId: number;
@@ -295,6 +290,13 @@ export interface MemberWithDetails {
   userName: string;
   userEmail: string;
   roleName: string;
+}
+
+export interface StudioMembership {
+  userId: number;
+  studioId: number;
+  role: StudioRole;
+  joinedAt: string;
 }
 
 export async function CreateAccount(
