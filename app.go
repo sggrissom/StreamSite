@@ -46,6 +46,7 @@ func MakeApplication() *vbeam.Application {
 	backend.RegisterStudioMethods(app)
 	backend.RegisterStudioMembershipMethods(app)
 	backend.RegisterStreamProxy(app)
+	vbeam.RegisterProc(app, backend.GetStreamStatus)
 
 	return app
 }

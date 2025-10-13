@@ -182,6 +182,66 @@ export interface DeleteRoomResponse {
   error: string;
 }
 
+export interface AddStudioMemberRequest {
+  studioId: number;
+  userId: number;
+  role: StudioRole;
+}
+
+export interface AddStudioMemberResponse {
+  success: boolean;
+  error: string;
+  membership: StudioMembership;
+}
+
+export interface RemoveStudioMemberRequest {
+  studioId: number;
+  userId: number;
+}
+
+export interface RemoveStudioMemberResponse {
+  success: boolean;
+  error: string;
+}
+
+export interface UpdateStudioMemberRoleRequest {
+  studioId: number;
+  userId: number;
+  newRole: StudioRole;
+}
+
+export interface UpdateStudioMemberRoleResponse {
+  success: boolean;
+  error: string;
+  membership: StudioMembership;
+}
+
+export interface ListStudioMembersRequest {
+  studioId: number;
+}
+
+export interface ListStudioMembersResponse {
+  success: boolean;
+  error: string;
+  members: MemberWithDetails[];
+}
+
+export interface LeaveStudioRequest {
+  studioId: number;
+}
+
+export interface LeaveStudioResponse {
+  success: boolean;
+  error: string;
+}
+
+export interface GetStreamStatusRequest {}
+
+export interface GetStreamStatusResponse {
+  isLive: boolean;
+  lastChecked: string;
+}
+
 export interface UserListInfo {
   id: number;
   name: string;
@@ -218,6 +278,23 @@ export interface Room {
   streamKey: string;
   isActive: boolean;
   creation: string;
+}
+
+export interface StudioMembership {
+  userId: number;
+  studioId: number;
+  role: StudioRole;
+  joinedAt: string;
+}
+
+export interface MemberWithDetails {
+  userId: number;
+  studioId: number;
+  role: StudioRole;
+  joinedAt: string;
+  userName: string;
+  userEmail: string;
+  roleName: string;
 }
 
 export async function CreateAccount(
@@ -341,4 +418,58 @@ export async function DeleteRoom(
   data: DeleteRoomRequest,
 ): Promise<rpc.Response<DeleteRoomResponse>> {
   return await rpc.call<DeleteRoomResponse>("DeleteRoom", JSON.stringify(data));
+}
+
+export async function AddStudioMember(
+  data: AddStudioMemberRequest,
+): Promise<rpc.Response<AddStudioMemberResponse>> {
+  return await rpc.call<AddStudioMemberResponse>(
+    "AddStudioMember",
+    JSON.stringify(data),
+  );
+}
+
+export async function RemoveStudioMember(
+  data: RemoveStudioMemberRequest,
+): Promise<rpc.Response<RemoveStudioMemberResponse>> {
+  return await rpc.call<RemoveStudioMemberResponse>(
+    "RemoveStudioMember",
+    JSON.stringify(data),
+  );
+}
+
+export async function UpdateStudioMemberRole(
+  data: UpdateStudioMemberRoleRequest,
+): Promise<rpc.Response<UpdateStudioMemberRoleResponse>> {
+  return await rpc.call<UpdateStudioMemberRoleResponse>(
+    "UpdateStudioMemberRole",
+    JSON.stringify(data),
+  );
+}
+
+export async function ListStudioMembersAPI(
+  data: ListStudioMembersRequest,
+): Promise<rpc.Response<ListStudioMembersResponse>> {
+  return await rpc.call<ListStudioMembersResponse>(
+    "ListStudioMembersAPI",
+    JSON.stringify(data),
+  );
+}
+
+export async function LeaveStudio(
+  data: LeaveStudioRequest,
+): Promise<rpc.Response<LeaveStudioResponse>> {
+  return await rpc.call<LeaveStudioResponse>(
+    "LeaveStudio",
+    JSON.stringify(data),
+  );
+}
+
+export async function GetStreamStatus(
+  data: GetStreamStatusRequest,
+): Promise<rpc.Response<GetStreamStatusResponse>> {
+  return await rpc.call<GetStreamStatusResponse>(
+    "GetStreamStatus",
+    JSON.stringify(data),
+  );
 }
