@@ -1,13 +1,17 @@
 package backend
 
 import (
+	"bytes"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
 	"strings"
-	"time"
 
 	"go.hasen.dev/vbeam"
+	"go.hasen.dev/vbolt"
 )
 
 func RegisterStreamProxy(app *vbeam.Application) {
@@ -44,51 +48,154 @@ func RegisterStreamProxy(app *vbeam.Application) {
 	app.HandleFunc("/streams/", srsProxy.ServeHTTP)
 }
 
-// Stream status API types
+// RegisterRoomStreamProxy sets up a proxy that maps /streams/room/{roomId}/* to the
+// actual stream key path on SRS, hiding stream keys from viewers
+func RegisterRoomStreamProxy(app *vbeam.Application) {
+	srsURL, _ := url.Parse("http://127.0.0.1:8080")
+	srsProxy := httputil.NewSingleHostReverseProxy(srsURL)
 
-type GetStreamStatusRequest struct {
-	// Empty for now - checks the default stream
-}
+	// Capture database instance for lookups
+	db := app.DB
 
-type GetStreamStatusResponse struct {
-	IsLive      bool      `json:"isLive"`
-	LastChecked time.Time `json:"lastChecked"`
-}
+	// Custom director to rewrite paths from room ID to stream key
+	origDirector := srsProxy.Director
+	srsProxy.Director = func(r *http.Request) {
+		origDirector(r) // sets scheme/host to 127.0.0.1:8080
 
-// GetStreamStatus checks if the stream is currently live by probing SRS
-func GetStreamStatus(ctx *vbeam.Context, req GetStreamStatusRequest) (resp GetStreamStatusResponse, err error) {
-	resp.LastChecked = time.Now()
-	resp.IsLive = false
+		// Extract roomId and suffix from path: /streams/room/{roomId}{suffix}
+		// Examples:
+		//   /streams/room/1.m3u8 -> roomId=1, suffix=.m3u8
+		//   /streams/room/1-0.ts -> roomId=1, suffix=-0.ts
+		path := r.URL.Path
+		if !strings.HasPrefix(path, "/streams/room/") {
+			// Invalid path, let it 404
+			return
+		}
 
-	// Make HTTP HEAD request to SRS to check if stream exists
-	srsURL := "http://127.0.0.1:8080/streams/live/stream.m3u8"
+		// Get everything after /streams/room/
+		pathRemainder := strings.TrimPrefix(path, "/streams/room/")
+		if pathRemainder == "" {
+			return
+		}
 
-	// Create HTTP client with timeout
-	client := &http.Client{
-		Timeout: 2 * time.Second,
+		// Find where roomId ends (first non-digit character)
+		roomIdEnd := 0
+		for i, ch := range pathRemainder {
+			if ch < '0' || ch > '9' {
+				roomIdEnd = i
+				break
+			}
+		}
+
+		// If no non-digit found, the entire string might be just a roomId (invalid)
+		if roomIdEnd == 0 {
+			LogWarn(LogCategorySystem, "Invalid room stream path - no suffix",
+				"path", path, "pathRemainder", pathRemainder)
+			return
+		}
+
+		roomIdStr := pathRemainder[:roomIdEnd]
+		suffix := pathRemainder[roomIdEnd:]
+
+		// Parse room ID
+		roomId, err := strconv.Atoi(roomIdStr)
+		if err != nil {
+			LogWarn(LogCategorySystem, "Invalid room ID in stream request",
+				"path", path, "roomIdStr", roomIdStr, "error", err.Error())
+			return
+		}
+
+		// Look up the room to get its stream key
+		var room Room
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			room = GetRoom(tx, roomId)
+		})
+
+		if room.Id == 0 {
+			LogWarn(LogCategorySystem, "Room not found for stream request",
+				"roomId", roomId, "path", path)
+			return
+		}
+
+		// Rewrite path to use stream key
+		// /streams/room/{roomId}{suffix} -> /streams/live/{streamKey}{suffix}
+		// Examples:
+		//   /streams/room/1.m3u8 -> /streams/live/{streamKey}.m3u8
+		//   /streams/room/1-0.ts -> /streams/live/{streamKey}-0.ts
+		// Note: Production SRS serves at /streams/live/, local at /live/
+		newPath := fmt.Sprintf("/streams/live/%s%s", room.StreamKey, suffix)
+		r.URL.Path = newPath
+
+		// Store roomId and streamKey in headers for use in ModifyResponse
+		r.Header.Set("X-Room-Id", roomIdStr)
+		r.Header.Set("X-Stream-Key", room.StreamKey)
+
+		LogInfo(LogCategorySystem, "Proxying room stream request",
+			"roomId", roomId,
+			"originalPath", path,
+			"newPath", newPath,
+			"streamKey", room.StreamKey,
+			"suffix", suffix)
 	}
 
-	// Use HEAD request to avoid downloading the playlist
-	headReq, err := http.NewRequest("HEAD", srsURL, nil)
-	if err != nil {
-		// Error creating request, stream is not live
-		err = nil // Don't propagate error, just return isLive=false
-		return
+	// ModifyResponse rewrites URLs in m3u8 playlists to use room-based paths
+	srsProxy.ModifyResponse = func(res *http.Response) error {
+		p := res.Request.URL.Path
+		roomId := res.Request.Header.Get("X-Room-Id")
+		streamKey := res.Request.Header.Get("X-Stream-Key")
+
+		if strings.HasSuffix(p, ".m3u8") {
+			res.Header.Set("Content-Type", "application/vnd.apple.mpegurl")
+			res.Header.Set("Cache-Control", "no-store, must-revalidate")
+			res.Header.Set("Pragma", "no-cache")
+			res.Header.Set("Expires", "0")
+
+			// Rewrite URLs in m3u8 playlists if we have room context
+			if roomId != "" && streamKey != "" && res.Body != nil {
+				// Read the entire response body
+				bodyBytes, err := io.ReadAll(res.Body)
+				res.Body.Close()
+				if err != nil {
+					return err
+				}
+
+				body := string(bodyBytes)
+
+				// Rewrite absolute paths: /streams/live/{streamKey} -> /streams/room/{roomId}
+				body = strings.ReplaceAll(body, "/streams/live/"+streamKey, "/streams/room/"+roomId)
+
+				// Rewrite relative paths: {streamKey}-N.ts -> /streams/room/{roomId}-N.ts
+				// Split by newlines and process each line
+				lines := strings.Split(body, "\n")
+				for i, line := range lines {
+					trimmed := strings.TrimSpace(line)
+					// If line starts with the stream key (segment reference), make it absolute
+					if strings.HasPrefix(trimmed, streamKey+"-") || strings.HasPrefix(trimmed, streamKey+".") {
+						lines[i] = "/streams/room/" + roomId + strings.TrimPrefix(trimmed, streamKey)
+					}
+				}
+				body = strings.Join(lines, "\n")
+
+				// Create new response body
+				newBody := io.NopCloser(bytes.NewBufferString(body))
+				res.Body = newBody
+				res.ContentLength = int64(len(body))
+				res.Header.Set("Content-Length", strconv.FormatInt(int64(len(body)), 10))
+
+				LogInfo(LogCategorySystem, "Rewrote m3u8 playlist URLs",
+					"roomId", roomId,
+					"streamKey", streamKey,
+					"path", p)
+			}
+		} else if strings.HasSuffix(p, ".ts") || strings.HasSuffix(p, ".m4s") {
+			if res.Header.Get("Content-Type") == "" {
+				res.Header.Set("Content-Type", "video/mp2t")
+			}
+			res.Header.Set("Cache-Control", "public, max-age=60")
+		}
+		return nil
 	}
 
-	// Make the request
-	httpResp, err := client.Do(headReq)
-	if err != nil {
-		// Error reaching SRS or timeout, stream is not live
-		err = nil // Don't propagate error, just return isLive=false
-		return
-	}
-	defer httpResp.Body.Close()
-
-	// Check if we got a successful response
-	if httpResp.StatusCode == http.StatusOK {
-		resp.IsLive = true
-	}
-
-	return
+	// Register the handler for room-based streams
+	app.HandleFunc("/streams/room/", srsProxy.ServeHTTP)
 }

@@ -150,7 +150,14 @@ function closeStreamKeyModal(modal: StreamKeyModal) {
 
 async function copyStreamKey(modal: StreamKeyModal) {
   try {
-    await navigator.clipboard.writeText(modal.streamKey);
+    // Build complete RTMP URL with stream key
+    const hostname =
+      window.location.hostname === "localhost"
+        ? "localhost"
+        : "stream.grissom.zone";
+    const completeUrl = `rtmp://${hostname}:1935/live/${modal.streamKey}`;
+
+    await navigator.clipboard.writeText(completeUrl);
     modal.copySuccess = true;
     vlens.scheduleRedraw();
     setTimeout(() => {
@@ -536,7 +543,9 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                   onClick={() => copyStreamKey(streamKeyModal)}
                   disabled={streamKeyModal.copySuccess}
                 >
-                  {streamKeyModal.copySuccess ? "Copied!" : "Copy to Clipboard"}
+                  {streamKeyModal.copySuccess
+                    ? "✓ Copied URL!"
+                    : "Copy Complete URL"}
                 </button>
                 <button
                   className="btn btn-secondary"
@@ -546,6 +555,14 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                   Regenerate Key
                 </button>
               </div>
+              <small
+                className="form-help"
+                style="margin-top: 0.5rem; display: block;"
+              >
+                The "Copy Complete URL" button copies the full RTMP URL with
+                your stream key included, ready to paste into streaming software
+                like Larix.
+              </small>
 
               {streamKeyModal.showConfirmRegenerate && (
                 <div className="confirmation-dialog">
