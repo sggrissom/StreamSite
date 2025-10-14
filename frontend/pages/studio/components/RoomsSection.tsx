@@ -507,12 +507,26 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
           streamKeyModal.streamKey && (
             <>
               <div className="form-group">
+                <label>RTMP Server URL</label>
+                <div className="stream-key-display">
+                  rtmp://
+                  {window.location.hostname === "localhost"
+                    ? "localhost"
+                    : "stream.grissom.zone"}
+                  :1935/live
+                </div>
+                <small className="form-help">
+                  Enter this URL in your streaming software's server field
+                </small>
+              </div>
+
+              <div className="form-group">
                 <label>Stream Key</label>
                 <div className="stream-key-display">
                   {streamKeyModal.streamKey}
                 </div>
                 <small className="form-help">
-                  Use this key in your streaming software (OBS, etc.)
+                  Enter this key in your streaming software's stream key field
                 </small>
               </div>
 

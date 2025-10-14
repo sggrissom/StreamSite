@@ -57,6 +57,23 @@ typecheck:
 local:
 	go run stream/local
 
+# ── SRS streaming server ───────────────────────────────────────────────────────
+
+srs-start:
+	@bash scripts/srs-start.sh
+
+srs-stop:
+	@bash scripts/srs-stop.sh
+
+srs-logs:
+	@tail -f .srs/srs.log
+
+dev: srs-start
+	@echo "Starting development environment..."
+	@echo "SRS is running on rtmp://localhost:1935/live"
+	@echo "Starting StreamSite..."
+	@make local
+
 # ── code quality ───────────────────────────────────────────────────────────────
 
 lint:

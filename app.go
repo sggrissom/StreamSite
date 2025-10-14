@@ -48,6 +48,10 @@ func MakeApplication() *vbeam.Application {
 	backend.RegisterStreamProxy(app)
 	vbeam.RegisterProc(app, backend.GetStreamStatus)
 
+	// SRS HTTP callbacks (no auth required - SRS makes these calls)
+	vbeam.RegisterProc(app, backend.ValidateStreamKey)
+	vbeam.RegisterProc(app, backend.HandleStreamUnpublish)
+
 	return app
 }
 

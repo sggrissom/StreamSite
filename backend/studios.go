@@ -1161,6 +1161,88 @@ func DeleteRoom(ctx *vbeam.Context, req DeleteRoomRequest) (resp DeleteRoomRespo
 	return
 }
 
+// SRS HTTP Callback Types
+
+type SRSAuthCallback struct {
+	ServerId  string `json:"server_id"`
+	Action    string `json:"action"`
+	ClientId  string `json:"client_id"`
+	IP        string `json:"ip"`
+	Vhost     string `json:"vhost"`
+	App       string `json:"app"`
+	TcUrl     string `json:"tcUrl"`
+	Stream    string `json:"stream"` // This is the stream key
+	Param     string `json:"param"`
+	StreamUrl string `json:"stream_url"`
+	StreamId  string `json:"stream_id"`
+}
+
+type SRSAuthResponse struct {
+	Code int `json:"code"` // 0 for success, non-zero for error
+}
+
+// ValidateStreamKey handles SRS on_publish callback to authenticate streams
+func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthResponse, err error) {
+	// Log the authentication attempt
+	LogInfo(LogCategorySystem, "SRS stream authentication", map[string]interface{}{
+		"action":    req.Action,
+		"stream":    req.Stream,
+		"ip":        req.IP,
+		"client_id": req.ClientId,
+	})
+
+	// The stream key is in the Stream field
+	streamKey := req.Stream
+
+	if streamKey == "" {
+		LogWarn(LogCategorySystem, "SRS auth failed: empty stream key", map[string]interface{}{
+			"ip": req.IP,
+		})
+		resp.Code = 1 // Reject
+		return
+	}
+
+	// Look up the room by stream key
+	room := GetRoomByStreamKey(ctx.Tx, streamKey)
+
+	if room.Id == 0 {
+		LogWarn(LogCategorySystem, "SRS auth failed: invalid stream key", map[string]interface{}{
+			"stream_key": streamKey[:8] + "...", // Only log prefix for security
+			"ip":         req.IP,
+		})
+		resp.Code = 1 // Reject
+		return
+	}
+
+	// Stream key is valid, allow publishing
+	LogInfo(LogCategorySystem, "SRS auth successful", map[string]interface{}{
+		"room_id":    room.Id,
+		"room_name":  room.Name,
+		"studio_id":  room.StudioId,
+		"ip":         req.IP,
+		"client_id":  req.ClientId,
+		"stream_key": streamKey[:8] + "...",
+	})
+
+	resp.Code = 0 // Success
+	return
+}
+
+// HandleStreamUnpublish handles SRS on_unpublish callback when stream ends
+func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthResponse, err error) {
+	streamKey := req.Stream
+
+	LogInfo(LogCategorySystem, "SRS stream ended", map[string]interface{}{
+		"stream":    streamKey[:8] + "...",
+		"ip":        req.IP,
+		"client_id": req.ClientId,
+	})
+
+	// Always return success for unpublish callbacks
+	resp.Code = 0
+	return
+}
+
 // RegisterStudioMethods registers studio-related API procedures
 func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateStudio)

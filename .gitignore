@@ -45,4 +45,8 @@ release/dist/
 # Log files
 logs/
 
+# SRS streaming server
+.srs/
+objs/
+
 CLAUDE.md

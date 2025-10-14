@@ -268,6 +268,24 @@ export interface GetStreamStatusResponse {
     lastChecked: string
 }
 
+export interface SRSAuthCallback {
+    server_id: string
+    action: string
+    client_id: string
+    ip: string
+    vhost: string
+    app: string
+    tcUrl: string
+    stream: string
+    param: string
+    stream_url: string
+    stream_id: string
+}
+
+export interface SRSAuthResponse {
+    code: number
+}
+
 export interface UserListInfo {
     id: number
     name: string
@@ -428,5 +446,13 @@ export async function LeaveStudio(data: LeaveStudioRequest): Promise<rpc.Respons
 
 export async function GetStreamStatus(data: GetStreamStatusRequest): Promise<rpc.Response<GetStreamStatusResponse>> {
     return await rpc.call<GetStreamStatusResponse>('GetStreamStatus', JSON.stringify(data));
+}
+
+export async function ValidateStreamKey(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {
+    return await rpc.call<SRSAuthResponse>('ValidateStreamKey', JSON.stringify(data));
+}
+
+export async function HandleStreamUnpublish(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {
+    return await rpc.call<SRSAuthResponse>('HandleStreamUnpublish', JSON.stringify(data));
 }
 
