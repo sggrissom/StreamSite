@@ -464,10 +464,10 @@ func UpdateStudioMemberRole(ctx *vbeam.Context, req UpdateStudioMemberRoleReques
 		}
 	}
 
-	vbolt.TxCommit(ctx.Tx)
-
-	// Get target user info for logging
+	// Get target user info for logging (before committing the transaction)
 	targetUser := GetUser(ctx.Tx, req.UserId)
+
+	vbolt.TxCommit(ctx.Tx)
 
 	// Log role update
 	LogInfo(LogCategorySystem, "Studio member role updated", map[string]interface{}{

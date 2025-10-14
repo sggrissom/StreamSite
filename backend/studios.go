@@ -1214,8 +1214,14 @@ func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthRes
 		return
 	}
 
-	// Stream key is valid, allow publishing
-	LogInfo(LogCategorySystem, "SRS auth successful", map[string]interface{}{
+	// Stream key is valid, mark room as active
+	vbeam.UseWriteTx(ctx)
+	room.IsActive = true
+	vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log successful authentication
+	LogInfo(LogCategorySystem, "SRS auth successful, room now live", map[string]interface{}{
 		"room_id":    room.Id,
 		"room_name":  room.Name,
 		"studio_id":  room.StudioId,
@@ -1232,11 +1238,32 @@ func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthRes
 func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthResponse, err error) {
 	streamKey := req.Stream
 
-	LogInfo(LogCategorySystem, "SRS stream ended", map[string]interface{}{
-		"stream":    streamKey[:8] + "...",
-		"ip":        req.IP,
-		"client_id": req.ClientId,
-	})
+	// Look up the room by stream key
+	room := GetRoomByStreamKey(ctx.Tx, streamKey)
+
+	if room.Id > 0 {
+		// Mark room as inactive
+		vbeam.UseWriteTx(ctx)
+		room.IsActive = false
+		vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
+		vbolt.TxCommit(ctx.Tx)
+
+		LogInfo(LogCategorySystem, "SRS stream ended, room now offline", map[string]interface{}{
+			"room_id":    room.Id,
+			"room_name":  room.Name,
+			"studio_id":  room.StudioId,
+			"stream_key": streamKey[:8] + "...",
+			"ip":         req.IP,
+			"client_id":  req.ClientId,
+		})
+	} else {
+		// Stream key not found, but still return success
+		LogInfo(LogCategorySystem, "SRS stream ended (unknown room)", map[string]interface{}{
+			"stream_key": streamKey[:8] + "...",
+			"ip":         req.IP,
+			"client_id":  req.ClientId,
+		})
+	}
 
 	// Always return success for unpublish callbacks
 	resp.Code = 0
