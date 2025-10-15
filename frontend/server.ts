@@ -260,14 +260,6 @@ export interface LeaveStudioResponse {
     error: string
 }
 
-export interface GetStreamStatusRequest {
-}
-
-export interface GetStreamStatusResponse {
-    isLive: boolean
-    lastChecked: string
-}
-
 export interface SRSAuthCallback {
     server_id: string
     action: string
@@ -442,10 +434,6 @@ export async function ListStudioMembersAPI(data: ListStudioMembersRequest): Prom
 
 export async function LeaveStudio(data: LeaveStudioRequest): Promise<rpc.Response<LeaveStudioResponse>> {
     return await rpc.call<LeaveStudioResponse>('LeaveStudio', JSON.stringify(data));
-}
-
-export async function GetStreamStatus(data: GetStreamStatusRequest): Promise<rpc.Response<GetStreamStatusResponse>> {
-    return await rpc.call<GetStreamStatusResponse>('GetStreamStatus', JSON.stringify(data));
 }
 
 export async function ValidateStreamKey(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {

@@ -26,9 +26,8 @@ func MakeApplication() *vbeam.Application {
 		log.Printf("Warning: Error loading .env file: %v", err)
 	}
 
-	if cfg.IsRelease {
-		vbeam.InitRotatingLogger("stream")
-	}
+	// Initialize rotating log files for both local and production
+	vbeam.InitRotatingLogger("stream")
 
 	// Log application startup
 	backend.LogInfo(backend.LogCategorySystem, "Stream application starting", map[string]interface{}{
