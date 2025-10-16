@@ -105,6 +105,12 @@ export function view(
   const isSiteAdmin = auth?.isSiteAdmin || false;
   const modal = useCreateStudioModal();
 
+  // Auto-redirect to single studio (skip the list for single-studio users)
+  if (studios.length === 1) {
+    core.setRoute(`/studio/${studios[0].id}`);
+    return <div></div>;
+  }
+
   return (
     <div>
       <Header />
