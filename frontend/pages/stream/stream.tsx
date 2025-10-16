@@ -13,6 +13,7 @@ type StreamState = {
   isStreamLive: boolean;
   roomId: number;
   eventSource: EventSource | null;
+  retryCount: number;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
@@ -28,6 +29,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     isStreamLive: false,
     roomId: 0,
     eventSource: null,
+    retryCount: 0,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
     },
@@ -147,6 +149,7 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   if (el.canPlayType("application/vnd.apple.mpegurl")) {
     // Safari native HLS
     el.src = url;
+    el.play().catch((e) => console.warn("Autoplay blocked:", e));
     return;
   }
 
@@ -159,6 +162,18 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
 
       state.hlsInstance = new Hls({ lowLatencyMode: true });
       state.hlsInstance.attachMedia(el);
+
+      // Auto-play when manifest is loaded
+      state.hlsInstance.on(Hls.Events.MANIFEST_PARSED, () => {
+        // Reset retry counter on successful load
+        state.retryCount = 0;
+
+        el.play().catch((e) => {
+          // Autoplay might be blocked by browser policy
+          console.warn("Autoplay blocked:", e);
+        });
+      });
+
       state.hlsInstance.loadSource(url);
 
       // optional: mild error recovery (prevents rapid reload storms)
@@ -166,7 +181,32 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
         if (!data?.fatal) return;
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
-            state.hlsInstance.startLoad();
+            // If manifest load failed (stream just started but m3u8 not ready yet)
+            // retry with exponential backoff
+            if (data.details === Hls.ErrorDetails.MANIFEST_LOAD_ERROR) {
+              const retryDelay = Math.min(
+                1000 * Math.pow(2, state.retryCount),
+                4000,
+              );
+              state.retryCount++;
+
+              console.log(
+                `Manifest load failed, retrying in ${retryDelay}ms (attempt ${state.retryCount})`,
+              );
+
+              setTimeout(() => {
+                if (
+                  state.hlsInstance &&
+                  state.isStreamLive &&
+                  state.streamUrl
+                ) {
+                  state.hlsInstance.loadSource(state.streamUrl);
+                }
+              }, retryDelay);
+            } else {
+              // Other network errors - retry immediately
+              state.hlsInstance.startLoad();
+            }
             break;
           case Hls.ErrorTypes.MEDIA_ERROR:
             state.hlsInstance.recoverMediaError();
