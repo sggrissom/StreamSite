@@ -59,6 +59,45 @@ export interface ListUsersResponse {
     users: UserListInfo[]
 }
 
+export interface ListAllUsersRequest {
+}
+
+export interface UserWithStats {
+    id: number
+    name: string
+    email: string
+    role: UserRole
+    creation: string
+    lastLogin: string
+    studioCount: number
+}
+
+export interface ListAllUsersResponse {
+    success: boolean
+    error: string
+    users: UserWithStats[]
+}
+
+export interface UpdateUserRoleRequest {
+    userId: number
+    newRole: UserRole
+}
+
+export interface UpdateUserRoleResponse {
+    success: boolean
+    error: string
+    user: User
+}
+
+export interface User {
+    id: number
+    name: string
+    email: string
+    role: UserRole
+    creation: string
+    lastLogin: string
+}
+
 export interface CreateStudioRequest {
     name: string
     description: string
@@ -76,6 +115,28 @@ export interface ListMyStudiosRequest {
 
 export interface ListMyStudiosResponse {
     studios: StudioWithRole[]
+}
+
+export interface ListAllStudiosRequest {
+}
+
+export interface StudioWithOwner {
+    id: number
+    name: string
+    description: string
+    maxRooms: number
+    ownerId: number
+    creation: string
+    ownerName: string
+    ownerEmail: string
+    roomCount: number
+    memberCount: number
+}
+
+export interface ListAllStudiosResponse {
+    success: boolean
+    error: string
+    studios: StudioWithOwner[]
 }
 
 export interface GetStudioRequest {
@@ -353,6 +414,14 @@ export async function GetAuthContext(data: Empty): Promise<rpc.Response<AuthResp
     return await rpc.call<AuthResponse>('GetAuthContext', JSON.stringify(data));
 }
 
+export async function ListAllUsers(data: ListAllUsersRequest): Promise<rpc.Response<ListAllUsersResponse>> {
+    return await rpc.call<ListAllUsersResponse>('ListAllUsers', JSON.stringify(data));
+}
+
+export async function UpdateUserRole(data: UpdateUserRoleRequest): Promise<rpc.Response<UpdateUserRoleResponse>> {
+    return await rpc.call<UpdateUserRoleResponse>('UpdateUserRole', JSON.stringify(data));
+}
+
 export async function SetUserRole(data: SetUserRoleRequest): Promise<rpc.Response<SetUserRoleResponse>> {
     return await rpc.call<SetUserRoleResponse>('SetUserRole', JSON.stringify(data));
 }
@@ -367,6 +436,10 @@ export async function CreateStudio(data: CreateStudioRequest): Promise<rpc.Respo
 
 export async function ListMyStudios(data: ListMyStudiosRequest): Promise<rpc.Response<ListMyStudiosResponse>> {
     return await rpc.call<ListMyStudiosResponse>('ListMyStudios', JSON.stringify(data));
+}
+
+export async function ListAllStudios(data: ListAllStudiosRequest): Promise<rpc.Response<ListAllStudiosResponse>> {
+    return await rpc.call<ListAllStudiosResponse>('ListAllStudios', JSON.stringify(data));
 }
 
 export async function GetStudio(data: GetStudioRequest): Promise<rpc.Response<GetStudioResponse>> {

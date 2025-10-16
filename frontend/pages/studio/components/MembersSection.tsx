@@ -44,7 +44,7 @@ const useAddMemberModal = vlens.declareHook(
     error: "",
     studioId: 0,
     userEmail: "",
-    role: 1,
+    role: server.StudioRoleMember, // Default to Member role
   }),
 );
 
@@ -53,7 +53,7 @@ function openAddMemberModal(modal: AddMemberModal, studioId: number) {
   modal.error = "";
   modal.studioId = studioId;
   modal.userEmail = "";
-  modal.role = 1;
+  modal.role = server.StudioRoleMember; // Default to Member role
   vlens.scheduleRedraw();
 }
 
@@ -286,7 +286,7 @@ export function MembersSection(
                     <td>{new Date(member.joinedAt).toLocaleDateString()}</td>
                     {canManageRooms && (
                       <td className="members-actions">
-                        {member.role !== 3 && (
+                        {member.role !== server.StudioRoleOwner && (
                           <>
                             <button
                               className="btn btn-secondary btn-sm"

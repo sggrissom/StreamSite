@@ -164,10 +164,26 @@ async function confirmDeleteStudio(modal: DeleteStudioModal) {
   window.location.href = "/studios";
 }
 
+type RoleGuideState = {
+  isExpanded: boolean;
+};
+
+const useRoleGuide = vlens.declareHook(
+  (): RoleGuideState => ({
+    isExpanded: false,
+  }),
+);
+
+function toggleRoleGuide(state: RoleGuideState) {
+  state.isExpanded = !state.isExpanded;
+  vlens.scheduleRedraw();
+}
+
 export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
   const { studio, myRole, myRoleName, rooms, members, canManageRooms } = props;
   const editStudioModal = useEditStudioModal();
   const deleteStudioModal = useDeleteStudioModal();
+  const roleGuide = useRoleGuide();
 
   return (
     <>
@@ -179,6 +195,40 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
         </div>
         {studio.description && (
           <p className="studio-description">{studio.description}</p>
+        )}
+      </div>
+
+      {/* Role Capabilities Guide */}
+      <div className="role-guide">
+        <button
+          className="role-guide-toggle"
+          onClick={() => toggleRoleGuide(roleGuide)}
+        >
+          {roleGuide.isExpanded ? "▼" : "▶"} Role Capabilities
+        </button>
+        {roleGuide.isExpanded && (
+          <div className="role-guide-content">
+            <div className="role-capability">
+              <span className="studio-role role-0">Viewer</span>
+              <span className="capability-desc">Can watch streams</span>
+            </div>
+            <div className="role-capability">
+              <span className="studio-role role-1">Member</span>
+              <span className="capability-desc">Can stream and watch</span>
+            </div>
+            <div className="role-capability">
+              <span className="studio-role role-2">Admin</span>
+              <span className="capability-desc">
+                Can manage rooms, members, and stream
+              </span>
+            </div>
+            <div className="role-capability">
+              <span className="studio-role role-3">Owner</span>
+              <span className="capability-desc">
+                Full control including delete studio
+              </span>
+            </div>
+          </div>
         )}
       </div>
 
@@ -221,7 +271,7 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
           >
             Edit Studio
           </button>
-          {myRole === 3 && (
+          {myRole === server.StudioRoleOwner && (
             <button
               className="btn btn-danger"
               onClick={() =>

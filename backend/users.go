@@ -23,6 +23,8 @@ const (
 func RegisterUserMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateAccount)
 	vbeam.RegisterProc(app, GetAuthContext)
+	vbeam.RegisterProc(app, ListAllUsers)
+	vbeam.RegisterProc(app, UpdateUserRole)
 }
 
 // Request/Response types
@@ -196,7 +198,129 @@ func GetAuthContext(ctx *vbeam.Context, req Empty) (resp AuthResponse, err error
 	return
 }
 
+func ListAllUsers(ctx *vbeam.Context, req ListAllUsersRequest) (resp ListAllUsersResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Only site admins can list all users
+	if caller.Role != RoleSiteAdmin {
+		resp.Success = false
+		resp.Error = "Only site admins can access this feature"
+		return
+	}
+
+	// Get all users from the bucket
+	var allUsers []User
+	vbolt.IterateAllReverse(ctx.Tx, UsersBkt, func(userId int, user User) bool {
+		allUsers = append(allUsers, user)
+		return true // continue iteration
+	})
+
+	// Build response with studio count information
+	resp.Users = make([]UserWithStats, 0, len(allUsers))
+	for _, user := range allUsers {
+		var membershipIds []int
+		vbolt.ReadTermTargets(ctx.Tx, MembershipByUserIdx, user.Id, &membershipIds, vbolt.Window{})
+
+		resp.Users = append(resp.Users, UserWithStats{
+			User:        user,
+			StudioCount: len(membershipIds),
+		})
+	}
+
+	resp.Success = true
+	return
+}
+
+func UpdateUserRole(ctx *vbeam.Context, req UpdateUserRoleRequest) (resp UpdateUserRoleResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Only site admins can update user roles
+	if caller.Role != RoleSiteAdmin {
+		resp.Success = false
+		resp.Error = "Only site admins can change user roles"
+		return
+	}
+
+	// Cannot change your own role
+	if caller.Id == req.UserId {
+		resp.Success = false
+		resp.Error = "You cannot change your own role"
+		return
+	}
+
+	// Get the user to update
+	user := GetUser(ctx.Tx, req.UserId)
+	if user.Id == 0 {
+		resp.Success = false
+		resp.Error = "User not found"
+		return
+	}
+
+	// Validate new role
+	if req.NewRole < RoleUser || req.NewRole > RoleSiteAdmin {
+		resp.Success = false
+		resp.Error = "Invalid role value"
+		return
+	}
+
+	// Update user role
+	vbeam.UseWriteTx(ctx)
+	user.Role = req.NewRole
+	vbolt.Write(ctx.Tx, UsersBkt, user.Id, &user)
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log role change
+	LogInfo(LogCategorySystem, "User role updated", map[string]interface{}{
+		"userId":    user.Id,
+		"userEmail": user.Email,
+		"newRole":   req.NewRole,
+		"updatedBy": caller.Id,
+	})
+
+	resp.Success = true
+	resp.User = user
+	return
+}
+
 type Empty struct{}
+
+type ListAllUsersRequest struct {
+	// Empty - site admin only
+}
+
+type UserWithStats struct {
+	User
+	StudioCount int `json:"studioCount"` // Number of studios user is a member of
+}
+
+type ListAllUsersResponse struct {
+	Success bool            `json:"success"`
+	Error   string          `json:"error,omitempty"`
+	Users   []UserWithStats `json:"users,omitempty"`
+}
+
+type UpdateUserRoleRequest struct {
+	UserId  int      `json:"userId"`
+	NewRole UserRole `json:"newRole"`
+}
+
+type UpdateUserRoleResponse struct {
+	Success bool   `json:"success"`
+	Error   string `json:"error,omitempty"`
+	User    User   `json:"user,omitempty"`
+}
 
 func validateCreateAccountRequest(req CreateAccountRequest) error {
 	if req.Name == "" {

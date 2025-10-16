@@ -195,6 +195,24 @@ type ListMyStudiosResponse struct {
 	Studios []StudioWithRole `json:"studios"`
 }
 
+type ListAllStudiosRequest struct {
+	// Empty - site admin only
+}
+
+type StudioWithOwner struct {
+	Studio
+	OwnerName   string `json:"ownerName"`
+	OwnerEmail  string `json:"ownerEmail"`
+	RoomCount   int    `json:"roomCount"`
+	MemberCount int    `json:"memberCount"`
+}
+
+type ListAllStudiosResponse struct {
+	Success bool              `json:"success"`
+	Error   string            `json:"error,omitempty"`
+	Studios []StudioWithOwner `json:"studios,omitempty"`
+}
+
 type GetStudioRequest struct {
 	StudioId int `json:"studioId"`
 }
@@ -431,6 +449,49 @@ func ListMyStudios(ctx *vbeam.Context, req ListMyStudiosRequest) (resp ListMyStu
 		})
 	}
 
+	return
+}
+
+func ListAllStudios(ctx *vbeam.Context, req ListAllStudiosRequest) (resp ListAllStudiosResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Only site admins can list all studios
+	if caller.Role != RoleSiteAdmin {
+		resp.Success = false
+		resp.Error = "Only site admins can access this feature"
+		return
+	}
+
+	// Get all studios from the bucket
+	var allStudios []Studio
+	vbolt.IterateAllReverse(ctx.Tx, StudiosBkt, func(studioId int, studio Studio) bool {
+		allStudios = append(allStudios, studio)
+		return true // continue iteration
+	})
+
+	// Build response with owner and count information
+	resp.Studios = make([]StudioWithOwner, 0, len(allStudios))
+	for _, studio := range allStudios {
+		owner := GetUser(ctx.Tx, studio.OwnerId)
+		rooms := ListStudioRooms(ctx.Tx, studio.Id)
+		members := ListStudioMembers(ctx.Tx, studio.Id)
+
+		resp.Studios = append(resp.Studios, StudioWithOwner{
+			Studio:      studio,
+			OwnerName:   owner.Name,
+			OwnerEmail:  owner.Email,
+			RoomCount:   len(rooms),
+			MemberCount: len(members),
+		})
+	}
+
+	resp.Success = true
 	return
 }
 
@@ -1280,6 +1341,7 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateStudio)
 	vbeam.RegisterProc(app, ListMyStudios)
+	vbeam.RegisterProc(app, ListAllStudios)
 	vbeam.RegisterProc(app, GetStudio)
 	vbeam.RegisterProc(app, GetStudioDashboard)
 	vbeam.RegisterProc(app, UpdateStudio)

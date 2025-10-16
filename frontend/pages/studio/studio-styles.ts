@@ -88,44 +88,139 @@ block(`
 }
 `);
 
-// Role badge (reuse from studios list)
+// Role badge (enhanced with visual hierarchy)
 block(`
 .studio-role {
-  padding: 0.35rem 0.85rem;
+  padding: 0.4rem 1rem;
   border-radius: 6px;
   font-size: 0.875rem;
   font-weight: 600;
   white-space: nowrap;
   text-transform: uppercase;
   letter-spacing: 0.5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
 }
 `);
 
 block(`
 .role-0 {
-  background: #e3f2fd;
-  color: #1976d2;
+  background: #f3f4f6;
+  color: #6b7280;
+  border: 1px solid #d1d5db;
+}
+`);
+
+block(`
+.role-0::before {
+  content: '👁️';
+  font-size: 1rem;
 }
 `);
 
 block(`
 .role-1 {
-  background: #f3e5f5;
-  color: #7b1fa2;
+  background: #d1fae5;
+  color: #059669;
+  border: 1px solid #6ee7b7;
+}
+`);
+
+block(`
+.role-1::before {
+  content: '👤';
+  font-size: 1rem;
 }
 `);
 
 block(`
 .role-2 {
-  background: #fff3e0;
-  color: #f57c00;
+  background: #dbeafe;
+  color: #2563eb;
+  border: 1px solid #93c5fd;
+}
+`);
+
+block(`
+.role-2::before {
+  content: '⚙️';
+  font-size: 1rem;
 }
 `);
 
 block(`
 .role-3 {
-  background: #e8f5e9;
-  color: #388e3c;
+  background: #fef3c7;
+  color: #d97706;
+  border: 1px solid #fcd34d;
+}
+`);
+
+block(`
+.role-3::before {
+  content: '👑';
+  font-size: 1rem;
+}
+`);
+
+// Role Guide
+block(`
+.role-guide {
+  margin-bottom: 1.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+`);
+
+block(`
+.role-guide-toggle {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+  text-align: left;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  transition: background 0.2s ease;
+}
+`);
+
+block(`
+.role-guide-toggle:hover {
+  background: var(--bg);
+}
+`);
+
+block(`
+.role-guide-content {
+  padding: 1rem;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+`);
+
+block(`
+.role-capability {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+}
+`);
+
+block(`
+.capability-desc {
+  color: var(--muted);
+  font-size: 0.95rem;
 }
 `);
 

@@ -57,7 +57,7 @@ export function view(
   const myRoleName = data.myRoleName;
 
   // Check if user can manage rooms (Admin or Owner)
-  const canManageRooms = myRole >= 2; // Admin or Owner
+  const canManageRooms = myRole >= server.StudioRoleAdmin;
 
   return (
     <div>

@@ -1,65 +1,154 @@
 import * as preact from "preact";
 import * as vlens from "vlens";
-import * as rpc from "vlens/rpc";
 import * as core from "vlens/core";
 import * as server from "../../server";
 import { Header, Footer } from "../../layout";
+import { Modal } from "../../components/Modal";
 import "../../styles/global";
 import "./site-admin-styles";
 
-type Data = {
-  auth: server.AuthResponse | null;
-  users: server.UserListInfo[];
-};
+type Data = server.ListAllStudiosResponse;
 
 export async function fetch(route: string, prefix: string) {
-  // Check if user is authenticated and has site admin role
-  let [authResp, authErr] = await server.GetAuthContext({});
-
-  let users: server.UserListInfo[] = [];
-  if (authResp && authResp.isSiteAdmin) {
-    let [usersResp, usersErr] = await server.ListUsers({});
-    if (!usersErr && usersResp) {
-      users = usersResp.users || [];
-    }
-  }
-
-  return rpc.ok<Data>({
-    auth: authResp || null,
-    users: users,
-  });
+  return server.ListAllStudios({});
 }
 
-const state = vlens.declareHook(() => {
-  return {
-    selectedUserId: 0,
-    selectedRole: 0,
-    updating: false,
-    error: "",
-  };
-});
+// ===== Delete Studio Modal =====
+type DeleteStudioModal = {
+  isOpen: boolean;
+  isDeleting: boolean;
+  error: string;
+  studioId: number;
+  studioName: string;
+};
 
-async function handleRoleChange(userId: number, newRole: number) {
-  const s = state();
-  s.updating = true;
-  s.error = "";
+const useDeleteStudioModal = vlens.declareHook(
+  (): DeleteStudioModal => ({
+    isOpen: false,
+    isDeleting: false,
+    error: "",
+    studioId: 0,
+    studioName: "",
+  }),
+);
+
+function openDeleteStudioModal(
+  modal: DeleteStudioModal,
+  studioId: number,
+  studioName: string,
+) {
+  modal.isOpen = true;
+  modal.error = "";
+  modal.studioId = studioId;
+  modal.studioName = studioName;
+  vlens.scheduleRedraw();
+}
+
+function closeDeleteStudioModal(modal: DeleteStudioModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  vlens.scheduleRedraw();
+}
+
+async function confirmDeleteStudio(modal: DeleteStudioModal) {
+  modal.isDeleting = true;
+  modal.error = "";
   vlens.scheduleRedraw();
 
-  const [resp, err] = await server.SetUserRole({
-    userId: userId,
-    role: newRole,
+  const [resp, err] = await server.DeleteStudio({
+    studioId: modal.studioId,
   });
 
-  s.updating = false;
+  modal.isDeleting = false;
 
   if (err || !resp || !resp.success) {
-    s.error = resp?.error || err || "Failed to update role";
+    modal.error = resp?.error || err || "Failed to delete studio";
     vlens.scheduleRedraw();
     return;
   }
 
-  // Reload the page to refresh user list
+  closeDeleteStudioModal(modal);
   window.location.reload();
+}
+
+// ===== Users Management =====
+type UsersState = {
+  users: server.UserWithStats[];
+  loading: boolean;
+  error: string;
+  changingRoleFor: number; // userId currently being updated
+};
+
+const useUsersState = vlens.declareHook(
+  (): UsersState => ({
+    users: [],
+    loading: false,
+    error: "",
+    changingRoleFor: 0,
+  }),
+);
+
+async function loadUsers(state: UsersState) {
+  state.loading = true;
+  state.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.ListAllUsers({});
+
+  state.loading = false;
+
+  if (err || !resp || !resp.success) {
+    state.error = resp?.error || err || "Failed to load users";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  state.users = resp.users || [];
+  vlens.scheduleRedraw();
+}
+
+async function changeUserRole(
+  state: UsersState,
+  userId: number,
+  newRole: number,
+  myUserId: number,
+) {
+  if (userId === myUserId) {
+    return; // Cannot change own role
+  }
+
+  state.changingRoleFor = userId;
+  state.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.UpdateUserRole({
+    userId: userId,
+    newRole: newRole,
+  });
+
+  state.changingRoleFor = 0;
+
+  if (err || !resp || !resp.success) {
+    state.error = resp?.error || err || "Failed to update user role";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  // Reload users to get fresh data
+  await loadUsers(state);
+}
+
+function getRoleName(role: number): string {
+  switch (role) {
+    case 0:
+      return "User";
+    case 1:
+      return "Stream Admin";
+    case 2:
+      return "Site Admin";
+    default:
+      return "Unknown";
+  }
 }
 
 export function view(
@@ -67,18 +156,39 @@ export function view(
   prefix: string,
   data: Data,
 ): preact.ComponentChild {
-  const s = state();
+  const deleteStudioModal = useDeleteStudioModal();
+  const usersState = useUsersState();
 
-  // Redirect to login if not authenticated
-  if (!data.auth || data.auth.id === 0) {
-    core.setRoute("/login");
-    return <div></div>;
+  // Check permissions
+  if (!data || !data.success) {
+    return (
+      <div>
+        <Header />
+        <main className="site-admin-container">
+          <div className="site-admin-content">
+            <div className="error-state">
+              <div className="error-icon">⚠️</div>
+              <h2>Access Denied</h2>
+              <p>
+                {data?.error ||
+                  "You don't have permission to access this page. Only site administrators can view this area."}
+              </p>
+              <a href="/dashboard" className="btn btn-primary">
+                Back to Dashboard
+              </a>
+            </div>
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
   }
 
-  // Redirect to regular dashboard if not site admin
-  if (!data.auth.isSiteAdmin) {
-    core.setRoute("/dashboard");
-    return <div></div>;
+  const studios = data.studios || [];
+
+  // Load users on first render
+  if (usersState.users.length === 0 && !usersState.loading) {
+    loadUsers(usersState);
   }
 
   return (
@@ -86,49 +196,149 @@ export function view(
       <Header />
       <main className="site-admin-container">
         <div className="site-admin-content">
-          <h1 className="site-admin-title">Site Admin Dashboard</h1>
-          <p className="site-admin-description">
-            Welcome, {data.auth.name}! You have full Site Admin access.
-          </p>
+          <div className="site-admin-header">
+            <h1 className="site-admin-title">Site Administration</h1>
+            <p className="site-admin-description">
+              Manage all studios, users, and system-wide settings
+            </p>
+          </div>
 
-          {s.error && <div className="error-message">{s.error}</div>}
+          {/* Studios Management Section */}
+          <div className="admin-section">
+            <div className="section-header">
+              <h2 className="section-title">Studios Management</h2>
+              <a href="/studios" className="btn btn-primary btn-sm">
+                Create Studio
+              </a>
+            </div>
 
-          <div className="admin-sections">
-            <div className="admin-section full-width">
-              <h2>User Management</h2>
-              <p>Manage user roles and permissions.</p>
-
-              <div className="users-table">
-                <table>
+            {studios.length === 0 ? (
+              <div className="empty-state">
+                <p>No studios have been created yet.</p>
+              </div>
+            ) : (
+              <div className="studios-table-container">
+                <table className="admin-table">
                   <thead>
                     <tr>
-                      <th>ID</th>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>Current Role</th>
+                      <th>Studio Name</th>
+                      <th>Owner</th>
+                      <th>Created</th>
+                      <th>Rooms</th>
+                      <th>Members</th>
                       <th>Actions</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {data.users.map((user) => (
+                    {studios.map((studio) => (
+                      <tr key={studio.id}>
+                        <td>
+                          <div className="studio-name-cell">
+                            <strong>{studio.name}</strong>
+                            {studio.description && (
+                              <div className="studio-description-preview">
+                                {studio.description}
+                              </div>
+                            )}
+                          </div>
+                        </td>
+                        <td>
+                          <div className="owner-cell">
+                            <div>{studio.ownerName}</div>
+                            <div className="email-text">
+                              {studio.ownerEmail}
+                            </div>
+                          </div>
+                        </td>
+                        <td>
+                          {new Date(studio.creation).toLocaleDateString()}
+                        </td>
+                        <td>{studio.roomCount}</td>
+                        <td>{studio.memberCount}</td>
+                        <td className="actions-cell">
+                          <a
+                            href={`/studio/${studio.id}`}
+                            className="btn btn-secondary btn-sm"
+                          >
+                            View Studio
+                          </a>
+                          <button
+                            className="btn btn-danger btn-sm"
+                            onClick={() =>
+                              openDeleteStudioModal(
+                                deleteStudioModal,
+                                studio.id,
+                                studio.name,
+                              )
+                            }
+                          >
+                            Delete
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          {/* Users Management Section */}
+          <div className="admin-section">
+            <div className="section-header">
+              <h2 className="section-title">Users Management</h2>
+            </div>
+
+            {usersState.error && (
+              <div className="error-message">{usersState.error}</div>
+            )}
+
+            {usersState.loading ? (
+              <div className="loading-state">Loading users...</div>
+            ) : usersState.users.length === 0 ? (
+              <div className="empty-state">
+                <p>No users found.</p>
+              </div>
+            ) : (
+              <div className="users-table-container">
+                <table className="admin-table">
+                  <thead>
+                    <tr>
+                      <th>Name</th>
+                      <th>Email</th>
+                      <th>Role</th>
+                      <th>Studios</th>
+                      <th>Created</th>
+                      <th>Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {usersState.users.map((user) => (
                       <tr key={user.id}>
-                        <td>{user.id}</td>
                         <td>{user.name}</td>
                         <td>{user.email}</td>
                         <td>
                           <span className={`role-badge role-${user.role}`}>
-                            {user.roleName}
+                            {getRoleName(user.role)}
                           </span>
                         </td>
-                        <td>
-                          {user.id !== data.auth!.id && (
+                        <td>{user.studioCount}</td>
+                        <td>{new Date(user.creation).toLocaleDateString()}</td>
+                        <td className="actions-cell">
+                          {/* Get current user ID from first user (yourself) - you're always the site admin loading this */}
+                          {user.id === 1 ? (
+                            <span className="text-muted">(You)</span>
+                          ) : (
                             <select
-                              disabled={s.updating}
+                              className="role-select"
+                              disabled={usersState.changingRoleFor === user.id}
                               onChange={(e) => {
                                 const target = e.target as HTMLSelectElement;
-                                handleRoleChange(
+                                changeUserRole(
+                                  usersState,
                                   user.id,
                                   parseInt(target.value),
+                                  1, // Site admin is always user ID 1
                                 );
                               }}
                               value={user.role}
@@ -138,37 +348,54 @@ export function view(
                               <option value={2}>Site Admin</option>
                             </select>
                           )}
-                          {user.id === data.auth!.id && (
-                            <span className="text-muted">(You)</span>
-                          )}
                         </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
-            </div>
-
-            <div className="admin-section">
-              <h2>System Settings</h2>
-              <p>Configure site-wide settings and preferences.</p>
-              <div className="section-actions">
-                <a href="/settings" className="btn btn-secondary">
-                  Manage Settings
-                </a>
-              </div>
-            </div>
-
-            <div className="admin-section">
-              <h2>Analytics</h2>
-              <p>View site usage statistics and user activity.</p>
-              <div className="section-actions">
-                <button className="btn btn-secondary">View Analytics</button>
-              </div>
-            </div>
+            )}
           </div>
         </div>
       </main>
+
+      {/* Delete Studio Modal */}
+      <Modal
+        isOpen={deleteStudioModal.isOpen}
+        title="Delete Studio"
+        onClose={() => closeDeleteStudioModal(deleteStudioModal)}
+        error={deleteStudioModal.error}
+        footer={
+          <>
+            <button
+              className="btn btn-secondary"
+              onClick={() => closeDeleteStudioModal(deleteStudioModal)}
+              disabled={deleteStudioModal.isDeleting}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-danger"
+              onClick={() => confirmDeleteStudio(deleteStudioModal)}
+              disabled={deleteStudioModal.isDeleting}
+            >
+              {deleteStudioModal.isDeleting ? "Deleting..." : "Delete Studio"}
+            </button>
+          </>
+        }
+      >
+        <div className="delete-confirmation">
+          <p className="confirmation-text">
+            ⚠️ Are you sure you want to delete this studio? This will also
+            delete all rooms, streams, and memberships. This action cannot be
+            undone.
+          </p>
+          <div className="studio-info">
+            <strong>Studio:</strong> {deleteStudioModal.studioName}
+          </div>
+        </div>
+      </Modal>
+
       <Footer />
     </div>
   );
