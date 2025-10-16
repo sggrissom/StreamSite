@@ -1,5 +1,6 @@
 import * as preact from "preact";
 import * as vlens from "vlens";
+import * as rpc from "vlens/rpc";
 import * as core from "vlens/core";
 import * as server from "../../server";
 import { Header, Footer } from "../../layout";
@@ -7,10 +8,19 @@ import { Modal } from "../../components/Modal";
 import "../../styles/global";
 import "./studios-styles";
 
-type Data = server.ListMyStudiosResponse;
+type Data = {
+  studios: server.StudioWithRole[];
+  auth: server.AuthResponse | null;
+};
 
 export async function fetch(route: string, prefix: string) {
-  return server.ListMyStudios({});
+  let [studiosResp, studiosErr] = await server.ListMyStudios({});
+  let [authResp, authErr] = await server.GetAuthContext({});
+
+  return rpc.ok<Data>({
+    studios: studiosResp?.studios || [],
+    auth: authResp || null,
+  });
 }
 
 type CreateStudioModal = {
@@ -91,6 +101,8 @@ export function view(
   data: Data,
 ): preact.ComponentChild {
   const studios = data?.studios || [];
+  const auth = data?.auth;
+  const isSiteAdmin = auth?.isSiteAdmin || false;
   const modal = useCreateStudioModal();
 
   return (
@@ -111,15 +123,18 @@ export function view(
               <div className="empty-icon">📺</div>
               <h2>No Studios Yet</h2>
               <p>
-                You haven't joined any studios yet. Create your first studio to
-                get started!
+                {isSiteAdmin
+                  ? "You haven't created any studios yet. Create your first studio to get started!"
+                  : "You haven't been added to any studios yet. Contact your administrator to get access."}
               </p>
-              <button
-                className="btn btn-primary"
-                onClick={() => openModal(modal)}
-              >
-                Create Your First Studio
-              </button>
+              {isSiteAdmin && (
+                <button
+                  className="btn btn-primary"
+                  onClick={() => openModal(modal)}
+                >
+                  Create Studio
+                </button>
+              )}
             </div>
           ) : (
             <div className="studios-grid">
@@ -156,7 +171,7 @@ export function view(
             </div>
           )}
 
-          {studios.length > 0 && (
+          {studios.length > 0 && isSiteAdmin && (
             <div className="studios-footer">
               <button
                 className="btn btn-primary"

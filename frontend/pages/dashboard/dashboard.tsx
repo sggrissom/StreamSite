@@ -9,6 +9,7 @@ import "./dashboard-styles";
 type Data = {
   authId: number;
   rooms: server.ListMyAccessibleRoomsResponse | null;
+  auth: server.AuthResponse | null;
 };
 
 export async function fetch(route: string, prefix: string) {
@@ -21,6 +22,7 @@ export async function fetch(route: string, prefix: string) {
   return rpc.ok<Data>({
     authId: authResp?.id || 0,
     rooms: roomsResp || null,
+    auth: authResp || null,
   });
 }
 
@@ -37,6 +39,8 @@ export function view(
 
   const rooms = data.rooms?.rooms || [];
   const liveRooms = rooms.filter((r) => r.isActive);
+  const auth = data.auth;
+  const canManageStudios = auth?.canManageStudios || false;
 
   return (
     <div>
@@ -54,12 +58,15 @@ export function view(
               <div className="empty-icon">🎬</div>
               <h3>No Streams Available</h3>
               <p>
-                You don't have access to any streaming rooms yet. Contact a
-                studio administrator to get access, or create your own studio.
+                {canManageStudios
+                  ? "You don't have access to any streaming rooms yet. You can create or join a studio to get started."
+                  : "You don't have access to any streaming rooms yet. Contact your administrator to be added to a studio."}
               </p>
-              <a href="/studios" className="btn btn-primary">
-                Go to My Studios
-              </a>
+              {canManageStudios && (
+                <a href="/studios" className="btn btn-primary">
+                  Go to My Studios
+                </a>
+              )}
             </div>
           ) : (
             <div className="dashboard-rooms-section">

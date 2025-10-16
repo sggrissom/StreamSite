@@ -341,10 +341,10 @@ func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudi
 		return
 	}
 
-	// Only StreamAdmin or higher can create studios
-	if caller.Role < RoleStreamAdmin {
+	// Only Site Admins can create studios
+	if caller.Role != RoleSiteAdmin {
 		resp.Success = false
-		resp.Error = "Only stream admins can create studios"
+		resp.Error = "Only site admins can create studios"
 		return
 	}
 
