@@ -39,6 +39,7 @@ export interface AuthResponse {
     role: UserRole
     isStreamAdmin: boolean
     isSiteAdmin: boolean
+    canManageStudios: boolean
 }
 
 export interface SetUserRoleRequest {

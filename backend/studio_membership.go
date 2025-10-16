@@ -123,6 +123,24 @@ func ListUserStudios(tx *vbolt.Tx, userId int) []Studio {
 	return studios
 }
 
+// UserHasStudioManagementAccess checks if the user has Member+ role in ANY studio
+// Returns true if user can manage studios (has role >= Member in at least one studio)
+// Returns false if user only has Viewer roles or no studio memberships
+func UserHasStudioManagementAccess(tx *vbolt.Tx, userId int) bool {
+	var membershipIds []int
+	vbolt.ReadTermTargets(tx, MembershipByUserIdx, userId, &membershipIds, vbolt.Window{})
+
+	for _, membershipId := range membershipIds {
+		membership := GetMembership(tx, membershipId)
+		// Check if this membership has Member or higher role (not just Viewer)
+		if membership.Role >= StudioRoleMember {
+			return true
+		}
+	}
+
+	return false
+}
+
 // ListStudioMembers returns all memberships for a studio
 func ListStudioMembers(tx *vbolt.Tx, studioId int) []StudioMembership {
 	var memberships []StudioMembership

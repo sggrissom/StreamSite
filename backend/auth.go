@@ -130,7 +130,10 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		"email":  user.Email,
 	})
 
-	resp := GetAuthResponseFromUser(user)
+	var resp AuthResponse
+	vbolt.WithReadTx(appDb, func(tx *vbolt.Tx) {
+		resp = GetAuthResponseFromUser(tx, user)
+	})
 	json.NewEncoder(w).Encode(LoginResponse{Success: true, Token: token, Auth: resp})
 }
 
@@ -327,7 +330,10 @@ func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	resp := GetAuthResponseFromUser(user)
+	var resp AuthResponse
+	vbolt.WithReadTx(appDb, func(tx *vbolt.Tx) {
+		resp = GetAuthResponseFromUser(tx, user)
+	})
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 		"token":   token,

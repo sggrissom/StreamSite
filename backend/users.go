@@ -53,12 +53,13 @@ type LoginResponse struct {
 }
 
 type AuthResponse struct {
-	Id            int      `json:"id"`
-	Name          string   `json:"name"`
-	Email         string   `json:"email"`
-	Role          UserRole `json:"role"`
-	IsStreamAdmin bool     `json:"isStreamAdmin"` // Quick check for stream admin or higher
-	IsSiteAdmin   bool     `json:"isSiteAdmin"`   // Quick check for site admin
+	Id               int      `json:"id"`
+	Name             string   `json:"name"`
+	Email            string   `json:"email"`
+	Role             UserRole `json:"role"`
+	IsStreamAdmin    bool     `json:"isStreamAdmin"`    // Quick check for stream admin or higher
+	IsSiteAdmin      bool     `json:"isSiteAdmin"`      // Quick check for site admin
+	CanManageStudios bool     `json:"canManageStudios"` // Has Member+ role in any studio
 }
 
 // Database types
@@ -131,14 +132,23 @@ func AddUserTx(tx *vbolt.Tx, req CreateAccountRequest, hash []byte) User {
 	return user
 }
 
-func GetAuthResponseFromUser(user User) AuthResponse {
+func GetAuthResponseFromUser(tx *vbolt.Tx, user User) AuthResponse {
+	// Site admins can manage everything
+	canManageStudios := user.Role == RoleSiteAdmin
+
+	// Otherwise, check if user has Member+ role in any studio
+	if !canManageStudios {
+		canManageStudios = UserHasStudioManagementAccess(tx, user.Id)
+	}
+
 	return AuthResponse{
-		Id:            user.Id,
-		Name:          user.Name,
-		Email:         user.Email,
-		Role:          user.Role,
-		IsStreamAdmin: user.Role >= RoleStreamAdmin, // Stream admin or site admin
-		IsSiteAdmin:   user.Role == RoleSiteAdmin,   // Site admin only
+		Id:               user.Id,
+		Name:             user.Name,
+		Email:            user.Email,
+		Role:             user.Role,
+		IsStreamAdmin:    user.Role >= RoleStreamAdmin, // Stream admin or site admin
+		IsSiteAdmin:      user.Role == RoleSiteAdmin,   // Site admin only
+		CanManageStudios: canManageStudios,
 	}
 }
 
@@ -174,14 +184,14 @@ func CreateAccount(ctx *vbeam.Context, req CreateAccountRequest) (resp CreateAcc
 
 	// Return success response
 	resp.Success = true
-	resp.Auth = GetAuthResponseFromUser(user)
+	resp.Auth = GetAuthResponseFromUser(ctx.Tx, user)
 	return
 }
 
 func GetAuthContext(ctx *vbeam.Context, req Empty) (resp AuthResponse, err error) {
 	user, authErr := GetAuthUser(ctx)
 	if authErr == nil && user.Id > 0 {
-		resp = GetAuthResponseFromUser(user)
+		resp = GetAuthResponseFromUser(ctx.Tx, user)
 	}
 	return
 }
