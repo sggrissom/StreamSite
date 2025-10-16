@@ -30,12 +30,15 @@ func main() {
 	}
 
 	// Create the application with frontend assets
-	app := stream.MakeApplication()
+	app, db := stream.MakeApplicationWithDB()
 	app.Frontend = distFS
 	app.StaticData = os.DirFS(cfg.StaticDir)
 
+	// Wrap app with SSE handler to bypass vbeam's ResponseWriter wrapping
+	handler := stream.NewSSEWrapper(app, db)
+
 	addr := fmt.Sprintf(":%d", Port)
 	log.Printf("listening on %s\n", addr)
-	var appServer = &http.Server{Addr: addr, Handler: app}
+	var appServer = &http.Server{Addr: addr, Handler: handler}
 	appServer.ListenAndServe()
 }

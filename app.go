@@ -2,7 +2,6 @@ package stream
 
 import (
 	"log"
-	"net/http"
 	"stream/backend"
 	"stream/cfg"
 
@@ -19,7 +18,7 @@ func OpenDB(dbpath string) *vbolt.DB {
 	return dbConnection
 }
 
-func MakeApplication() *vbeam.Application {
+func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	// Load environment variables from .env file
 	err := godotenv.Load()
 	if err != nil {
@@ -51,10 +50,5 @@ func MakeApplication() *vbeam.Application {
 	vbeam.RegisterProc(app, backend.ValidateStreamKey)
 	vbeam.RegisterProc(app, backend.HandleStreamUnpublish)
 
-	return app
-}
-
-func MakeSecureApplication() http.Handler {
-	app := MakeApplication()
-	return app
+	return app, db
 }

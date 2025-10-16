@@ -1220,6 +1220,9 @@ func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthRes
 	vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
 	vbolt.TxCommit(ctx.Tx)
 
+	// Broadcast SSE update to all connected viewers
+	sseManager.BroadcastRoomStatus(room.Id, true)
+
 	// Log successful authentication
 	LogInfo(LogCategorySystem, "SRS auth successful, room now live", map[string]interface{}{
 		"room_id":    room.Id,
@@ -1247,6 +1250,9 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 		room.IsActive = false
 		vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
 		vbolt.TxCommit(ctx.Tx)
+
+		// Broadcast SSE update to all connected viewers
+		sseManager.BroadcastRoomStatus(room.Id, false)
 
 		LogInfo(LogCategorySystem, "SRS stream ended, room now offline", map[string]interface{}{
 			"room_id":    room.Id,

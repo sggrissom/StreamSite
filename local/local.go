@@ -20,13 +20,15 @@ func StartLocalServer() {
 	defer vbeam.NiceStackTraceOnPanic()
 
 	vbeam.RunBackServer(cfg.Backport)
-	app := stream.MakeApplication()
+	app, db := stream.MakeApplicationWithDB()
 	app.Frontend = os.DirFS(FEDist)
 	app.StaticData = os.DirFS(cfg.StaticDir)
 	vbeam.GenerateTSBindings(app, "frontend/server.ts")
 
+	handler := stream.NewSSEWrapper(app, db)
+
 	var addr = fmt.Sprintf(":%d", Port)
-	var appServer = &http.Server{Addr: addr, Handler: app}
+	var appServer = &http.Server{Addr: addr, Handler: handler}
 	appServer.ListenAndServe()
 }
 

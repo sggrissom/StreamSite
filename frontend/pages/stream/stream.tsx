@@ -10,8 +10,14 @@ type StreamState = {
   videoElement: HTMLVideoElement | null;
   hlsInstance: any;
   streamUrl: string;
+  isStreamLive: boolean;
+  roomId: number;
+  eventSource: EventSource | null;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   setStreamUrl: (url: string) => void;
+  setStreamLive: (live: boolean) => void;
+  connectSSE: () => void;
+  disconnectSSE: () => void;
 };
 
 const useStreamPlayer = vlens.declareHook((): StreamState => {
@@ -19,6 +25,9 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     videoElement: null,
     hlsInstance: null,
     streamUrl: "",
+    isStreamLive: false,
+    roomId: 0,
+    eventSource: null,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
     },
@@ -26,14 +35,70 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       if (state.streamUrl !== url) {
         state.streamUrl = url;
         // Reinitialize player with new URL if already attached
-        if (state.videoElement) {
+        if (state.videoElement && state.isStreamLive) {
           initializePlayer(state, state.videoElement);
         }
+      }
+    },
+    setStreamLive: (live: boolean) => {
+      if (state.isStreamLive === live) return;
+
+      state.isStreamLive = live;
+
+      if (live) {
+        // Stream came online - initialize player
+        if (state.videoElement && state.streamUrl) {
+          initializePlayer(state, state.videoElement);
+        }
+      } else {
+        // Stream went offline - cleanup player
+        cleanupPlayer(state);
+      }
+
+      vlens.scheduleRedraw();
+    },
+    connectSSE: () => {
+      if (state.roomId === 0) return;
+      if (state.eventSource) return; // Already connected
+
+      const url = `/api/room/events?roomId=${state.roomId}`;
+      state.eventSource = new EventSource(url);
+
+      state.eventSource.addEventListener("status", (e) => {
+        const data = JSON.parse(e.data);
+        state.setStreamLive(data.isActive);
+      });
+
+      state.eventSource.onerror = (err) => {
+        console.warn("SSE error, will auto-reconnect:", err);
+        // Browser auto-reconnects, no action needed
+      };
+    },
+    disconnectSSE: () => {
+      if (state.eventSource) {
+        state.eventSource.close();
+        state.eventSource = null;
       }
     },
   };
   return state;
 });
+
+// Helper to cleanup video player
+function cleanupPlayer(state: StreamState) {
+  if (state.hlsInstance?.destroy) {
+    try {
+      state.hlsInstance.destroy();
+    } catch {}
+    state.hlsInstance = null;
+  }
+  if (state.videoElement) {
+    try {
+      state.videoElement.removeAttribute("src");
+      state.videoElement.load?.();
+    } catch {}
+  }
+}
 
 // lazy-load hls.js exactly once
 function loadHlsOnce(): Promise<any> {
@@ -107,6 +172,8 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
             state.hlsInstance.recoverMediaError();
             break;
           default:
+            // Fatal error - cleanup but don't change live status
+            // (SSE will notify us when stream actually ends)
             state.hlsInstance.destroy();
             state.hlsInstance = null;
         }
@@ -164,6 +231,21 @@ export function view(
     );
   }
 
+  // Initialize room ID and connect SSE
+  if (state.roomId !== data.room.id) {
+    // Disconnect from old room if switching
+    state.disconnectSSE();
+
+    // Connect to new room
+    state.roomId = data.room.id;
+
+    // Sync initial state from backend BEFORE connecting SSE
+    // After SSE connects, it becomes the source of truth
+    state.isStreamLive = data.room.isActive;
+
+    state.connectSSE();
+  }
+
   // Build stream URL from room data
   // Pattern: /streams/room/{roomId}.m3u8
   // Backend will rewrite to: /streams/live/{streamKey}.m3u8
@@ -189,17 +271,28 @@ export function view(
           </div>
         </div>
 
-        <div className="video-container">
-          <video
-            ref={state.onVideoRef}
-            controls
-            autoPlay
-            muted
-            playsInline
-            preload="auto"
-            className="video-player"
-          />
-        </div>
+        {state.isStreamLive ? (
+          <div className="video-container">
+            <video
+              ref={state.onVideoRef}
+              controls
+              autoPlay
+              muted
+              playsInline
+              preload="auto"
+              className="video-player"
+            />
+          </div>
+        ) : (
+          <div className="stream-offline">
+            <div className="offline-icon">⏸️</div>
+            <h2>Stream Offline</h2>
+            <p>This stream is currently not broadcasting.</p>
+            <p className="offline-hint">
+              The page will automatically refresh when the stream starts.
+            </p>
+          </div>
+        )}
 
         <div className="stream-actions">
           <a
