@@ -96,18 +96,12 @@ export function view(
                     </div>
 
                     <div className="room-actions">
-                      {room.isActive ? (
-                        <a
-                          href={`/stream/${room.id}`}
-                          className="btn btn-primary btn-sm"
-                        >
-                          Watch Stream
-                        </a>
-                      ) : (
-                        <button className="btn btn-secondary btn-sm" disabled>
-                          Offline
-                        </button>
-                      )}
+                      <a
+                        href={`/stream/${room.id}`}
+                        className={`btn btn-sm ${room.isActive ? "btn-primary" : "btn-secondary"}`}
+                      >
+                        {room.isActive ? "Watch Stream" : "View Stream"}
+                      </a>
                       <a
                         href={`/studio/${room.studioId}`}
                         className="btn btn-secondary btn-sm"

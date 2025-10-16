@@ -391,14 +391,12 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                 </div>
 
                 <div className="room-actions">
-                  {room.isActive && (
-                    <a
-                      href={`/stream/${room.id}`}
-                      className="btn btn-primary btn-sm"
-                    >
-                      Watch Stream
-                    </a>
-                  )}
+                  <a
+                    href={`/stream/${room.id}`}
+                    className={`btn btn-sm ${room.isActive ? "btn-primary" : "btn-secondary"}`}
+                  >
+                    {room.isActive ? "Watch Stream" : "View Stream"}
+                  </a>
                   {canManageRooms && (
                     <>
                       <button
