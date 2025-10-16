@@ -16,10 +16,6 @@ async function main() {
     vlens.routeHandler("/studios", () => import("@app/pages/studios/studios")),
     vlens.routeHandler("/studio/", () => import("@app/pages/studio/studio")),
     vlens.routeHandler(
-      "/stream-admin",
-      () => import("@app/pages/stream-admin/stream-admin"),
-    ),
-    vlens.routeHandler(
       "/site-admin",
       () => import("@app/pages/site-admin/site-admin"),
     ),

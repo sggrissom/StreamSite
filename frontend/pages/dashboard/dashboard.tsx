@@ -43,39 +43,34 @@ export function view(
       <Header />
       <main className="dashboard-container">
         <div className="dashboard-content">
-          <h1 className="dashboard-title">Welcome to Stream</h1>
+          <h1 className="dashboard-title">My Streams</h1>
           <p className="dashboard-description">
-            Access your streaming rooms and watch live content.
+            All streaming rooms you have access to. Watch live streams or check
+            back when they go live.
           </p>
 
-          <div className="dashboard-actions">
-            <a href="/studios" className="btn btn-primary btn-large">
-              My Studios
-            </a>
-          </div>
-
-          {/* Rooms section */}
-          <div className="dashboard-rooms-section">
-            <h2 className="section-title">
-              My Rooms
+          {rooms.length === 0 ? (
+            <div className="rooms-empty">
+              <div className="empty-icon">🎬</div>
+              <h3>No Streams Available</h3>
+              <p>
+                You don't have access to any streaming rooms yet. Contact a
+                studio administrator to get access, or create your own studio.
+              </p>
+              <a href="/studios" className="btn btn-primary">
+                Go to My Studios
+              </a>
+            </div>
+          ) : (
+            <div className="dashboard-rooms-section">
               {liveRooms.length > 0 && (
-                <span className="live-count"> ({liveRooms.length} live)</span>
+                <div className="live-indicator">
+                  <span className="live-badge">
+                    🔴 {liveRooms.length} Live Now
+                  </span>
+                </div>
               )}
-            </h2>
 
-            {rooms.length === 0 ? (
-              <div className="rooms-empty">
-                <div className="empty-icon">🎬</div>
-                <h3>No Rooms Available</h3>
-                <p>
-                  You don't have access to any rooms yet. Join a studio to get
-                  started.
-                </p>
-                <a href="/studios" className="btn btn-primary">
-                  Browse Studios
-                </a>
-              </div>
-            ) : (
               <div className="rooms-grid">
                 {rooms.map((room) => (
                   <div
@@ -106,14 +101,14 @@ export function view(
                         href={`/studio/${room.studioId}`}
                         className="btn btn-secondary btn-sm"
                       >
-                        View Studio
+                        Studio
                       </a>
                     </div>
                   </div>
                 ))}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
       </main>
       <Footer />
