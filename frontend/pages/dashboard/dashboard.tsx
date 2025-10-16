@@ -37,10 +37,18 @@ export function view(
     return <div></div>;
   }
 
-  const rooms = data.rooms?.rooms || [];
-  const liveRooms = rooms.filter((r) => r.isActive);
   const auth = data.auth;
   const canManageStudios = auth?.canManageStudios || false;
+
+  // Redirect Studio Members to /studios
+  // Dashboard is only for viewer-only users
+  if (canManageStudios) {
+    core.setRoute("/studios");
+    return <div></div>;
+  }
+
+  const rooms = data.rooms?.rooms || [];
+  const liveRooms = rooms.filter((r) => r.isActive);
 
   return (
     <div>
@@ -58,15 +66,9 @@ export function view(
               <div className="empty-icon">🎬</div>
               <h3>No Streams Available</h3>
               <p>
-                {canManageStudios
-                  ? "You don't have access to any streaming rooms yet. You can create or join a studio to get started."
-                  : "You don't have access to any streaming rooms yet. Contact your administrator to be added to a studio."}
+                You don't have access to any streaming rooms yet. Contact your
+                administrator to be added to a studio.
               </p>
-              {canManageStudios && (
-                <a href="/studios" className="btn btn-primary">
-                  Go to My Studios
-                </a>
-              )}
             </div>
           ) : (
             <div className="dashboard-rooms-section">

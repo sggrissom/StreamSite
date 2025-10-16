@@ -58,9 +58,11 @@ export const Header = () => {
         </a>
         {authState.isAuthenticated && authState.auth && (
           <div className="nav-links">
-            <a href="/dashboard" className="nav-link">
-              My Streams
-            </a>
+            {!authState.auth.canManageStudios && (
+              <a href="/dashboard" className="nav-link">
+                My Streams
+              </a>
+            )}
             {authState.auth.canManageStudios && (
               <a href="/studios" className="nav-link">
                 My Studios

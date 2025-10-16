@@ -42,34 +42,7 @@ export interface AuthResponse {
     canManageStudios: boolean
 }
 
-export interface SetUserRoleRequest {
-    userId: number
-    role: UserRole
-}
-
-export interface SetUserRoleResponse {
-    success: boolean
-    error: string
-}
-
-export interface ListUsersRequest {
-}
-
-export interface ListUsersResponse {
-    users: UserListInfo[]
-}
-
 export interface ListAllUsersRequest {
-}
-
-export interface UserWithStats {
-    id: number
-    name: string
-    email: string
-    role: UserRole
-    creation: string
-    lastLogin: string
-    studioCount: number
 }
 
 export interface ListAllUsersResponse {
@@ -89,13 +62,21 @@ export interface UpdateUserRoleResponse {
     user: User
 }
 
-export interface User {
-    id: number
-    name: string
-    email: string
+export interface SetUserRoleRequest {
+    userId: number
     role: UserRole
-    creation: string
-    lastLogin: string
+}
+
+export interface SetUserRoleResponse {
+    success: boolean
+    error: string
+}
+
+export interface ListUsersRequest {
+}
+
+export interface ListUsersResponse {
+    users: UserListInfo[]
 }
 
 export interface CreateStudioRequest {
@@ -118,19 +99,6 @@ export interface ListMyStudiosResponse {
 }
 
 export interface ListAllStudiosRequest {
-}
-
-export interface StudioWithOwner {
-    id: number
-    name: string
-    description: string
-    maxRooms: number
-    ownerId: number
-    creation: string
-    ownerName: string
-    ownerEmail: string
-    roomCount: number
-    memberCount: number
 }
 
 export interface ListAllStudiosResponse {
@@ -340,6 +308,25 @@ export interface SRSAuthResponse {
     code: number
 }
 
+export interface UserWithStats {
+    id: number
+    name: string
+    email: string
+    role: UserRole
+    creation: string
+    lastLogin: string
+    studioCount: number
+}
+
+export interface User {
+    id: number
+    name: string
+    email: string
+    role: UserRole
+    creation: string
+    lastLogin: string
+}
+
 export interface UserListInfo {
     id: number
     name: string
@@ -366,6 +353,19 @@ export interface StudioWithRole {
     creation: string
     myRole: StudioRole
     myRoleName: string
+}
+
+export interface StudioWithOwner {
+    id: number
+    name: string
+    description: string
+    maxRooms: number
+    ownerId: number
+    creation: string
+    ownerName: string
+    ownerEmail: string
+    roomCount: number
+    memberCount: number
 }
 
 export interface Room {
