@@ -151,8 +151,23 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 			return
 		}
 
-		// TODO: Check user has permission to view this room
-		// For now, anyone can watch (will need to add auth check)
+		// Authenticate user
+		user, authErr := AuthenticateRequest(r)
+		if authErr != nil {
+			http.Error(w, "Authentication required", http.StatusUnauthorized)
+			return
+		}
+
+		// Check if user has permission to view this room
+		var hasPermission bool
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			hasPermission = HasStudioPermission(tx, user.Id, room.StudioId, StudioRoleViewer)
+		})
+
+		if !hasPermission {
+			http.Error(w, "You do not have permission to view this room", http.StatusForbidden)
+			return
+		}
 
 		// Set SSE headers
 		w.Header().Set("Content-Type", "text/event-stream")
