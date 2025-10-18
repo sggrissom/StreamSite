@@ -7,6 +7,7 @@ import (
 	"stream/cfg"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 	"go.hasen.dev/vpack"
 )
@@ -184,4 +185,205 @@ func isBadPattern(code string) bool {
 	}
 
 	return false
+}
+
+// Request/Response types for API procedures
+
+type GenerateAccessCodeRequest struct {
+	Type            int    `json:"type"`            // 0=room, 1=studio
+	TargetId        int    `json:"targetId"`        // Room ID or Studio ID
+	DurationMinutes int    `json:"durationMinutes"` // How long code is valid
+	MaxViewers      int    `json:"maxViewers"`      // 0=unlimited
+	Label           string `json:"label"`           // Optional description
+}
+
+type GenerateAccessCodeResponse struct {
+	Success   bool      `json:"success"`
+	Error     string    `json:"error,omitempty"`
+	Code      string    `json:"code,omitempty"`
+	ExpiresAt time.Time `json:"expiresAt,omitempty"`
+	ShareURL  string    `json:"shareUrl,omitempty"` // e.g., "/watch/42857"
+}
+
+// Helper functions
+
+// codeExistsInDB checks if a code already exists in the database
+func codeExistsInDB(tx *vbolt.Tx, code string) bool {
+	var existing AccessCode
+	vbolt.Read(tx, AccessCodesBkt, code, &existing)
+	return existing.Code != ""
+}
+
+// generateUniqueCodeInDB generates a code and ensures it's unique in the database
+func generateUniqueCodeInDB(tx *vbolt.Tx) (string, error) {
+	for attempt := 0; attempt < 20; attempt++ {
+		code, err := GenerateUniqueCode()
+		if err != nil {
+			return "", err
+		}
+
+		// Check if code already exists in database
+		if !codeExistsInDB(tx, code) {
+			return code, nil
+		}
+	}
+	return "", fmt.Errorf("failed to generate unique code after 20 attempts")
+}
+
+// API Procedures
+
+func RegisterCodeAccessMethods(app *vbeam.Application) {
+	vbeam.RegisterProc(app, GenerateAccessCode)
+}
+
+// GenerateAccessCode creates a new temporary access code for room or studio viewing
+func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp GenerateAccessCodeResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Validate code type
+	if req.Type != int(CodeTypeRoom) && req.Type != int(CodeTypeStudio) {
+		resp.Success = false
+		resp.Error = "Invalid code type (must be 0 for room or 1 for studio)"
+		return
+	}
+
+	// Validate duration
+	if req.DurationMinutes <= 0 {
+		resp.Success = false
+		resp.Error = "Duration must be greater than 0"
+		return
+	}
+
+	// Validate max viewers
+	if req.MaxViewers < 0 {
+		resp.Success = false
+		resp.Error = "Max viewers cannot be negative"
+		return
+	}
+
+	// Validate label length
+	if len(req.Label) > 200 {
+		resp.Success = false
+		resp.Error = "Label is too long (max 200 characters)"
+		return
+	}
+
+	var studioId int
+	var targetName string
+
+	// Validate target and check permissions based on type
+	if req.Type == int(CodeTypeRoom) {
+		// Room code - validate room exists and check permission
+		room := GetRoom(ctx.Tx, req.TargetId)
+		if room.Id == 0 {
+			resp.Success = false
+			resp.Error = "Room not found"
+			return
+		}
+
+		studioId = room.StudioId
+		targetName = room.Name
+
+	} else {
+		// Studio code - validate studio exists and check permission
+		studio := GetStudioById(ctx.Tx, req.TargetId)
+		if studio.Id == 0 {
+			resp.Success = false
+			resp.Error = "Studio not found"
+			return
+		}
+
+		studioId = studio.Id
+		targetName = studio.Name
+
+	}
+
+	// Check if user has Admin+ permission for the studio
+	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleAdmin) {
+		resp.Success = false
+		resp.Error = "Only studio admins can generate access codes"
+		return
+	}
+
+	vbeam.UseWriteTx(ctx)
+
+	// Generate unique code
+	code, err := generateUniqueCodeInDB(ctx.Tx)
+	if err != nil {
+		resp.Success = false
+		resp.Error = "Failed to generate unique code"
+		return
+	}
+
+	// Calculate expiration time
+	now := time.Now()
+	expiresAt := now.Add(time.Duration(req.DurationMinutes) * time.Minute)
+
+	// Create access code
+	accessCode := AccessCode{
+		Code:       code,
+		Type:       CodeType(req.Type),
+		TargetId:   req.TargetId,
+		CreatedBy:  caller.Id,
+		CreatedAt:  now,
+		ExpiresAt:  expiresAt,
+		MaxViewers: req.MaxViewers,
+		IsRevoked:  false,
+		Label:      req.Label,
+	}
+
+	// Save to database
+	vbolt.Write(ctx.Tx, AccessCodesBkt, code, &accessCode)
+
+	// Add to appropriate index
+	if req.Type == int(CodeTypeRoom) {
+		vbolt.SetTargetSingleTerm(ctx.Tx, CodesByRoomIdx, code, req.TargetId)
+	} else {
+		vbolt.SetTargetSingleTerm(ctx.Tx, CodesByStudioIdx, code, req.TargetId)
+	}
+
+	// Add to creator index
+	vbolt.SetTargetSingleTerm(ctx.Tx, CodesByCreatorIdx, code, caller.Id)
+
+	// Initialize analytics
+	analytics := CodeAnalytics{
+		Code:             code,
+		TotalConnections: 0,
+		CurrentViewers:   0,
+		PeakViewers:      0,
+		PeakViewersAt:    time.Time{},
+		LastConnectionAt: time.Time{},
+	}
+	vbolt.Write(ctx.Tx, CodeAnalyticsBkt, code, &analytics)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log code generation
+	LogInfo(LogCategorySystem, "Access code generated", map[string]interface{}{
+		"code":      code,
+		"type":      req.Type,
+		"targetId":  req.TargetId,
+		"target":    targetName,
+		"studioId":  studioId,
+		"duration":  req.DurationMinutes,
+		"expiresAt": expiresAt,
+		"createdBy": caller.Id,
+		"userEmail": caller.Email,
+		"label":     req.Label,
+	})
+
+	// Build share URL
+	shareURL := fmt.Sprintf("/watch/%s", code)
+
+	resp.Success = true
+	resp.Code = code
+	resp.ExpiresAt = expiresAt
+	resp.ShareURL = shareURL
+	return
 }
