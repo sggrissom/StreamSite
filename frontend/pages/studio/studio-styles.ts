@@ -114,12 +114,20 @@ block(`
 .studio-stats {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
+  justify-content: space-between;
   margin-top: 1rem;
   padding-top: 1rem;
   border-top: 1px solid var(--border);
   font-size: 0.95rem;
   color: var(--muted);
+}
+`);
+
+block(`
+.studio-stats-text {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 `);
 
@@ -307,15 +315,6 @@ block(`
   font-size: 2rem;
   font-weight: 700;
   color: var(--hero);
-}
-`);
-
-// Studio Actions
-block(`
-.studio-actions {
-  display: flex;
-  gap: 1rem;
-  margin-bottom: 2.5rem;
 }
 `);
 
@@ -1055,24 +1054,9 @@ block(`
   }
 
   .studio-stats {
-    flex-wrap: wrap;
-  }
-
-  .studio-metadata {
-    grid-template-columns: 1fr;
-    gap: 1rem;
-  }
-
-  .metadata-card {
-    padding: 1.25rem;
-  }
-
-  .metadata-value {
-    font-size: 1.75rem;
-  }
-
-  .studio-actions {
     flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
   }
 
   .rooms-header {
@@ -1169,14 +1153,6 @@ block(`
 
   .room-actions {
     flex-direction: column;
-  }
-
-  .studio-actions {
-    width: 100%;
-  }
-
-  .studio-actions .btn {
-    width: 100%;
   }
 
   .modal-header {

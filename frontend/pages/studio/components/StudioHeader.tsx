@@ -2,6 +2,7 @@ import * as preact from "preact";
 import * as vlens from "vlens";
 import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
+import { Dropdown, DropdownItem } from "../../../components/Dropdown";
 
 type Studio = {
   id: number;
@@ -190,58 +191,62 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
 
         {/* Compact Stats */}
         <div className="studio-stats">
-          <span className="stat-item">
-            {rooms.length} / {studio.maxRooms} rooms
-          </span>
-          <span className="stat-separator">•</span>
-          <span className="stat-item">{members.length} members</span>
+          <div className="studio-stats-text">
+            <span className="stat-item">
+              {rooms.length} / {studio.maxRooms} rooms
+            </span>
+            <span className="stat-separator">•</span>
+            <span className="stat-item">{members.length} members</span>
+          </div>
+          {canManageRooms && (
+            <Dropdown
+              id={`studio-${studio.id}`}
+              trigger={
+                <button className="btn btn-secondary btn-sm">Actions ▼</button>
+              }
+              align="right"
+            >
+              <DropdownItem
+                onClick={() =>
+                  openEditStudioModal(
+                    editStudioModal,
+                    studio.id,
+                    studio.name,
+                    studio.description || "",
+                    studio.maxRooms,
+                  )
+                }
+              >
+                Edit Studio
+              </DropdownItem>
+              <DropdownItem
+                onClick={() => {
+                  document
+                    .querySelector(".members-section")
+                    ?.scrollIntoView({ behavior: "smooth" });
+                }}
+              >
+                Manage Members
+              </DropdownItem>
+              {myRole === server.StudioRoleOwner && (
+                <DropdownItem
+                  onClick={() =>
+                    openDeleteStudioModal(
+                      deleteStudioModal,
+                      studio.id,
+                      studio.name,
+                      true,
+                    )
+                  }
+                  variant="danger"
+                >
+                  Delete Studio
+                </DropdownItem>
+              )}
+            </Dropdown>
+          )}
         </div>
       </div>
-
-      {/* Action Buttons */}
-      {canManageRooms && (
-        <div className="studio-actions">
-          <button
-            className="btn btn-secondary"
-            onClick={() =>
-              openEditStudioModal(
-                editStudioModal,
-                studio.id,
-                studio.name,
-                studio.description || "",
-                studio.maxRooms,
-              )
-            }
-          >
-            Edit Studio
-          </button>
-          {myRole === server.StudioRoleOwner && (
-            <button
-              className="btn btn-danger"
-              onClick={() =>
-                openDeleteStudioModal(
-                  deleteStudioModal,
-                  studio.id,
-                  studio.name,
-                  true,
-                )
-              }
-            >
-              Delete Studio
-            </button>
-          )}
-          <button
-            className="btn btn-secondary"
-            onClick={() => {
-              document
-                .querySelector(".members-section")
-                ?.scrollIntoView({ behavior: "smooth" });
-            }}
-          >
-            Manage Members
-          </button>
-        </div>
-      )}
 
       {/* Edit Studio Modal */}
       <Modal
