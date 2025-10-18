@@ -2,6 +2,7 @@ import * as preact from "preact";
 import * as vlens from "vlens";
 import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
+import { Dropdown, DropdownItem } from "../../../components/Dropdown";
 
 type Studio = {
   id: number;
@@ -398,25 +399,30 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                     {room.isActive ? "Watch Stream" : "View Stream"}
                   </a>
                   {canManageRooms && (
-                    <>
-                      <button
-                        className="btn btn-secondary btn-sm"
+                    <Dropdown
+                      id={room.id}
+                      trigger={
+                        <button className="btn btn-secondary btn-sm">
+                          Actions ▼
+                        </button>
+                      }
+                      align="right"
+                    >
+                      <DropdownItem
                         onClick={() =>
                           openStreamKeyModal(streamKeyModal, room.id, room.name)
                         }
                       >
                         View Stream Key
-                      </button>
-                      <button
-                        className="btn btn-secondary btn-sm"
+                      </DropdownItem>
+                      <DropdownItem
                         onClick={() =>
                           openEditRoomModal(editRoomModal, room.id, room.name)
                         }
                       >
-                        Edit
-                      </button>
-                      <button
-                        className="btn btn-danger btn-sm"
+                        Edit Room
+                      </DropdownItem>
+                      <DropdownItem
                         onClick={() =>
                           openDeleteRoomModal(
                             deleteRoomModal,
@@ -425,10 +431,11 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                             room.isActive,
                           )
                         }
+                        variant="danger"
                       >
-                        Delete
-                      </button>
-                    </>
+                        Delete Room
+                      </DropdownItem>
+                    </Dropdown>
                   )}
                 </div>
               </div>

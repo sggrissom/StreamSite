@@ -262,7 +262,7 @@ export function MembersSection(
             <p>No members in this studio.</p>
           </div>
         ) : (
-          <div className="members-table-container">
+          <div className="members-table-wrapper">
             <table className="members-table">
               <thead>
                 <tr>
@@ -285,8 +285,8 @@ export function MembersSection(
                     </td>
                     <td>{new Date(member.joinedAt).toLocaleDateString()}</td>
                     {canManageRooms && (
-                      <td className="members-actions">
-                        {member.role !== server.StudioRoleOwner && (
+                      <td className="table-actions">
+                        {member.role !== server.StudioRoleOwner ? (
                           <>
                             <button
                               className="btn btn-secondary btn-sm"
@@ -316,9 +316,8 @@ export function MembersSection(
                               Remove
                             </button>
                           </>
-                        )}
-                        {member.role === 3 && (
-                          <span className="member-owner-label">Owner</span>
+                        ) : (
+                          <span className="table-owner-label">Owner</span>
                         )}
                       </td>
                     )}

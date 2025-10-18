@@ -164,26 +164,12 @@ async function confirmDeleteStudio(modal: DeleteStudioModal) {
   window.location.href = "/studios";
 }
 
-type RoleGuideState = {
-  isExpanded: boolean;
-};
-
-const useRoleGuide = vlens.declareHook(
-  (): RoleGuideState => ({
-    isExpanded: false,
-  }),
-);
-
-function toggleRoleGuide(state: RoleGuideState) {
-  state.isExpanded = !state.isExpanded;
-  vlens.scheduleRedraw();
-}
-
 export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
   const { studio, myRole, myRoleName, rooms, members, canManageRooms } = props;
   const editStudioModal = useEditStudioModal();
   const deleteStudioModal = useDeleteStudioModal();
-  const roleGuide = useRoleGuide();
+
+  const activeRooms = rooms.filter((r) => r.isActive).length;
 
   return (
     <>
@@ -191,66 +177,24 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
       <div className="studio-header">
         <div className="studio-header-main">
           <h1 className="studio-title">{studio.name}</h1>
-          <span className={getRoleBadgeClass(myRole)}>{myRoleName}</span>
+          <div className="studio-badges">
+            <span className={getRoleBadgeClass(myRole)}>{myRoleName}</span>
+            {activeRooms > 0 && (
+              <span className="active-badge">🔴 {activeRooms} Live</span>
+            )}
+          </div>
         </div>
         {studio.description && (
           <p className="studio-description">{studio.description}</p>
         )}
-      </div>
 
-      {/* Role Capabilities Guide */}
-      <div className="role-guide">
-        <button
-          className="role-guide-toggle"
-          onClick={() => toggleRoleGuide(roleGuide)}
-        >
-          {roleGuide.isExpanded ? "▼" : "▶"} Role Capabilities
-        </button>
-        {roleGuide.isExpanded && (
-          <div className="role-guide-content">
-            <div className="role-capability">
-              <span className="studio-role role-0">Viewer</span>
-              <span className="capability-desc">Can watch streams</span>
-            </div>
-            <div className="role-capability">
-              <span className="studio-role role-1">Member</span>
-              <span className="capability-desc">Can stream and watch</span>
-            </div>
-            <div className="role-capability">
-              <span className="studio-role role-2">Admin</span>
-              <span className="capability-desc">
-                Can manage rooms, members, and stream
-              </span>
-            </div>
-            <div className="role-capability">
-              <span className="studio-role role-3">Owner</span>
-              <span className="capability-desc">
-                Full control including delete studio
-              </span>
-            </div>
-          </div>
-        )}
-      </div>
-
-      {/* Studio Metadata */}
-      <div className="studio-metadata">
-        <div className="metadata-card">
-          <div className="metadata-label">Max Rooms</div>
-          <div className="metadata-value">{studio.maxRooms}</div>
-        </div>
-        <div className="metadata-card">
-          <div className="metadata-label">Total Rooms</div>
-          <div className="metadata-value">{rooms.length}</div>
-        </div>
-        <div className="metadata-card">
-          <div className="metadata-label">Active Rooms</div>
-          <div className="metadata-value">
-            {rooms.filter((r) => r.isActive).length}
-          </div>
-        </div>
-        <div className="metadata-card">
-          <div className="metadata-label">Members</div>
-          <div className="metadata-value">{members.length}</div>
+        {/* Compact Stats */}
+        <div className="studio-stats">
+          <span className="stat-item">
+            {rooms.length} / {studio.maxRooms} rooms
+          </span>
+          <span className="stat-separator">•</span>
+          <span className="stat-item">{members.length} members</span>
         </div>
       </div>
 

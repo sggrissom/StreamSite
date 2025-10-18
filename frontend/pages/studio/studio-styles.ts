@@ -64,6 +64,7 @@ block(`
 .studio-header-main {
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: 1rem;
   margin-bottom: 0.75rem;
 }
@@ -75,7 +76,28 @@ block(`
   font-weight: 700;
   color: var(--hero);
   margin: 0;
-  flex: 1;
+}
+`);
+
+block(`
+.studio-badges {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-shrink: 0;
+}
+`);
+
+block(`
+.active-badge {
+  padding: 0.4rem 1rem;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 600;
+  background: #fee;
+  color: #c00;
+  white-space: nowrap;
+  animation: pulse 2s ease-in-out infinite;
 }
 `);
 
@@ -83,8 +105,33 @@ block(`
 .studio-description {
   font-size: 1.1rem;
   color: var(--muted);
-  margin: 0;
+  margin: 0.75rem 0;
   line-height: 1.6;
+}
+`);
+
+block(`
+.studio-stats {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+  font-size: 0.95rem;
+  color: var(--muted);
+}
+`);
+
+block(`
+.stat-item {
+  font-weight: 500;
+}
+`);
+
+block(`
+.stat-separator {
+  color: var(--border);
 }
 `);
 
@@ -486,6 +533,179 @@ block(`
 }
 `);
 
+// Members Section
+block(`
+.members-section {
+  margin-top: 3rem;
+}
+`);
+
+block(`
+.members-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 1.5rem;
+}
+`);
+
+block(`
+.members-empty {
+  padding: 2rem;
+  text-align: center;
+  background: var(--surface);
+  border: 2px dashed var(--border);
+  border-radius: 12px;
+  color: var(--muted);
+}
+`);
+
+block(`
+.members-table-wrapper {
+  overflow-x: auto;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+`);
+
+block(`
+.members-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+`);
+
+block(`
+.members-table thead {
+  background: var(--bg);
+  border-bottom: 2px solid var(--border);
+}
+`);
+
+block(`
+.members-table th {
+  padding: 1rem;
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.9rem;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+`);
+
+block(`
+.members-table td {
+  padding: 1rem;
+  border-bottom: 1px solid var(--border);
+  color: var(--text);
+}
+`);
+
+block(`
+.members-table tbody tr:last-child td {
+  border-bottom: none;
+}
+`);
+
+block(`
+.members-table tbody tr:hover {
+  background: var(--bg);
+}
+`);
+
+block(`
+.table-actions {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+}
+`);
+
+block(`
+.table-owner-label {
+  font-size: 0.9rem;
+  color: var(--muted);
+  font-style: italic;
+}
+`);
+
+// Dropdown Component
+block(`
+.dropdown {
+  position: relative;
+  display: inline-block;
+}
+`);
+
+block(`
+.dropdown-trigger {
+  cursor: pointer;
+}
+`);
+
+block(`
+.dropdown-menu {
+  position: absolute;
+  top: 100%;
+  margin-top: 0.5rem;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  min-width: 180px;
+  z-index: 100;
+  overflow: hidden;
+}
+`);
+
+block(`
+.dropdown-menu-left {
+  left: 0;
+}
+`);
+
+block(`
+.dropdown-menu-right {
+  right: 0;
+}
+`);
+
+block(`
+.dropdown-item {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  text-align: left;
+  border: none;
+  background: transparent;
+  color: var(--text);
+  font-size: 0.9rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.2s ease;
+  display: block;
+}
+`);
+
+block(`
+.dropdown-item:hover {
+  background: var(--bg);
+}
+`);
+
+block(`
+.dropdown-item-danger {
+  color: #dc2626;
+}
+`);
+
+block(`
+.dropdown-item-danger:hover {
+  background: #fee;
+}
+`);
+
 // Error State
 block(`
 .error-state {
@@ -829,6 +1049,15 @@ block(`
     gap: 0.75rem;
   }
 
+  .studio-badges {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .studio-stats {
+    flex-wrap: wrap;
+  }
+
   .studio-metadata {
     grid-template-columns: 1fr;
     gap: 1rem;
@@ -859,6 +1088,27 @@ block(`
 
   .section-title {
     font-size: 1.5rem;
+  }
+
+  .members-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 1rem;
+  }
+
+  .members-table-wrapper {
+    overflow-x: auto;
+  }
+
+  .members-table th,
+  .members-table td {
+    padding: 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .table-actions {
+    flex-direction: column;
+    align-items: flex-start;
   }
 
   .modal-content {
