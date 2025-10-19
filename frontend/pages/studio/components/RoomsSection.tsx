@@ -3,6 +3,7 @@ import * as vlens from "vlens";
 import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
 import { Dropdown, DropdownItem } from "../../../components/Dropdown";
+import qrcode from "qrcode-generator";
 
 type Studio = {
   id: number;
@@ -340,6 +341,7 @@ type GenerateCodeModal = {
   label: string;
   generatedCode: string;
   shareUrl: string;
+  qrDataUrl: string;
   showSuccess: boolean;
   copyCodeSuccess: boolean;
   copyUrlSuccess: boolean;
@@ -357,6 +359,7 @@ const useGenerateCodeModal = vlens.declareHook(
     label: "",
     generatedCode: "",
     shareUrl: "",
+    qrDataUrl: "",
     showSuccess: false,
     copyCodeSuccess: false,
     copyUrlSuccess: false,
@@ -377,6 +380,7 @@ function openGenerateCodeModal(
   modal.label = "";
   modal.generatedCode = "";
   modal.shareUrl = "";
+  modal.qrDataUrl = "";
   modal.showSuccess = false;
   modal.copyCodeSuccess = false;
   modal.copyUrlSuccess = false;
@@ -440,7 +444,19 @@ async function submitGenerateCode(modal: GenerateCodeModal) {
     window.location.hostname === "localhost"
       ? "localhost:3000"
       : "stream.grissom.zone";
-  modal.shareUrl = `http://${hostname}/watch?code=${resp.code}`;
+  modal.shareUrl = `http://${hostname}/watch/${resp.code}`;
+
+  // Generate QR code for the share URL
+  try {
+    const qr = qrcode(0, "M"); // Type number (0 = auto), error correction level 'M'
+    qr.addData(modal.shareUrl);
+    qr.make();
+    modal.qrDataUrl = qr.createDataURL(4); // Cell size in pixels
+  } catch (qrError) {
+    console.error("Failed to generate QR code:", qrError);
+    modal.qrDataUrl = ""; // Continue without QR code if it fails
+  }
+
   modal.showSuccess = true;
   vlens.scheduleRedraw();
 }
@@ -473,6 +489,18 @@ async function copyShareUrl(modal: GenerateCodeModal) {
     modal.error = "Failed to copy to clipboard";
     vlens.scheduleRedraw();
   }
+}
+
+function downloadQRCode(modal: GenerateCodeModal) {
+  if (!modal.qrDataUrl) return;
+
+  // Create a temporary link element to trigger download
+  const link = document.createElement("a");
+  link.href = modal.qrDataUrl;
+  link.download = `access-code-${modal.generatedCode}.png`;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
 }
 
 // ===== Component =====
@@ -917,6 +945,22 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
               </small>
             </div>
 
+            {generateCodeModal.qrDataUrl && (
+              <div className="form-group">
+                <label>QR Code</label>
+                <div style="text-align: center; padding: 1rem; background: white; border: 1px solid var(--border); border-radius: 8px;">
+                  <img
+                    src={generateCodeModal.qrDataUrl}
+                    alt="QR Code for access"
+                    style="max-width: 256px; width: 100%; height: auto;"
+                  />
+                </div>
+                <small className="form-help">
+                  Scan this QR code to quickly access the stream
+                </small>
+              </div>
+            )}
+
             <div className="stream-key-actions">
               <button
                 className="btn btn-primary"
@@ -936,6 +980,14 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                   ? "✓ Copied URL!"
                   : "Copy URL"}
               </button>
+              {generateCodeModal.qrDataUrl && (
+                <button
+                  className="btn btn-secondary"
+                  onClick={() => downloadQRCode(generateCodeModal)}
+                >
+                  Download QR Code
+                </button>
+              )}
             </div>
           </div>
         ) : (

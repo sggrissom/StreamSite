@@ -1,6 +1,7 @@
 {
   "dependencies": {
     "preact": "^10.26.9",
+    "qrcode-generator": "^1.4.4",
     "vlens": "^0.1.6"
   },
   "devDependencies": {
