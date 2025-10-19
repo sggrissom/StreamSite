@@ -13,9 +13,10 @@ import (
 
 // SSEClient represents a single SSE connection
 type SSEClient struct {
-	RoomID int
-	Writer http.ResponseWriter
-	Done   chan bool
+	RoomID       int
+	Writer       http.ResponseWriter
+	Done         chan bool
+	SessionToken string // Code session token (empty for JWT authenticated users)
 }
 
 // SSEManager manages all active SSE connections
@@ -226,9 +227,20 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 			Done:   make(chan bool),
 		}
 
+		// If this is a code session, store the session token for cleanup
+		if authCtx.IsCodeAuth {
+			client.SessionToken = authCtx.CodeSession.Token
+		}
+
 		// Register client
 		sseManager.AddClient(roomID, client)
-		defer sseManager.RemoveClient(roomID, client)
+		defer func() {
+			// Decrement viewer count for code sessions on disconnect
+			if client.SessionToken != "" {
+				DecrementCodeViewerCount(db, client.SessionToken)
+			}
+			sseManager.RemoveClient(roomID, client)
+		}()
 
 		// Send initial status immediately
 		initialEvent := map[string]interface{}{

@@ -404,6 +404,56 @@ func AuthenticateCodeSession(r *http.Request, tx *vbolt.Tx) (CodeSession, Access
 	return session, code, true, ""
 }
 
+// DecrementCodeViewerCount decrements the CurrentViewers count for a code session
+// This should be called when SSE clients disconnect to accurately track active viewers
+func DecrementCodeViewerCount(db *vbolt.DB, sessionToken string) error {
+	if sessionToken == "" {
+		return nil // Not a code session, nothing to decrement
+	}
+
+	var codeStr string
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Load the session to get the associated code
+		var session CodeSession
+		vbolt.Read(tx, CodeSessionsBkt, sessionToken, &session)
+
+		if session.Token == "" {
+			// Session not found, nothing to decrement
+			return
+		}
+
+		codeStr = session.Code
+
+		// Load the analytics for this code
+		var analytics CodeAnalytics
+		vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &analytics)
+
+		// Decrement CurrentViewers (with bounds check)
+		if analytics.CurrentViewers > 0 {
+			analytics.CurrentViewers--
+			vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &analytics)
+
+			LogDebug(LogCategorySystem, "Decremented viewer count for code session", map[string]interface{}{
+				"code":           session.Code,
+				"currentViewers": analytics.CurrentViewers,
+				"sessionToken":   sessionToken,
+			})
+		}
+
+		vbolt.TxCommit(tx)
+	})
+
+	if codeStr != "" {
+		LogInfo(LogCategorySystem, "Code session disconnected", map[string]interface{}{
+			"code":         codeStr,
+			"sessionToken": sessionToken,
+		})
+	}
+
+	return nil
+}
+
 // API Procedures
 
 // validateAccessCodeHandler is an HTTP handler that validates an access code

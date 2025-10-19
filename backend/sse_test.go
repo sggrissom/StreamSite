@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 )
 
@@ -550,6 +551,420 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		// Should return 403 Forbidden
 		if w.Code != http.StatusForbidden {
 			t.Errorf("Expected status 403 for no permission, got %d", w.Code)
+		}
+	})
+}
+
+func TestViewerCountTracking(t *testing.T) {
+	t.Run("ViewerCountIncrementsOnConnect", func(t *testing.T) {
+		db := setupTestSSEDB(t)
+		defer db.Close()
+
+		originalDb := appDb
+		appDb = db
+		defer func() { appDb = originalDb }()
+
+		// Create room, code, and session
+		var sessionToken string
+		var code string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			studio := Studio{
+				Id:       vbolt.NextIntId(tx, StudiosBkt),
+				Name:     "Test Studio",
+				MaxRooms: 5,
+				OwnerId:  1,
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create access code
+			codeVal, _ := generateUniqueCodeInDB(tx)
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Create session
+			token, _ := generateSessionToken()
+			sessionToken = token
+			session := CodeSession{
+				Token:       sessionToken,
+				Code:        accessCode.Code,
+				ConnectedAt: time.Now(),
+				LastSeen:    time.Now(),
+			}
+			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code,
+				CurrentViewers:   1, // One session created
+				TotalConnections: 1,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Verify initial viewer count
+		var initialViewers int
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			initialViewers = analytics.CurrentViewers
+		})
+
+		if initialViewers != 1 {
+			t.Errorf("Expected initial viewers 1, got %d", initialViewers)
+		}
+	})
+
+	t.Run("ViewerCountDecrementsOnDisconnect", func(t *testing.T) {
+		db := setupTestSSEDB(t)
+		defer db.Close()
+
+		originalDb := appDb
+		appDb = db
+		defer func() { appDb = originalDb }()
+
+		// Create room, code, and session
+		var sessionToken string
+		var code string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			studio := Studio{
+				Id:       vbolt.NextIntId(tx, StudiosBkt),
+				Name:     "Test Studio",
+				MaxRooms: 5,
+				OwnerId:  1,
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create access code
+			codeVal, _ := generateUniqueCodeInDB(tx)
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Create session
+			token, _ := generateSessionToken()
+			sessionToken = token
+			session := CodeSession{
+				Token:       sessionToken,
+				Code:        accessCode.Code,
+				ConnectedAt: time.Now(),
+				LastSeen:    time.Now(),
+			}
+			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+
+			// Set initial analytics with 3 viewers
+			analytics := CodeAnalytics{
+				Code:             code,
+				CurrentViewers:   3,
+				TotalConnections: 3,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Verify initial viewer count
+		var beforeViewers int
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			beforeViewers = analytics.CurrentViewers
+		})
+
+		if beforeViewers != 3 {
+			t.Fatalf("Expected initial viewers 3, got %d", beforeViewers)
+		}
+
+		// Create SSE handler and connect with timeout context
+		handler := MakeStreamRoomEventsHandler(db)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		req := httptest.NewRequest("GET", "/sse/room?roomId=1", nil).WithContext(ctx)
+		req.AddCookie(&http.Cookie{
+			Name:  "codeAuthToken",
+			Value: sessionToken,
+		})
+
+		w := httptest.NewRecorder()
+
+		// Call handler (will disconnect after timeout)
+		handler(w, req)
+
+		// Verify viewer count was decremented after disconnect
+		var afterViewers int
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			afterViewers = analytics.CurrentViewers
+		})
+
+		if afterViewers != 2 {
+			t.Errorf("Expected viewers to decrement to 2, got %d", afterViewers)
+		}
+	})
+
+	t.Run("ViewerLimitEnforcement", func(t *testing.T) {
+		db := setupTestSSEDB(t)
+		defer db.Close()
+
+		originalDb := appDb
+		appDb = db
+		defer func() { appDb = originalDb }()
+
+		// Create room and code with MaxViewers=2
+		var code string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			studio := Studio{
+				Id:       vbolt.NextIntId(tx, StudiosBkt),
+				Name:     "Test Studio",
+				MaxRooms: 5,
+				OwnerId:  1,
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create access code with MaxViewers=2
+			codeVal, _ := generateUniqueCodeInDB(tx)
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 2, // Limit of 2 viewers
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code: code,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Validate code successfully for first viewer
+		var resp1 ValidateAccessCodeResponse
+		var err1 error
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			resp1, err1 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+		})
+		if err1 != nil || !resp1.Success {
+			t.Fatalf("First validation should succeed: %v, %v", err1, resp1.Error)
+		}
+
+		// Validate code successfully for second viewer
+		var resp2 ValidateAccessCodeResponse
+		var err2 error
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			resp2, err2 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+		})
+		if err2 != nil || !resp2.Success {
+			t.Fatalf("Second validation should succeed: %v, %v", err2, resp2.Error)
+		}
+
+		// Verify current viewers is 2
+		var currentViewers int
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			currentViewers = analytics.CurrentViewers
+		})
+
+		if currentViewers != 2 {
+			t.Errorf("Expected 2 current viewers, got %d", currentViewers)
+		}
+
+		// Third validation should fail due to capacity
+		var resp3 ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			resp3, _ = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+		})
+		if resp3.Success {
+			t.Error("Third validation should fail (at capacity)")
+		}
+		if resp3.Error == "" {
+			t.Error("Expected error message about capacity")
+		}
+	})
+
+	t.Run("ViewerCountIgnoresJWTUsers", func(t *testing.T) {
+		db := setupTestSSEDB(t)
+		defer db.Close()
+
+		originalDb := appDb
+		originalKey := jwtKey
+		appDb = db
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
+
+		// Create user, studio, membership, and room
+		var testUser User
+		var code string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			testUser = User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "test@example.com",
+				Name:     "Test User",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
+			vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
+
+			// Create studio
+			studio := Studio{
+				Id:       vbolt.NextIntId(tx, StudiosBkt),
+				Name:     "Test Studio",
+				MaxRooms: 5,
+				OwnerId:  testUser.Id,
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			// Create membership
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   testUser.Id,
+				StudioId: studio.Id,
+				Role:     StudioRoleAdmin,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, testUser.Id)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studio.Id)
+
+			// Create room
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create access code
+			codeVal, _ := generateUniqueCodeInDB(tx)
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  testUser.Id,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code: code,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Create JWT token
+		testToken, _ := createTestToken(testUser.Email)
+
+		// Create SSE handler and connect with JWT (not code session)
+		handler := MakeStreamRoomEventsHandler(db)
+		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+		defer cancel()
+
+		req := httptest.NewRequest("GET", "/sse/room?roomId=1", nil).WithContext(ctx)
+		req.AddCookie(&http.Cookie{
+			Name:  "authToken",
+			Value: testToken,
+		})
+
+		w := httptest.NewRecorder()
+
+		// Call handler (JWT user, not code session)
+		handler(w, req)
+
+		// Verify viewer count for the code is still 0 (JWT users don't count)
+		var viewers int
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			viewers = analytics.CurrentViewers
+		})
+
+		if viewers != 0 {
+			t.Errorf("Expected 0 viewers for code (JWT users shouldn't count), got %d", viewers)
 		}
 	})
 }
