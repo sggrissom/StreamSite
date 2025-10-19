@@ -1494,3 +1494,443 @@ func TestGetCodeStreamAccess(t *testing.T) {
 		}
 	})
 }
+
+func TestRevokeAccessCode(t *testing.T) {
+	db := setupTestCodeDB(t)
+	defer db.Close()
+
+	// Setup test data
+	var adminUser, regularUser User
+	var studio Studio
+	var room Room
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create admin user
+		adminUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Admin User",
+			Email:    "admin@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+		vbolt.Write(tx, EmailBkt, adminUser.Email, &adminUser.Id)
+
+		// Create regular user (viewer role)
+		regularUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Regular User",
+			Email:    "viewer@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, regularUser.Id, &regularUser)
+		vbolt.Write(tx, EmailBkt, regularUser.Email, &regularUser.Id)
+
+		// Create studio
+		studio = Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "A test studio",
+			MaxRooms:    5,
+			OwnerId:     adminUser.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership for admin (Admin role)
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create studio membership for regular user (Viewer role)
+		viewerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		viewerMembership := StudioMembership{
+			UserId:   regularUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleViewer,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, viewerMembershipId, &viewerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, viewerMembershipId, regularUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, viewerMembershipId, studio.Id)
+
+		// Create room
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Revoke non-existent code
+	t.Run("NonExistentCode", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp RevokeAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := RevokeAccessCodeRequest{
+				Code: "00000",
+			}
+			resp, _ = RevokeAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when revoking non-existent code")
+		}
+		if resp.Error != "Access code not found" {
+			t.Errorf("Expected 'Access code not found' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 2: Unauthenticated revocation attempt
+	t.Run("UnauthenticatedRequest", func(t *testing.T) {
+		// First create a code to revoke
+		var code string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			accessCode := AccessCode{
+				Code:       "11111",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Test Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+			code = accessCode.Code
+			vbolt.TxCommit(tx)
+		})
+
+		var resp RevokeAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: "", // No token
+			}
+
+			req := RevokeAccessCodeRequest{
+				Code: code,
+			}
+			resp, _ = RevokeAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when revoking without authentication")
+		}
+		if resp.Error != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 3: Permission denied (viewer trying to revoke)
+	t.Run("PermissionDenied", func(t *testing.T) {
+		// Create a code
+		var code string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			accessCode := AccessCode{
+				Code:       "22222",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Test Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+			code = accessCode.Code
+			vbolt.TxCommit(tx)
+		})
+
+		// Try to revoke as regular viewer
+		viewerToken, err := createTestToken(regularUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp RevokeAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: viewerToken,
+			}
+
+			req := RevokeAccessCodeRequest{
+				Code: code,
+			}
+			resp, _ = RevokeAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when viewer tries to revoke code")
+		}
+		if resp.Error != "Admin permission required" {
+			t.Errorf("Expected 'Admin permission required' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 4: Successfully revoke valid code with active sessions
+	t.Run("SuccessfulRevocation", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		// Create a code using the procedure
+		var code string
+		var sessionToken1, sessionToken2 string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GenerateAccessCodeRequest{
+				Type:            int(CodeTypeRoom),
+				TargetId:        room.Id,
+				DurationMinutes: 120,
+				MaxViewers:      0,
+				Label:           "Code to be revoked",
+			}
+			resp, _ := GenerateAccessCode(ctx, req)
+			if !resp.Success {
+				t.Fatalf("Failed to generate code: %s", resp.Error)
+			}
+			code = resp.Code
+		})
+
+		// Create two active sessions (each in separate transaction)
+		// Session 1
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: code}
+			resp, _ := ValidateAccessCode(ctx, req)
+			if !resp.Success {
+				t.Fatalf("Failed to validate code for session 1: %s", resp.Error)
+			}
+			sessionToken1 = resp.SessionToken
+		})
+
+		// Session 2
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: code}
+			resp, _ := ValidateAccessCode(ctx, req)
+			if !resp.Success {
+				t.Fatalf("Failed to validate code for session 2: %s", resp.Error)
+			}
+			sessionToken2 = resp.SessionToken
+		})
+
+		// Verify sessions exist and analytics show 2 current viewers
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session1 CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, sessionToken1, &session1)
+			if session1.Token == "" {
+				t.Errorf("Session 1 should exist before revocation")
+			}
+
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			if analytics.CurrentViewers != 2 {
+				t.Errorf("Expected 2 current viewers, got: %d", analytics.CurrentViewers)
+			}
+			if analytics.TotalConnections != 2 {
+				t.Errorf("Expected 2 total connections, got: %d", analytics.TotalConnections)
+			}
+		})
+
+		// Revoke the code
+		var revokeResp RevokeAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := RevokeAccessCodeRequest{Code: code}
+			revokeResp, _ = RevokeAccessCode(ctx, req)
+		})
+
+		if !revokeResp.Success {
+			t.Fatalf("Expected successful revocation, got error: %s", revokeResp.Error)
+		}
+		if revokeResp.SessionsKilled != 2 {
+			t.Errorf("Expected 2 sessions killed, got: %d", revokeResp.SessionsKilled)
+		}
+
+		// Verify code is revoked
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var accessCode AccessCode
+			vbolt.Read(tx, AccessCodesBkt, code, &accessCode)
+			if !accessCode.IsRevoked {
+				t.Errorf("Code should be marked as revoked")
+			}
+		})
+
+		// Verify sessions are deleted
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session1 CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, sessionToken1, &session1)
+			if session1.Token != "" {
+				t.Errorf("Session 1 should be deleted after revocation")
+			}
+
+			var session2 CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, sessionToken2, &session2)
+			if session2.Token != "" {
+				t.Errorf("Session 2 should be deleted after revocation")
+			}
+		})
+
+		// Verify analytics updated (CurrentViewers should be 0)
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			if analytics.CurrentViewers != 0 {
+				t.Errorf("Expected 0 current viewers after revocation, got: %d", analytics.CurrentViewers)
+			}
+			// TotalConnections should remain at 2
+			if analytics.TotalConnections != 2 {
+				t.Errorf("Expected 2 total connections to remain, got: %d", analytics.TotalConnections)
+			}
+		})
+
+		// Verify session index is cleared
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var sessionTokens []string
+			vbolt.ReadTermTargets(tx, SessionsByCodeIdx, code, &sessionTokens, vbolt.Window{})
+			if len(sessionTokens) != 0 {
+				t.Errorf("Expected 0 sessions in index after revocation, got: %d", len(sessionTokens))
+			}
+		})
+	})
+
+	// Test 5: Attempt to revoke already-revoked code
+	t.Run("AlreadyRevoked", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		// Create and immediately revoke a code
+		var code string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			accessCode := AccessCode{
+				Code:       "33333",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  true, // Already revoked
+				Label:      "Already revoked code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+			code = accessCode.Code
+			vbolt.TxCommit(tx)
+		})
+
+		// Try to revoke again
+		var resp RevokeAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := RevokeAccessCodeRequest{Code: code}
+			resp, _ = RevokeAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when revoking already-revoked code")
+		}
+		if resp.Error != "Access code is already revoked" {
+			t.Errorf("Expected 'Access code is already revoked' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 6: Revoke studio code
+	t.Run("RevokeStudioCode", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		// Create a studio code
+		var code string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GenerateAccessCodeRequest{
+				Type:            int(CodeTypeStudio),
+				TargetId:        studio.Id,
+				DurationMinutes: 120,
+				MaxViewers:      0,
+				Label:           "Studio code to revoke",
+			}
+			resp, _ := GenerateAccessCode(ctx, req)
+			if !resp.Success {
+				t.Fatalf("Failed to generate studio code: %s", resp.Error)
+			}
+			code = resp.Code
+		})
+
+		// Revoke the studio code
+		var revokeResp RevokeAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := RevokeAccessCodeRequest{Code: code}
+			revokeResp, _ = RevokeAccessCode(ctx, req)
+		})
+
+		if !revokeResp.Success {
+			t.Fatalf("Expected successful revocation of studio code, got error: %s", revokeResp.Error)
+		}
+
+		// Verify code is revoked
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var accessCode AccessCode
+			vbolt.Read(tx, AccessCodesBkt, code, &accessCode)
+			if !accessCode.IsRevoked {
+				t.Errorf("Studio code should be marked as revoked")
+			}
+		})
+	})
+}

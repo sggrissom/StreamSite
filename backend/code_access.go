@@ -234,6 +234,16 @@ type GetCodeStreamAccessResponse struct {
 	Message     string    `json:"message,omitempty"`     // Human-readable status
 }
 
+type RevokeAccessCodeRequest struct {
+	Code string `json:"code"` // 5-digit code to revoke
+}
+
+type RevokeAccessCodeResponse struct {
+	Success        bool   `json:"success"`
+	Error          string `json:"error,omitempty"`
+	SessionsKilled int    `json:"sessionsKilled,omitempty"` // Number of active sessions terminated
+}
+
 // Helper functions
 
 // codeExistsInDB checks if a code already exists in the database
@@ -274,6 +284,8 @@ func generateSessionToken() (string, error) {
 func RegisterCodeAccessMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, GenerateAccessCode)
 	vbeam.RegisterProc(app, ValidateAccessCode)
+	vbeam.RegisterProc(app, GetCodeStreamAccess)
+	vbeam.RegisterProc(app, RevokeAccessCode)
 }
 
 // GenerateAccessCode creates a new temporary access code for room or studio viewing
@@ -636,5 +648,104 @@ func GetCodeStreamAccess(ctx *vbeam.Context, req GetCodeStreamAccessRequest) (re
 	resp.ExpiresAt = accessCode.ExpiresAt
 	resp.GracePeriod = inGracePeriod
 	resp.Message = "Access granted"
+	return
+}
+
+// RevokeAccessCode revokes an access code and terminates all active sessions
+func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp RevokeAccessCodeResponse, err error) {
+	// Look up the access code
+	var accessCode AccessCode
+	vbolt.Read(ctx.Tx, AccessCodesBkt, req.Code, &accessCode)
+
+	if accessCode.Code == "" {
+		resp.Success = false
+		resp.Error = "Access code not found"
+		return
+	}
+
+	// Check if already revoked
+	if accessCode.IsRevoked {
+		resp.Success = false
+		resp.Error = "Access code is already revoked"
+		return
+	}
+
+	// Determine studio ID for permission check
+	var studioId int
+	if accessCode.Type == CodeTypeRoom {
+		room := GetRoom(ctx.Tx, accessCode.TargetId)
+		if room.Id == 0 {
+			resp.Success = false
+			resp.Error = "Room not found"
+			return
+		}
+		studioId = room.StudioId
+	} else {
+		studioId = accessCode.TargetId
+	}
+
+	// Check admin permission
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleAdmin) {
+		resp.Success = false
+		resp.Error = "Admin permission required"
+		return
+	}
+
+	vbeam.UseWriteTx(ctx)
+
+	// Mark code as revoked
+	accessCode.IsRevoked = true
+	vbolt.Write(ctx.Tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+	// Find all active sessions for this code
+	var sessionTokens []string
+	vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIdx, accessCode.Code, &sessionTokens, vbolt.Window{})
+
+	// Delete each session and update analytics
+	var analytics CodeAnalytics
+	vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+	sessionsKilled := 0
+	for _, token := range sessionTokens {
+		// Delete session
+		var emptySession CodeSession
+		vbolt.Write(ctx.Tx, CodeSessionsBkt, token, &emptySession)
+
+		// Remove from index
+		vbolt.SetTargetSingleTerm(ctx.Tx, SessionsByCodeIdx, token, "")
+
+		sessionsKilled++
+	}
+
+	// Update analytics to reflect terminated sessions
+	if analytics.CurrentViewers >= sessionsKilled {
+		analytics.CurrentViewers -= sessionsKilled
+	} else {
+		analytics.CurrentViewers = 0
+	}
+	vbolt.Write(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Log revocation
+	LogInfo(LogCategorySystem, "Access code revoked", map[string]interface{}{
+		"code":           accessCode.Code,
+		"type":           accessCode.Type,
+		"targetId":       accessCode.TargetId,
+		"studioId":       studioId,
+		"sessionsKilled": sessionsKilled,
+		"revokedBy":      caller.Id,
+		"userEmail":      caller.Email,
+	})
+
+	resp.Success = true
+	resp.SessionsKilled = sessionsKilled
 	return
 }
