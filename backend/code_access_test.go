@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"fmt"
 	"stream/cfg"
 	"testing"
 	"time"
@@ -538,5 +539,289 @@ func TestGenerateAccessCode(t *testing.T) {
 		if resp.Error != "Duration must be greater than 0" {
 			t.Errorf("Expected duration error, got: %s", resp.Error)
 		}
+	})
+}
+
+// TestValidateAccessCode tests the ValidateAccessCode procedure
+func TestValidateAccessCode(t *testing.T) {
+	db := setupTestCodeDB(t)
+	defer db.Close()
+
+	// Setup: Create a valid code first
+	var validCode, expiredCode, revokedCode, capacityCode AccessCode
+	var testRoom Room
+	var testStudio Studio
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create studio
+		testStudio = Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "Test",
+			MaxRooms:    5,
+			OwnerId:     1,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, testStudio.Id, &testStudio)
+
+		// Create room
+		testRoom = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   testStudio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-key",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, testRoom.Id, &testRoom)
+
+		// Create valid code (expires in 1 hour)
+		validCode = AccessCode{
+			Code:       "12345",
+			Type:       CodeTypeRoom,
+			TargetId:   testRoom.Id,
+			CreatedBy:  1,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(1 * time.Hour),
+			MaxViewers: 0,
+			IsRevoked:  false,
+			Label:      "Valid Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, validCode.Code, &validCode)
+
+		// Initialize analytics for valid code
+		analytics := CodeAnalytics{
+			Code:             validCode.Code,
+			TotalConnections: 0,
+			CurrentViewers:   0,
+			PeakViewers:      0,
+		}
+		vbolt.Write(tx, CodeAnalyticsBkt, validCode.Code, &analytics)
+
+		// Create expired code
+		expiredCode = AccessCode{
+			Code:       "11111",
+			Type:       CodeTypeRoom,
+			TargetId:   testRoom.Id,
+			CreatedBy:  1,
+			CreatedAt:  time.Now().Add(-2 * time.Hour),
+			ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+			MaxViewers: 0,
+			IsRevoked:  false,
+			Label:      "Expired Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, expiredCode.Code, &expiredCode)
+
+		// Create revoked code
+		revokedCode = AccessCode{
+			Code:       "22222",
+			Type:       CodeTypeRoom,
+			TargetId:   testRoom.Id,
+			CreatedBy:  1,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(1 * time.Hour),
+			MaxViewers: 0,
+			IsRevoked:  true, // Revoked
+			Label:      "Revoked Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, revokedCode.Code, &revokedCode)
+
+		// Create code with viewer limit
+		capacityCode = AccessCode{
+			Code:       "33333",
+			Type:       CodeTypeRoom,
+			TargetId:   testRoom.Id,
+			CreatedBy:  1,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(1 * time.Hour),
+			MaxViewers: 2, // Limit of 2 viewers
+			IsRevoked:  false,
+			Label:      "Capacity Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, capacityCode.Code, &capacityCode)
+
+		// Initialize analytics with 2 current viewers (at capacity)
+		capacityAnalytics := CodeAnalytics{
+			Code:             capacityCode.Code,
+			TotalConnections: 2,
+			CurrentViewers:   2, // At capacity
+			PeakViewers:      2,
+		}
+		vbolt.Write(tx, CodeAnalyticsBkt, capacityCode.Code, &capacityAnalytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Valid code (should succeed)
+	t.Run("ValidCode", func(t *testing.T) {
+		var resp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "12345"}
+			resp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.SessionToken == "" {
+			t.Error("Expected session token to be generated")
+		}
+		if len(resp.SessionToken) != 44 { // base64 encoding of 32 bytes
+			t.Errorf("Session token has unexpected length: got %d, want 44 (token: %s)", len(resp.SessionToken), resp.SessionToken)
+		}
+		if resp.RedirectTo != "/stream/"+fmt.Sprint(testRoom.Id) {
+			t.Errorf("Expected redirect to /stream/%d, got %s", testRoom.Id, resp.RedirectTo)
+		}
+		if resp.Type != int(CodeTypeRoom) {
+			t.Errorf("Expected type %d, got %d", CodeTypeRoom, resp.Type)
+		}
+		if resp.TargetId != testRoom.Id {
+			t.Errorf("Expected targetId %d, got %d", testRoom.Id, resp.TargetId)
+		}
+
+		// Verify session was created in database
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, resp.SessionToken, &session)
+			if session.Token != resp.SessionToken {
+				t.Error("Session was not saved to database")
+			}
+			if session.Code != "12345" {
+				t.Errorf("Expected session code 12345, got %s", session.Code)
+			}
+
+			// Verify analytics was updated
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, "12345", &analytics)
+			if analytics.TotalConnections != 1 {
+				t.Errorf("Expected 1 total connection, got %d", analytics.TotalConnections)
+			}
+			if analytics.CurrentViewers != 1 {
+				t.Errorf("Expected 1 current viewer, got %d", analytics.CurrentViewers)
+			}
+			if analytics.PeakViewers != 1 {
+				t.Errorf("Expected peak viewers 1, got %d", analytics.PeakViewers)
+			}
+		})
+	})
+
+	// Test 2: Invalid code (doesn't exist)
+	t.Run("InvalidCode", func(t *testing.T) {
+		var resp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "99999"}
+			resp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for invalid code")
+		}
+		if resp.Error != "Invalid code" {
+			t.Errorf("Expected 'Invalid code', got: %s", resp.Error)
+		}
+	})
+
+	// Test 3: Invalid format (not 5 digits)
+	t.Run("InvalidFormat", func(t *testing.T) {
+		var resp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "123"}
+			resp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for invalid format")
+		}
+		if resp.Error != "Invalid code format" {
+			t.Errorf("Expected 'Invalid code format', got: %s", resp.Error)
+		}
+	})
+
+	// Test 4: Expired code
+	t.Run("ExpiredCode", func(t *testing.T) {
+		var resp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "11111"}
+			resp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for expired code")
+		}
+		if resp.Error != "Code has expired" {
+			t.Errorf("Expected 'Code has expired', got: %s", resp.Error)
+		}
+	})
+
+	// Test 5: Revoked code
+	t.Run("RevokedCode", func(t *testing.T) {
+		var resp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "22222"}
+			resp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for revoked code")
+		}
+		if resp.Error != "Code has been revoked" {
+			t.Errorf("Expected 'Code has been revoked', got: %s", resp.Error)
+		}
+	})
+
+	// Test 6: At capacity
+	t.Run("AtCapacity", func(t *testing.T) {
+		var resp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "33333"}
+			resp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if resp.Success {
+			t.Error("Expected failure for code at capacity")
+		}
+		if resp.Error != "Stream is at capacity (2/2 viewers)" {
+			t.Errorf("Expected capacity error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 7: Multiple validations update analytics correctly
+	t.Run("MultipleValidations", func(t *testing.T) {
+		// Validate the valid code 3 more times
+		for i := 0; i < 3; i++ {
+			var resp ValidateAccessCodeResponse
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				ctx := &vbeam.Context{Tx: tx}
+				req := ValidateAccessCodeRequest{Code: "12345"}
+				resp, _ = ValidateAccessCode(ctx, req)
+			})
+
+			if !resp.Success {
+				t.Fatalf("Validation %d failed: %s", i+1, resp.Error)
+			}
+		}
+
+		// Check analytics
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, "12345", &analytics)
+			// Should be 4 total now (1 from first test + 3 from this test)
+			if analytics.TotalConnections != 4 {
+				t.Errorf("Expected 4 total connections, got %d", analytics.TotalConnections)
+			}
+			if analytics.CurrentViewers != 4 {
+				t.Errorf("Expected 4 current viewers, got %d", analytics.CurrentViewers)
+			}
+			if analytics.PeakViewers != 4 {
+				t.Errorf("Expected peak viewers 4, got %d", analytics.PeakViewers)
+			}
+		})
 	})
 }

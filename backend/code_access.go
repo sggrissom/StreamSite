@@ -2,6 +2,7 @@ package backend
 
 import (
 	"crypto/rand"
+	"encoding/base64"
 	"fmt"
 	"math/big"
 	"stream/cfg"
@@ -205,6 +206,20 @@ type GenerateAccessCodeResponse struct {
 	ShareURL  string    `json:"shareUrl,omitempty"` // e.g., "/watch/42857"
 }
 
+type ValidateAccessCodeRequest struct {
+	Code string `json:"code"` // 5-digit code
+}
+
+type ValidateAccessCodeResponse struct {
+	Success      bool      `json:"success"`
+	Error        string    `json:"error,omitempty"`
+	SessionToken string    `json:"sessionToken,omitempty"` // UUID for the session
+	RedirectTo   string    `json:"redirectTo,omitempty"`   // URL to redirect to (e.g., "/stream/123")
+	ExpiresAt    time.Time `json:"expiresAt,omitempty"`    // When code expires
+	Type         int       `json:"type,omitempty"`         // 0=room, 1=studio
+	TargetId     int       `json:"targetId,omitempty"`     // Room or Studio ID
+}
+
 // Helper functions
 
 // codeExistsInDB checks if a code already exists in the database
@@ -230,10 +245,21 @@ func generateUniqueCodeInDB(tx *vbolt.Tx) (string, error) {
 	return "", fmt.Errorf("failed to generate unique code after 20 attempts")
 }
 
+// generateSessionToken creates a cryptographically secure random token for code sessions
+func generateSessionToken() (string, error) {
+	bytes := make([]byte, 32) // 256 bits
+	_, err := rand.Read(bytes)
+	if err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(bytes), nil
+}
+
 // API Procedures
 
 func RegisterCodeAccessMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, GenerateAccessCode)
+	vbeam.RegisterProc(app, ValidateAccessCode)
 }
 
 // GenerateAccessCode creates a new temporary access code for room or studio viewing
@@ -385,5 +411,124 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 	resp.Code = code
 	resp.ExpiresAt = expiresAt
 	resp.ShareURL = shareURL
+	return
+}
+
+// ValidateAccessCode validates a 5-digit code and creates a viewing session
+func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp ValidateAccessCodeResponse, err error) {
+	// Validate code format (5 digits)
+	if len(req.Code) != 5 {
+		resp.Success = false
+		resp.Error = "Invalid code format"
+		return
+	}
+
+	// Look up code in database
+	var accessCode AccessCode
+	vbolt.Read(ctx.Tx, AccessCodesBkt, req.Code, &accessCode)
+
+	// Check if code exists
+	if accessCode.Code == "" {
+		resp.Success = false
+		resp.Error = "Invalid code"
+		return
+	}
+
+	// Check if code is revoked
+	if accessCode.IsRevoked {
+		resp.Success = false
+		resp.Error = "Code has been revoked"
+		return
+	}
+
+	// Check if code is expired
+	now := time.Now()
+	if now.After(accessCode.ExpiresAt) {
+		resp.Success = false
+		resp.Error = "Code has expired"
+		return
+	}
+
+	// Check viewer limit (if set)
+	if accessCode.MaxViewers > 0 {
+		// Load current analytics to check viewer count
+		var analytics CodeAnalytics
+		vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+		if analytics.CurrentViewers >= accessCode.MaxViewers {
+			resp.Success = false
+			resp.Error = fmt.Sprintf("Stream is at capacity (%d/%d viewers)", analytics.CurrentViewers, accessCode.MaxViewers)
+			return
+		}
+	}
+
+	vbeam.UseWriteTx(ctx)
+
+	// Generate session token
+	sessionToken, err := generateSessionToken()
+	if err != nil {
+		resp.Success = false
+		resp.Error = "Failed to generate session token"
+		return
+	}
+
+	// Create code session
+	session := CodeSession{
+		Token:            sessionToken,
+		Code:             accessCode.Code,
+		ConnectedAt:      now,
+		LastSeen:         now,
+		GracePeriodUntil: time.Time{}, // Not in grace period yet
+		ClientIP:         "",          // Will be set by middleware later
+		UserAgent:        "",          // Will be set by middleware later
+	}
+	vbolt.Write(ctx.Tx, CodeSessionsBkt, sessionToken, &session)
+
+	// Add to session index
+	vbolt.SetTargetSingleTerm(ctx.Tx, SessionsByCodeIdx, sessionToken, accessCode.Code)
+
+	// Update analytics
+	var analytics CodeAnalytics
+	vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+	analytics.TotalConnections++
+	analytics.CurrentViewers++
+	analytics.LastConnectionAt = now
+
+	// Update peak viewers if necessary
+	if analytics.CurrentViewers > analytics.PeakViewers {
+		analytics.PeakViewers = analytics.CurrentViewers
+		analytics.PeakViewersAt = now
+	}
+
+	vbolt.Write(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	// Build redirect URL based on code type
+	var redirectTo string
+	if accessCode.Type == CodeTypeRoom {
+		redirectTo = fmt.Sprintf("/stream/%d", accessCode.TargetId)
+	} else {
+		// For studio codes, redirect to studio page (they can choose which room)
+		redirectTo = fmt.Sprintf("/studio/%d", accessCode.TargetId)
+	}
+
+	// Log validation success
+	LogInfo(LogCategorySystem, "Access code validated", map[string]interface{}{
+		"code":           accessCode.Code,
+		"sessionToken":   sessionToken,
+		"type":           accessCode.Type,
+		"targetId":       accessCode.TargetId,
+		"currentViewers": analytics.CurrentViewers,
+		"peakViewers":    analytics.PeakViewers,
+	})
+
+	resp.Success = true
+	resp.SessionToken = sessionToken
+	resp.RedirectTo = redirectTo
+	resp.ExpiresAt = accessCode.ExpiresAt
+	resp.Type = int(accessCode.Type)
+	resp.TargetId = accessCode.TargetId
 	return
 }
