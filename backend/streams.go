@@ -196,6 +196,85 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 		return nil
 	}
 
-	// Register the handler for room-based streams
-	app.HandleFunc("/streams/room/", srsProxy.ServeHTTP)
+	// Create authenticated wrapper for the proxy
+	authenticatedHandler := func(w http.ResponseWriter, r *http.Request) {
+		// Extract roomId from path for authentication check
+		path := r.URL.Path
+		pathRemainder := strings.TrimPrefix(path, "/streams/room/")
+
+		// Find where roomId ends
+		roomIdEnd := 0
+		for i, ch := range pathRemainder {
+			if ch < '0' || ch > '9' {
+				roomIdEnd = i
+				break
+			}
+		}
+
+		if roomIdEnd == 0 {
+			http.Error(w, "Invalid stream path", http.StatusBadRequest)
+			return
+		}
+
+		roomIdStr := pathRemainder[:roomIdEnd]
+		roomId, err := strconv.Atoi(roomIdStr)
+		if err != nil {
+			http.Error(w, "Invalid room ID", http.StatusBadRequest)
+			return
+		}
+
+		// Check authentication
+		authCtx, authErr := GetAuthFromRequest(r, db)
+		if authErr != nil {
+			LogWarnWithRequest(r, LogCategoryAuth, "Unauthorized stream access attempt", map[string]interface{}{
+				"roomId": roomId,
+				"path":   path,
+			})
+			http.Error(w, "Authentication required", http.StatusForbidden)
+			return
+		}
+
+		// For code-based auth, verify room access
+		if authCtx.IsCodeAuth {
+			// Verify the code session has access to this specific room
+			var hasAccess bool
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				ctx := &vbeam.Context{Tx: tx}
+				accessResp, _ := GetCodeStreamAccess(ctx, GetCodeStreamAccessRequest{
+					SessionToken: authCtx.CodeSession.Token,
+					RoomId:       roomId,
+				})
+				hasAccess = accessResp.Allowed
+			})
+
+			if !hasAccess {
+				LogWarnWithRequest(r, LogCategoryAuth, "Code session denied access to room", map[string]interface{}{
+					"roomId":       roomId,
+					"code":         authCtx.AccessCode.Code,
+					"sessionToken": authCtx.CodeSession.Token,
+				})
+				http.Error(w, "Access denied to this room", http.StatusForbidden)
+				return
+			}
+
+			LogInfo(LogCategoryAuth, "Code session accessing stream", map[string]interface{}{
+				"roomId": roomId,
+				"code":   authCtx.AccessCode.Code,
+			})
+		} else {
+			// JWT authentication - user is accessing stream
+			// Additional permission checks could be added here if needed
+			LogInfo(LogCategoryAuth, "User accessing stream", map[string]interface{}{
+				"roomId": roomId,
+				"userId": authCtx.User.Id,
+				"email":  authCtx.User.Email,
+			})
+		}
+
+		// Authentication successful - proxy the request
+		srsProxy.ServeHTTP(w, r)
+	}
+
+	// Register the authenticated handler for room-based streams
+	app.HandleFunc("/streams/room/", authenticatedHandler)
 }

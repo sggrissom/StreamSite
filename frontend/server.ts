@@ -290,6 +290,77 @@ export interface LeaveStudioResponse {
     error: string
 }
 
+export interface GenerateAccessCodeRequest {
+    type: number
+    targetId: number
+    durationMinutes: number
+    maxViewers: number
+    label: string
+}
+
+export interface GenerateAccessCodeResponse {
+    success: boolean
+    error: string
+    code: string
+    expiresAt: string
+    shareUrl: string
+}
+
+export interface GetCodeStreamAccessRequest {
+    sessionToken: string
+    roomId: number
+}
+
+export interface GetCodeStreamAccessResponse {
+    allowed: boolean
+    roomId: number
+    studioId: number
+    expiresAt: string
+    gracePeriod: boolean
+    message: string
+}
+
+export interface RevokeAccessCodeRequest {
+    code: string
+}
+
+export interface RevokeAccessCodeResponse {
+    success: boolean
+    error: string
+    sessionsKilled: number
+}
+
+export interface ListAccessCodesRequest {
+    type: number
+    targetId: number
+}
+
+export interface ListAccessCodesResponse {
+    success: boolean
+    error: string
+    codes: AccessCodeListItem[]
+}
+
+export interface GetCodeAnalyticsRequest {
+    code: string
+}
+
+export interface GetCodeAnalyticsResponse {
+    success: boolean
+    error: string
+    code: string
+    type: number
+    label: string
+    status: string
+    createdAt: string
+    expiresAt: string
+    totalConnections: number
+    currentViewers: number
+    peakViewers: number
+    peakViewersAt: string
+    sessions: SessionInfo[]
+}
+
 export interface SRSAuthCallback {
     server_id: string
     action: string
@@ -406,6 +477,26 @@ export interface StudioMembership {
     joinedAt: string
 }
 
+export interface AccessCodeListItem {
+    code: string
+    type: number
+    label: string
+    createdAt: string
+    expiresAt: string
+    isRevoked: boolean
+    isExpired: boolean
+    currentViewers: number
+    totalViews: number
+}
+
+export interface SessionInfo {
+    connectedAt: string
+    duration: number
+    clientIP: string
+    userAgent: string
+    isActive: boolean
+}
+
 export async function CreateAccount(data: CreateAccountRequest): Promise<rpc.Response<CreateAccountResponse>> {
     return await rpc.call<CreateAccountResponse>('CreateAccount', JSON.stringify(data));
 }
@@ -508,6 +599,26 @@ export async function ListStudioMembersAPI(data: ListStudioMembersRequest): Prom
 
 export async function LeaveStudio(data: LeaveStudioRequest): Promise<rpc.Response<LeaveStudioResponse>> {
     return await rpc.call<LeaveStudioResponse>('LeaveStudio', JSON.stringify(data));
+}
+
+export async function GenerateAccessCode(data: GenerateAccessCodeRequest): Promise<rpc.Response<GenerateAccessCodeResponse>> {
+    return await rpc.call<GenerateAccessCodeResponse>('GenerateAccessCode', JSON.stringify(data));
+}
+
+export async function GetCodeStreamAccess(data: GetCodeStreamAccessRequest): Promise<rpc.Response<GetCodeStreamAccessResponse>> {
+    return await rpc.call<GetCodeStreamAccessResponse>('GetCodeStreamAccess', JSON.stringify(data));
+}
+
+export async function RevokeAccessCode(data: RevokeAccessCodeRequest): Promise<rpc.Response<RevokeAccessCodeResponse>> {
+    return await rpc.call<RevokeAccessCodeResponse>('RevokeAccessCode', JSON.stringify(data));
+}
+
+export async function ListAccessCodes(data: ListAccessCodesRequest): Promise<rpc.Response<ListAccessCodesResponse>> {
+    return await rpc.call<ListAccessCodesResponse>('ListAccessCodes', JSON.stringify(data));
+}
+
+export async function GetCodeAnalytics(data: GetCodeAnalyticsRequest): Promise<rpc.Response<GetCodeAnalyticsResponse>> {
+    return await rpc.call<GetCodeAnalyticsResponse>('GetCodeAnalytics', JSON.stringify(data));
 }
 
 export async function ValidateStreamKey(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {
