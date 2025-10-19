@@ -329,12 +329,14 @@ type GetRoomDetailsRequest struct {
 }
 
 type GetRoomDetailsResponse struct {
-	Success    bool       `json:"success"`
-	Error      string     `json:"error,omitempty"`
-	Room       Room       `json:"room,omitempty"`
-	StudioName string     `json:"studioName,omitempty"`
-	MyRole     StudioRole `json:"myRole"`
-	MyRoleName string     `json:"myRoleName"`
+	Success       bool       `json:"success"`
+	Error         string     `json:"error,omitempty"`
+	Room          Room       `json:"room,omitempty"`
+	StudioName    string     `json:"studioName,omitempty"`
+	MyRole        StudioRole `json:"myRole"`
+	MyRoleName    string     `json:"myRoleName"`
+	IsCodeAuth    bool       `json:"isCodeAuth"`              // True if authenticated via access code
+	CodeExpiresAt *time.Time `json:"codeExpiresAt,omitempty"` // When the access code expires
 }
 
 type RoomWithStudio struct {
@@ -1003,6 +1005,10 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 
 		// Code session has valid access - treat as viewer
 		role = StudioRoleViewer
+
+		// Set code auth fields for frontend
+		resp.IsCodeAuth = true
+		resp.CodeExpiresAt = &accessCode.ExpiresAt
 	} else {
 		// Regular user - check studio membership
 		role = GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)

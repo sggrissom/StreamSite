@@ -187,6 +187,8 @@ export interface GetRoomDetailsResponse {
     studioName: string
     myRole: StudioRole
     myRoleName: string
+    isCodeAuth: boolean
+    codeExpiresAt: string | null
 }
 
 export interface ListMyAccessibleRoomsRequest {

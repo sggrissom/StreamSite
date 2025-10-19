@@ -311,6 +311,13 @@ export function view(
           </div>
         </div>
 
+        {data.isCodeAuth && (
+          <div className="code-session-banner">
+            <span className="banner-icon">🔑</span>
+            <span className="banner-text">Watching via access code</span>
+          </div>
+        )}
+
         {state.isStreamLive ? (
           <div className="video-container">
             <video

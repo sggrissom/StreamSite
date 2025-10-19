@@ -131,6 +131,36 @@ block(`
 `);
 
 block(`
+.code-session-banner {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  border: 1px solid rgba(102, 126, 234, 0.3);
+  border-radius: 8px;
+  padding: 1rem 1.5rem;
+  margin-top: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  box-shadow: 0 2px 8px rgba(102, 126, 234, 0.15);
+}
+`);
+
+block(`
+.code-session-banner .banner-icon {
+  font-size: 1.25rem;
+  flex-shrink: 0;
+}
+`);
+
+block(`
+.code-session-banner .banner-text {
+  font-size: 0.9375rem;
+  font-weight: 600;
+  color: white;
+  letter-spacing: 0.01em;
+}
+`);
+
+block(`
 .video-container {
   margin-top: 2rem;
 }
@@ -236,6 +266,15 @@ block(`
 
   .stream-offline h2 {
     font-size: 1.25rem;
+  }
+
+  .code-session-banner {
+    padding: 0.875rem 1rem;
+    margin-top: 1rem;
+  }
+
+  .code-session-banner .banner-text {
+    font-size: 0.875rem;
   }
 }
 `);
