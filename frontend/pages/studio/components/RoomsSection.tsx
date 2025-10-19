@@ -328,6 +328,153 @@ async function confirmDeleteRoom(modal: DeleteRoomModal) {
   window.location.reload();
 }
 
+// ===== Generate Access Code Modal =====
+type GenerateCodeModal = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  error: string;
+  roomId: number;
+  roomName: string;
+  duration: string;
+  maxViewers: number;
+  label: string;
+  generatedCode: string;
+  shareUrl: string;
+  showSuccess: boolean;
+  copyCodeSuccess: boolean;
+  copyUrlSuccess: boolean;
+};
+
+const useGenerateCodeModal = vlens.declareHook(
+  (): GenerateCodeModal => ({
+    isOpen: false,
+    isSubmitting: false,
+    error: "",
+    roomId: 0,
+    roomName: "",
+    duration: "24h",
+    maxViewers: 30,
+    label: "",
+    generatedCode: "",
+    shareUrl: "",
+    showSuccess: false,
+    copyCodeSuccess: false,
+    copyUrlSuccess: false,
+  }),
+);
+
+function openGenerateCodeModal(
+  modal: GenerateCodeModal,
+  roomId: number,
+  roomName: string,
+) {
+  modal.isOpen = true;
+  modal.error = "";
+  modal.roomId = roomId;
+  modal.roomName = roomName;
+  modal.duration = "24h";
+  modal.maxViewers = 30;
+  modal.label = "";
+  modal.generatedCode = "";
+  modal.shareUrl = "";
+  modal.showSuccess = false;
+  modal.copyCodeSuccess = false;
+  modal.copyUrlSuccess = false;
+  vlens.scheduleRedraw();
+}
+
+function closeGenerateCodeModal(modal: GenerateCodeModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  modal.showSuccess = false;
+  vlens.scheduleRedraw();
+}
+
+function durationToMinutes(duration: string): number {
+  switch (duration) {
+    case "1h":
+      return 60;
+    case "24h":
+      return 1440;
+    case "7d":
+      return 10080;
+    case "30d":
+      return 43200;
+    case "never":
+      return -1;
+    default:
+      return 1440; // default to 24h
+  }
+}
+
+async function submitGenerateCode(modal: GenerateCodeModal) {
+  if (modal.maxViewers < 1) {
+    modal.error = "Max viewers must be at least 1";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.isSubmitting = true;
+  modal.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.GenerateAccessCode({
+    type: 0, // CodeTypeRoom
+    targetId: modal.roomId,
+    durationMinutes: durationToMinutes(modal.duration),
+    maxViewers: modal.maxViewers,
+    label: modal.label.trim() || "",
+  });
+
+  modal.isSubmitting = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to generate access code";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  // Show success view with generated code
+  modal.generatedCode = resp.code || "";
+  const hostname =
+    window.location.hostname === "localhost"
+      ? "localhost:3000"
+      : "stream.grissom.zone";
+  modal.shareUrl = `http://${hostname}/watch?code=${resp.code}`;
+  modal.showSuccess = true;
+  vlens.scheduleRedraw();
+}
+
+async function copyCode(modal: GenerateCodeModal) {
+  try {
+    await navigator.clipboard.writeText(modal.generatedCode);
+    modal.copyCodeSuccess = true;
+    vlens.scheduleRedraw();
+    setTimeout(() => {
+      modal.copyCodeSuccess = false;
+      vlens.scheduleRedraw();
+    }, 2000);
+  } catch (err) {
+    modal.error = "Failed to copy to clipboard";
+    vlens.scheduleRedraw();
+  }
+}
+
+async function copyShareUrl(modal: GenerateCodeModal) {
+  try {
+    await navigator.clipboard.writeText(modal.shareUrl);
+    modal.copyUrlSuccess = true;
+    vlens.scheduleRedraw();
+    setTimeout(() => {
+      modal.copyUrlSuccess = false;
+      vlens.scheduleRedraw();
+    }, 2000);
+  } catch (err) {
+    modal.error = "Failed to copy to clipboard";
+    vlens.scheduleRedraw();
+  }
+}
+
 // ===== Component =====
 export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const { studio, rooms, canManageRooms } = props;
@@ -335,6 +482,7 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const streamKeyModal = useStreamKeyModal();
   const editRoomModal = useEditRoomModal();
   const deleteRoomModal = useDeleteRoomModal();
+  const generateCodeModal = useGenerateCodeModal();
 
   return (
     <>
@@ -414,6 +562,17 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                         }
                       >
                         View Stream Key
+                      </DropdownItem>
+                      <DropdownItem
+                        onClick={() =>
+                          openGenerateCodeModal(
+                            generateCodeModal,
+                            room.id,
+                            room.name,
+                          )
+                        }
+                      >
+                        Generate Access Code
                       </DropdownItem>
                       <DropdownItem
                         onClick={() =>
@@ -681,6 +840,166 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
             </p>
             <div className="room-info">
               <strong>Room:</strong> {deleteRoomModal.roomName}
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal
+        isOpen={generateCodeModal.isOpen}
+        title={
+          generateCodeModal.showSuccess
+            ? "Access Code Generated"
+            : "Generate Access Code"
+        }
+        onClose={() => closeGenerateCodeModal(generateCodeModal)}
+        error={generateCodeModal.error}
+        footer={
+          generateCodeModal.showSuccess ? (
+            <button
+              className="btn btn-primary"
+              onClick={() => closeGenerateCodeModal(generateCodeModal)}
+            >
+              Done
+            </button>
+          ) : (
+            <>
+              <button
+                className="btn btn-secondary"
+                onClick={() => closeGenerateCodeModal(generateCodeModal)}
+                disabled={generateCodeModal.isSubmitting}
+              >
+                Cancel
+              </button>
+              <button
+                className="btn btn-primary"
+                onClick={() => submitGenerateCode(generateCodeModal)}
+                disabled={generateCodeModal.isSubmitting}
+              >
+                {generateCodeModal.isSubmitting
+                  ? "Generating..."
+                  : "Generate Code"}
+              </button>
+            </>
+          )
+        }
+      >
+        {generateCodeModal.showSuccess ? (
+          // Success view - show generated code and share URL
+          <div>
+            <div className="form-group">
+              <label>Room</label>
+              <div className="stream-key-room-name">
+                {generateCodeModal.roomName}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label>Access Code</label>
+              <div
+                className="stream-key-display"
+                style="font-size: 2rem; letter-spacing: 0.5rem; text-align: center; padding: 1.5rem;"
+              >
+                {generateCodeModal.generatedCode}
+              </div>
+              <small className="form-help">
+                Share this 5-digit code with viewers to grant them access
+              </small>
+            </div>
+
+            <div className="form-group">
+              <label>Share URL</label>
+              <div className="stream-key-display">
+                {generateCodeModal.shareUrl}
+              </div>
+              <small className="form-help">
+                Direct link that viewers can use to access the stream
+              </small>
+            </div>
+
+            <div className="stream-key-actions">
+              <button
+                className="btn btn-primary"
+                onClick={() => copyCode(generateCodeModal)}
+                disabled={generateCodeModal.copyCodeSuccess}
+              >
+                {generateCodeModal.copyCodeSuccess
+                  ? "✓ Copied Code!"
+                  : "Copy Code"}
+              </button>
+              <button
+                className="btn btn-secondary"
+                onClick={() => copyShareUrl(generateCodeModal)}
+                disabled={generateCodeModal.copyUrlSuccess}
+              >
+                {generateCodeModal.copyUrlSuccess
+                  ? "✓ Copied URL!"
+                  : "Copy URL"}
+              </button>
+            </div>
+          </div>
+        ) : (
+          // Form view - collect code parameters
+          <div>
+            <div className="form-group">
+              <label>Room</label>
+              <div className="stream-key-room-name">
+                {generateCodeModal.roomName}
+              </div>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="code-duration">Code Duration *</label>
+              <select
+                id="code-duration"
+                className="form-input"
+                {...vlens.attrsBindInput(
+                  vlens.ref(generateCodeModal, "duration"),
+                )}
+                disabled={generateCodeModal.isSubmitting}
+              >
+                <option value="1h">1 hour</option>
+                <option value="24h">24 hours</option>
+                <option value="7d">7 days</option>
+                <option value="30d">30 days</option>
+                <option value="never">Never expires</option>
+              </select>
+              <small className="form-help">
+                How long the access code will remain valid
+              </small>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="code-max-viewers">Max Viewers *</label>
+              <input
+                id="code-max-viewers"
+                type="number"
+                className="form-input"
+                min="1"
+                placeholder="e.g., 30"
+                {...vlens.attrsBindInput(
+                  vlens.ref(generateCodeModal, "maxViewers"),
+                )}
+                disabled={generateCodeModal.isSubmitting}
+              />
+              <small className="form-help">
+                Maximum number of viewers who can use this code
+              </small>
+            </div>
+
+            <div className="form-group">
+              <label htmlFor="code-label">Label (Optional)</label>
+              <input
+                id="code-label"
+                type="text"
+                className="form-input"
+                placeholder="e.g., Class Section A, Guest Viewers"
+                {...vlens.attrsBindInput(vlens.ref(generateCodeModal, "label"))}
+                disabled={generateCodeModal.isSubmitting}
+              />
+              <small className="form-help">
+                Optional label to help you identify this code later
+              </small>
             </div>
           </div>
         )}
