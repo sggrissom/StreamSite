@@ -260,6 +260,72 @@ func GetAuthUser(ctx *vbeam.Context) (user User, err error) {
 	return
 }
 
+// AuthContext represents the authentication context for a request
+// It can be either a regular user (via JWT) or a code session (via access code)
+type AuthContext struct {
+	User        User         // Actual user (if JWT auth), or pseudo-user with Id=-1 for code sessions
+	IsCodeAuth  bool         // True if authenticated via access code
+	CodeSession *CodeSession // Session info if code auth
+	AccessCode  *AccessCode  // Access code info if code auth
+}
+
+// GetAuthFromRequest checks both JWT and code-based authentication
+// Returns AuthContext with user or code session information
+// This is used in HTTP handlers that have access to the request object
+func GetAuthFromRequest(r *http.Request, db *vbolt.DB) (authCtx AuthContext, err error) {
+	// First try JWT authentication (authToken cookie)
+	authCookie, authErr := r.Cookie("authToken")
+	if authErr == nil && authCookie.Value != "" {
+		// Parse JWT token
+		token, tokenErr := jwt.ParseWithClaims(authCookie.Value, &Claims{}, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, errors.New("unexpected signing method")
+			}
+			return jwtKey, nil
+		})
+
+		if tokenErr == nil && token.Valid {
+			if claims, ok := token.Claims.(*Claims); ok {
+				// Load user from database
+				vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+					authCtx.User = GetUser(tx, GetUserId(tx, claims.Username))
+				})
+
+				if authCtx.User.Id > 0 {
+					authCtx.IsCodeAuth = false
+					return authCtx, nil
+				}
+			}
+		}
+	}
+
+	// If JWT failed, try code-based authentication (codeAuthToken cookie)
+	var session CodeSession
+	var code AccessCode
+	var valid bool
+
+	// AuthenticateCodeSession updates LastSeen, so we need a write transaction
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		session, code, valid, _ = AuthenticateCodeSession(r, tx)
+	})
+
+	if valid {
+		// Create pseudo-user for code sessions
+		authCtx.User = User{
+			Id:    -1, // Special ID for anonymous code sessions
+			Email: "anonymous@code-session",
+			Name:  "Access Code User",
+		}
+		authCtx.IsCodeAuth = true
+		authCtx.CodeSession = &session
+		authCtx.AccessCode = &code
+		return authCtx, nil
+	}
+
+	// No valid authentication found
+	return authCtx, ErrAuthFailure
+}
+
 func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		vbeam.RespondError(w, errors.New("refresh call must be POST"))
