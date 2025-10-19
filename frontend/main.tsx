@@ -24,6 +24,7 @@ async function main() {
       () => import("@app/pages/settings/settings"),
     ),
     vlens.routeHandler("/stream", () => import("@app/pages/stream/stream")),
+    vlens.routeHandler("/watch", () => import("@app/pages/watch/watch")),
     vlens.routeHandler("/", () => import("@app/pages/home/home")),
   ]);
 }
