@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math/big"
+	"net/http"
 	"sort"
 	"stream/cfg"
 	"time"
@@ -373,6 +374,32 @@ func ValidateCodeSession(tx *vbolt.Tx, sessionToken string) (bool, CodeSession, 
 
 	// Code is valid and active
 	return true, session, code, ""
+}
+
+// AuthenticateCodeSession authenticates an HTTP request using the codeAuthToken cookie
+// If valid, updates the session's LastSeen timestamp
+// Returns: session, code, isValid, errorMessage
+func AuthenticateCodeSession(r *http.Request, tx *vbolt.Tx) (CodeSession, AccessCode, bool, string) {
+	var session CodeSession
+	var code AccessCode
+
+	// Read codeAuthToken cookie
+	cookie, err := r.Cookie("codeAuthToken")
+	if err != nil || cookie.Value == "" {
+		return session, code, false, "No code authentication token"
+	}
+
+	// Validate the session token
+	valid, session, code, errorMsg := ValidateCodeSession(tx, cookie.Value)
+	if !valid {
+		return session, code, false, errorMsg
+	}
+
+	// Session is valid - update LastSeen timestamp
+	session.LastSeen = time.Now()
+	vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+
+	return session, code, true, ""
 }
 
 // API Procedures
