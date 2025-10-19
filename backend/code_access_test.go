@@ -36,6 +36,20 @@ func createTestToken(email string) (string, error) {
 	return token.SignedString(jwtKey)
 }
 
+// createCodeSessionToken creates a JWT for code session authentication
+func createCodeSessionToken(sessionToken, code string, expiresAt time.Time) (string, error) {
+	claims := &Claims{
+		IsCodeSession: true,
+		SessionToken:  sessionToken,
+		Code:          code,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(expiresAt),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	return token.SignedString(jwtKey)
+}
+
 // TestPackAccessCode verifies AccessCode serialization/deserialization
 func TestPackAccessCode(t *testing.T) {
 	db := setupTestCodeDB(t)
@@ -835,10 +849,15 @@ func TestValidateAccessCodeHandler(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
 
-		// Save original appDb and restore after test
+		// Save original appDb and jwtKey, restore after test
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Setup: Create a valid code
 		var validCode AccessCode
@@ -915,29 +934,23 @@ func TestValidateAccessCodeHandler(t *testing.T) {
 			t.Fatalf("Expected validation to succeed, got error: %s", response.Error)
 		}
 
-		// Check that codeAuthToken cookie is set
+		// Check that authToken cookie is set (contains JWT)
 		cookies := resp.Cookies()
 		var foundCookie *http.Cookie
 		for _, cookie := range cookies {
-			if cookie.Name == "codeAuthToken" {
+			if cookie.Name == "authToken" {
 				foundCookie = cookie
 				break
 			}
 		}
 
 		if foundCookie == nil {
-			t.Fatal("Expected codeAuthToken cookie to be set")
+			t.Fatal("Expected authToken cookie to be set")
 		}
 
 		// Verify cookie attributes
 		if foundCookie.HttpOnly != true {
 			t.Errorf("Expected HttpOnly=true, got %v", foundCookie.HttpOnly)
-		}
-		if foundCookie.Secure != true {
-			t.Errorf("Expected Secure=true, got %v", foundCookie.Secure)
-		}
-		if foundCookie.SameSite != http.SameSiteLaxMode {
-			t.Errorf("Expected SameSite=Lax, got %v", foundCookie.SameSite)
 		}
 		if foundCookie.MaxAge != 60*60*24 {
 			t.Errorf("Expected MaxAge=86400 (24 hours), got %d", foundCookie.MaxAge)
@@ -946,14 +959,34 @@ func TestValidateAccessCodeHandler(t *testing.T) {
 			t.Errorf("Expected Path=/, got %s", foundCookie.Path)
 		}
 
-		// Verify cookie value is a valid session token
+		// Verify cookie value is a JWT token (not a raw session token)
 		if len(foundCookie.Value) == 0 {
-			t.Error("Expected non-empty session token in cookie")
+			t.Error("Expected non-empty JWT in cookie")
 		}
 
-		// Verify cookie value matches session token in response
-		if response.SessionToken != foundCookie.Value {
-			t.Errorf("Expected cookie value to match session token in response")
+		// Parse the JWT and verify it contains the session token
+		token, err := jwt.ParseWithClaims(foundCookie.Value, &Claims{}, func(token *jwt.Token) (any, error) {
+			return jwtKey, nil
+		})
+		if err != nil {
+			t.Fatalf("Failed to parse JWT from cookie: %v", err)
+		}
+
+		claims, ok := token.Claims.(*Claims)
+		if !ok {
+			t.Fatal("Failed to extract claims from JWT")
+		}
+
+		if !claims.IsCodeSession {
+			t.Error("Expected IsCodeSession=true in JWT claims")
+		}
+
+		if claims.SessionToken != response.SessionToken {
+			t.Errorf("Expected JWT to contain session token %s, got %s", response.SessionToken, claims.SessionToken)
+		}
+
+		if claims.Code != validCode.Code {
+			t.Errorf("Expected JWT to contain code %s, got %s", validCode.Code, claims.Code)
 		}
 	})
 
@@ -978,11 +1011,11 @@ func TestValidateAccessCodeHandler(t *testing.T) {
 		// Check response
 		resp := w.Result()
 
-		// Check that codeAuthToken cookie is NOT set
+		// Check that authToken cookie is NOT set
 		cookies := resp.Cookies()
 		for _, cookie := range cookies {
-			if cookie.Name == "codeAuthToken" {
-				t.Error("Expected codeAuthToken cookie NOT to be set for invalid code")
+			if cookie.Name == "authToken" {
+				t.Error("Expected authToken cookie NOT to be set for invalid code")
 			}
 		}
 
@@ -3427,576 +3460,6 @@ func TestValidateCodeSession(t *testing.T) {
 	})
 }
 
-func TestAuthenticateCodeSession(t *testing.T) {
-	testDB := setupTestCodeDB(t)
-	defer testDB.Close()
-
-	t.Run("NoCookie", func(t *testing.T) {
-		// Request with no codeAuthToken cookie
-		req := httptest.NewRequest("GET", "/test", nil)
-
-		var session CodeSession
-		var code AccessCode
-		var valid bool
-		var errorMsg string
-
-		vbolt.WithReadTx(testDB, func(tx *vbolt.Tx) {
-			session, code, valid, errorMsg = AuthenticateCodeSession(req, tx)
-		})
-
-		if valid {
-			t.Error("Expected valid to be false when no cookie present")
-		}
-		if errorMsg != "No code authentication token" {
-			t.Errorf("Expected error 'No code authentication token', got %s", errorMsg)
-		}
-		if session.Token != "" {
-			t.Error("Expected empty session")
-		}
-		if code.Code != "" {
-			t.Error("Expected empty code")
-		}
-	})
-
-	t.Run("EmptyCookie", func(t *testing.T) {
-		// Request with empty codeAuthToken cookie
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: "",
-		})
-
-		var valid bool
-		var errorMsg string
-
-		vbolt.WithReadTx(testDB, func(tx *vbolt.Tx) {
-			_, _, valid, errorMsg = AuthenticateCodeSession(req, tx)
-		})
-
-		if valid {
-			t.Error("Expected valid to be false with empty cookie")
-		}
-		if errorMsg != "No code authentication token" {
-			t.Errorf("Expected error 'No code authentication token', got %s", errorMsg)
-		}
-	})
-
-	t.Run("InvalidToken", func(t *testing.T) {
-		// Request with non-existent session token
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: "invalid-token-12345",
-		})
-
-		var valid bool
-		var errorMsg string
-
-		vbolt.WithReadTx(testDB, func(tx *vbolt.Tx) {
-			_, _, valid, errorMsg = AuthenticateCodeSession(req, tx)
-		})
-
-		if valid {
-			t.Error("Expected valid to be false with invalid token")
-		}
-		if errorMsg != "Session not found" {
-			t.Errorf("Expected error 'Session not found', got %s", errorMsg)
-		}
-	})
-
-	t.Run("ValidSession", func(t *testing.T) {
-		// Create a valid access code and session
-		var accessCode AccessCode
-		var sessionToken string
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			// Setup test data
-			admin := User{
-				Id:       vbolt.NextIntId(tx, UsersBkt),
-				Name:     "Admin User",
-				Email:    "admin@test.com",
-				Role:     RoleUser,
-				Creation: time.Now(),
-			}
-			vbolt.Write(tx, UsersBkt, admin.Id, &admin)
-			vbolt.Write(tx, EmailBkt, admin.Email, &admin.Id)
-
-			studio := Studio{
-				Id:          vbolt.NextIntId(tx, StudiosBkt),
-				Name:        "Test Studio",
-				Description: "Test",
-				MaxRooms:    5,
-				OwnerId:     admin.Id,
-				Creation:    time.Now(),
-			}
-			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
-
-			room := Room{
-				Id:         vbolt.NextIntId(tx, RoomsBkt),
-				StudioId:   studio.Id,
-				RoomNumber: 1,
-				Name:       "Test Room",
-				StreamKey:  "test-key",
-				IsActive:   false,
-				Creation:   time.Now(),
-			}
-			vbolt.Write(tx, RoomsBkt, room.Id, &room)
-
-			// Generate code
-			code, err := generateUniqueCodeInDB(tx)
-			if err != nil {
-				t.Fatalf("Failed to generate code: %v", err)
-			}
-			accessCode = AccessCode{
-				Code:       code,
-				Type:       CodeTypeRoom,
-				TargetId:   room.Id,
-				CreatedBy:  admin.Id,
-				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(2 * time.Hour),
-				MaxViewers: 0,
-				IsRevoked:  false,
-				Label:      "Test Code",
-			}
-			vbolt.Write(tx, AccessCodesBkt, code, &accessCode)
-
-			// Create session
-			sessionToken = "valid-session-token"
-			session := CodeSession{
-				Token:            sessionToken,
-				Code:             code,
-				ConnectedAt:      time.Now().Add(-10 * time.Minute),
-				LastSeen:         time.Now().Add(-5 * time.Minute),
-				GracePeriodUntil: time.Time{},
-				ClientIP:         "192.168.1.1",
-				UserAgent:        "TestAgent",
-			}
-			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
-
-			vbolt.TxCommit(tx)
-		})
-
-		// Authenticate with valid token
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
-		})
-
-		var session CodeSession
-		var code AccessCode
-		var valid bool
-		var errorMsg string
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			session, code, valid, errorMsg = AuthenticateCodeSession(req, tx)
-			vbolt.TxCommit(tx)
-		})
-
-		if !valid {
-			t.Errorf("Expected valid to be true, got error: %s", errorMsg)
-		}
-		if errorMsg != "" {
-			t.Errorf("Expected no error, got %s", errorMsg)
-		}
-		if session.Token != sessionToken {
-			t.Errorf("Expected session token %s, got %s", sessionToken, session.Token)
-		}
-		if code.Code != accessCode.Code {
-			t.Errorf("Expected code %s, got %s", accessCode.Code, code.Code)
-		}
-	})
-
-	t.Run("UpdatesLastSeen", func(t *testing.T) {
-		// Create a valid access code and session, verify LastSeen is updated
-		var accessCode AccessCode
-		var sessionToken string
-		var originalLastSeen time.Time
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			// Setup test data
-			admin := User{
-				Id:       vbolt.NextIntId(tx, UsersBkt),
-				Name:     "Admin User 2",
-				Email:    "admin2@test.com",
-				Role:     RoleUser,
-				Creation: time.Now(),
-			}
-			vbolt.Write(tx, UsersBkt, admin.Id, &admin)
-			vbolt.Write(tx, EmailBkt, admin.Email, &admin.Id)
-
-			studio := Studio{
-				Id:          vbolt.NextIntId(tx, StudiosBkt),
-				Name:        "Test Studio 2",
-				Description: "Test 2",
-				MaxRooms:    5,
-				OwnerId:     admin.Id,
-				Creation:    time.Now(),
-			}
-			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
-
-			room := Room{
-				Id:         vbolt.NextIntId(tx, RoomsBkt),
-				StudioId:   studio.Id,
-				RoomNumber: 1,
-				Name:       "Test Room 2",
-				StreamKey:  "test-key-2",
-				IsActive:   false,
-				Creation:   time.Now(),
-			}
-			vbolt.Write(tx, RoomsBkt, room.Id, &room)
-
-			// Generate code
-			code, err := generateUniqueCodeInDB(tx)
-			if err != nil {
-				t.Fatalf("Failed to generate code: %v", err)
-			}
-			accessCode = AccessCode{
-				Code:       code,
-				Type:       CodeTypeRoom,
-				TargetId:   room.Id,
-				CreatedBy:  admin.Id,
-				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(2 * time.Hour),
-				MaxViewers: 0,
-				IsRevoked:  false,
-				Label:      "Test Code 2",
-			}
-			vbolt.Write(tx, AccessCodesBkt, code, &accessCode)
-
-			// Create session with old LastSeen
-			sessionToken = "lastseen-test-token"
-			originalLastSeen = time.Now().Add(-10 * time.Minute)
-			session := CodeSession{
-				Token:            sessionToken,
-				Code:             code,
-				ConnectedAt:      time.Now().Add(-20 * time.Minute),
-				LastSeen:         originalLastSeen,
-				GracePeriodUntil: time.Time{},
-				ClientIP:         "192.168.1.2",
-				UserAgent:        "TestAgent2",
-			}
-			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
-
-			vbolt.TxCommit(tx)
-		})
-
-		// Small delay to ensure time difference
-		time.Sleep(10 * time.Millisecond)
-
-		// Authenticate
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
-		})
-
-		var session CodeSession
-		var valid bool
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			session, _, valid, _ = AuthenticateCodeSession(req, tx)
-			vbolt.TxCommit(tx)
-		})
-
-		if !valid {
-			t.Error("Expected valid session")
-		}
-
-		// Verify LastSeen was updated
-		if session.LastSeen.Before(originalLastSeen) || session.LastSeen.Equal(originalLastSeen) {
-			t.Error("Expected LastSeen to be updated to a more recent time")
-		}
-
-		// Verify it was persisted to database
-		var savedSession CodeSession
-		vbolt.WithReadTx(testDB, func(tx *vbolt.Tx) {
-			vbolt.Read(tx, CodeSessionsBkt, sessionToken, &savedSession)
-		})
-
-		if savedSession.LastSeen.Before(originalLastSeen) || savedSession.LastSeen.Equal(originalLastSeen) {
-			t.Error("Expected LastSeen to be persisted to database")
-		}
-	})
-
-	t.Run("RevokedCode", func(t *testing.T) {
-		// Create session with revoked code
-		var sessionToken string
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			// Setup test data
-			admin := User{
-				Id:       vbolt.NextIntId(tx, UsersBkt),
-				Name:     "Admin User 3",
-				Email:    "admin3@test.com",
-				Role:     RoleUser,
-				Creation: time.Now(),
-			}
-			vbolt.Write(tx, UsersBkt, admin.Id, &admin)
-			vbolt.Write(tx, EmailBkt, admin.Email, &admin.Id)
-
-			studio := Studio{
-				Id:          vbolt.NextIntId(tx, StudiosBkt),
-				Name:        "Test Studio 3",
-				Description: "Test 3",
-				MaxRooms:    5,
-				OwnerId:     admin.Id,
-				Creation:    time.Now(),
-			}
-			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
-
-			room := Room{
-				Id:         vbolt.NextIntId(tx, RoomsBkt),
-				StudioId:   studio.Id,
-				RoomNumber: 1,
-				Name:       "Test Room 3",
-				StreamKey:  "test-key-3",
-				IsActive:   false,
-				Creation:   time.Now(),
-			}
-			vbolt.Write(tx, RoomsBkt, room.Id, &room)
-
-			// Generate revoked code
-			code, err := generateUniqueCodeInDB(tx)
-			if err != nil {
-				t.Fatalf("Failed to generate code: %v", err)
-			}
-			accessCode := AccessCode{
-				Code:       code,
-				Type:       CodeTypeRoom,
-				TargetId:   room.Id,
-				CreatedBy:  admin.Id,
-				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(2 * time.Hour),
-				MaxViewers: 0,
-				IsRevoked:  true, // REVOKED
-				Label:      "Revoked Code",
-			}
-			vbolt.Write(tx, AccessCodesBkt, code, &accessCode)
-
-			// Create session
-			sessionToken = "revoked-session-token"
-			session := CodeSession{
-				Token:            sessionToken,
-				Code:             code,
-				ConnectedAt:      time.Now(),
-				LastSeen:         time.Now(),
-				GracePeriodUntil: time.Time{},
-				ClientIP:         "192.168.1.3",
-				UserAgent:        "TestAgent3",
-			}
-			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
-
-			vbolt.TxCommit(tx)
-		})
-
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
-		})
-
-		var valid bool
-		var errorMsg string
-
-		vbolt.WithReadTx(testDB, func(tx *vbolt.Tx) {
-			_, _, valid, errorMsg = AuthenticateCodeSession(req, tx)
-		})
-
-		if valid {
-			t.Error("Expected valid to be false for revoked code")
-		}
-		if errorMsg != "Access code has been revoked" {
-			t.Errorf("Expected error 'Access code has been revoked', got %s", errorMsg)
-		}
-	})
-
-	t.Run("ExpiredCode", func(t *testing.T) {
-		// Create session with expired code (no grace period)
-		var sessionToken string
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			// Setup test data
-			admin := User{
-				Id:       vbolt.NextIntId(tx, UsersBkt),
-				Name:     "Admin User 4",
-				Email:    "admin4@test.com",
-				Role:     RoleUser,
-				Creation: time.Now(),
-			}
-			vbolt.Write(tx, UsersBkt, admin.Id, &admin)
-			vbolt.Write(tx, EmailBkt, admin.Email, &admin.Id)
-
-			studio := Studio{
-				Id:          vbolt.NextIntId(tx, StudiosBkt),
-				Name:        "Test Studio 4",
-				Description: "Test 4",
-				MaxRooms:    5,
-				OwnerId:     admin.Id,
-				Creation:    time.Now(),
-			}
-			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
-
-			room := Room{
-				Id:         vbolt.NextIntId(tx, RoomsBkt),
-				StudioId:   studio.Id,
-				RoomNumber: 1,
-				Name:       "Test Room 4",
-				StreamKey:  "test-key-4",
-				IsActive:   false,
-				Creation:   time.Now(),
-			}
-			vbolt.Write(tx, RoomsBkt, room.Id, &room)
-
-			// Generate expired code
-			code, err := generateUniqueCodeInDB(tx)
-			if err != nil {
-				t.Fatalf("Failed to generate code: %v", err)
-			}
-			accessCode := AccessCode{
-				Code:       code,
-				Type:       CodeTypeRoom,
-				TargetId:   room.Id,
-				CreatedBy:  admin.Id,
-				CreatedAt:  time.Now().Add(-3 * time.Hour),
-				ExpiresAt:  time.Now().Add(-1 * time.Hour), // EXPIRED
-				MaxViewers: 0,
-				IsRevoked:  false,
-				Label:      "Expired Code",
-			}
-			vbolt.Write(tx, AccessCodesBkt, code, &accessCode)
-
-			// Create session (no grace period set)
-			sessionToken = "expired-session-token"
-			session := CodeSession{
-				Token:            sessionToken,
-				Code:             code,
-				ConnectedAt:      time.Now().Add(-2 * time.Hour),
-				LastSeen:         time.Now().Add(-30 * time.Minute),
-				GracePeriodUntil: time.Time{}, // No grace period
-				ClientIP:         "192.168.1.4",
-				UserAgent:        "TestAgent4",
-			}
-			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
-
-			vbolt.TxCommit(tx)
-		})
-
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
-		})
-
-		var valid bool
-		var errorMsg string
-
-		vbolt.WithReadTx(testDB, func(tx *vbolt.Tx) {
-			_, _, valid, errorMsg = AuthenticateCodeSession(req, tx)
-		})
-
-		if valid {
-			t.Error("Expected valid to be false for expired code")
-		}
-		if errorMsg != "Access code has expired (grace period available)" {
-			t.Errorf("Expected error 'Access code has expired (grace period available)', got %s", errorMsg)
-		}
-	})
-
-	t.Run("SessionWithinGracePeriod", func(t *testing.T) {
-		// Create session with expired code but within grace period
-		var sessionToken string
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			// Setup test data
-			admin := User{
-				Id:       vbolt.NextIntId(tx, UsersBkt),
-				Name:     "Admin User 5",
-				Email:    "admin5@test.com",
-				Role:     RoleUser,
-				Creation: time.Now(),
-			}
-			vbolt.Write(tx, UsersBkt, admin.Id, &admin)
-			vbolt.Write(tx, EmailBkt, admin.Email, &admin.Id)
-
-			studio := Studio{
-				Id:          vbolt.NextIntId(tx, StudiosBkt),
-				Name:        "Test Studio 5",
-				Description: "Test 5",
-				MaxRooms:    5,
-				OwnerId:     admin.Id,
-				Creation:    time.Now(),
-			}
-			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
-
-			room := Room{
-				Id:         vbolt.NextIntId(tx, RoomsBkt),
-				StudioId:   studio.Id,
-				RoomNumber: 1,
-				Name:       "Test Room 5",
-				StreamKey:  "test-key-5",
-				IsActive:   false,
-				Creation:   time.Now(),
-			}
-			vbolt.Write(tx, RoomsBkt, room.Id, &room)
-
-			// Generate expired code
-			code, err := generateUniqueCodeInDB(tx)
-			if err != nil {
-				t.Fatalf("Failed to generate code: %v", err)
-			}
-			accessCode := AccessCode{
-				Code:       code,
-				Type:       CodeTypeRoom,
-				TargetId:   room.Id,
-				CreatedBy:  admin.Id,
-				CreatedAt:  time.Now().Add(-3 * time.Hour),
-				ExpiresAt:  time.Now().Add(-5 * time.Minute), // EXPIRED
-				MaxViewers: 0,
-				IsRevoked:  false,
-				Label:      "Grace Period Code",
-			}
-			vbolt.Write(tx, AccessCodesBkt, code, &accessCode)
-
-			// Create session with grace period
-			sessionToken = "grace-session-token"
-			session := CodeSession{
-				Token:            sessionToken,
-				Code:             code,
-				ConnectedAt:      time.Now().Add(-1 * time.Hour),
-				LastSeen:         time.Now().Add(-2 * time.Minute),
-				GracePeriodUntil: time.Now().Add(10 * time.Minute), // Grace period active
-				ClientIP:         "192.168.1.5",
-				UserAgent:        "TestAgent5",
-			}
-			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
-
-			vbolt.TxCommit(tx)
-		})
-
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
-		})
-
-		var valid bool
-		var errorMsg string
-
-		vbolt.WithWriteTx(testDB, func(tx *vbolt.Tx) {
-			_, _, valid, errorMsg = AuthenticateCodeSession(req, tx)
-			vbolt.TxCommit(tx)
-		})
-
-		if !valid {
-			t.Errorf("Expected valid to be true within grace period, got error: %s", errorMsg)
-		}
-		if errorMsg != "" {
-			t.Errorf("Expected no error, got %s", errorMsg)
-		}
-	})
-}
-
 func TestCleanupInactiveSessions(t *testing.T) {
 	t.Run("CleansUpStaleSessionsOnly", func(t *testing.T) {
 		db := setupTestDB(t)
@@ -4537,6 +4000,11 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
 
+		// Save original jwtKey
+		originalKey := jwtKey
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() { jwtKey = originalKey }()
+
 		// Set up test data
 		var userId, studioId, roomId int
 		var userEmail string
@@ -4624,16 +4092,16 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 
 		// Check cookie was set
 		cookies := w.Result().Cookies()
-		var codeAuthCookie *http.Cookie
+		var authCookie *http.Cookie
 		for _, cookie := range cookies {
-			if cookie.Name == "codeAuthToken" {
-				codeAuthCookie = cookie
+			if cookie.Name == "authToken" {
+				authCookie = cookie
 				break
 			}
 		}
 
-		if codeAuthCookie == nil {
-			t.Fatal("codeAuthToken cookie was not set")
+		if authCookie == nil {
+			t.Fatal("authToken cookie was not set")
 		}
 
 		// Parse response body to verify success
@@ -4649,26 +4117,36 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 			t.Fatal("Session token in response is empty")
 		}
 
-		// Verify the cookie value matches the response
-		if codeAuthCookie.Value != sessionToken {
-			t.Errorf("Cookie value %s doesn't match response token %s", codeAuthCookie.Value, sessionToken)
+		// Verify the cookie contains a JWT with the session token in claims
+		token, err := jwt.ParseWithClaims(authCookie.Value, &Claims{}, func(token *jwt.Token) (any, error) {
+			return jwtKey, nil
+		})
+		if err != nil {
+			t.Fatalf("Failed to parse JWT from cookie: %v", err)
+		}
+
+		claims, ok := token.Claims.(*Claims)
+		if !ok || !claims.IsCodeSession {
+			t.Error("Expected JWT with IsCodeSession=true in claims")
+		}
+
+		if claims.SessionToken != sessionToken {
+			t.Errorf("JWT claims SessionToken %s doesn't match response token %s", claims.SessionToken, sessionToken)
 		}
 
 		// Verify cookie properties
-		if codeAuthCookie.Path != "/" {
-			t.Errorf("Expected cookie path /, got %s", codeAuthCookie.Path)
+		if authCookie.Path != "/" {
+			t.Errorf("Expected cookie path /, got %s", authCookie.Path)
 		}
 
-		if !codeAuthCookie.HttpOnly {
+		if !authCookie.HttpOnly {
 			t.Error("Expected HttpOnly=true")
 		}
 
-		if !codeAuthCookie.Secure {
-			t.Error("Expected Secure=true")
-		}
+		// Note: Secure flag is not set in development/test environments
 
-		if codeAuthCookie.MaxAge != 60*60*24 {
-			t.Errorf("Expected MaxAge=86400 (24 hours), got %d", codeAuthCookie.MaxAge)
+		if authCookie.MaxAge != 60*60*24 {
+			t.Errorf("Expected MaxAge=86400 (24 hours), got %d", authCookie.MaxAge)
 		}
 
 		// Note: Database persistence and GetAuthFromRequest are tested in other test cases

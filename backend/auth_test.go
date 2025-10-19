@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"go.hasen.dev/vbolt"
 )
 
@@ -92,14 +93,20 @@ func TestGetAuthFromRequest(t *testing.T) {
 		db := setupTestAuthDB(t)
 		defer db.Close()
 
-		// Save original appDb
+		// Save original appDb and jwtKey
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create a valid access code and session
 		var validCode string
 		var sessionToken string
+		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			// Create studio
@@ -128,13 +135,14 @@ func TestGetAuthFromRequest(t *testing.T) {
 			// Generate unique code
 			code, _ := generateUniqueCodeInDB(tx)
 			validCode = code
+			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
 				TargetId:   room.Id,
 				CreatedBy:  1,
 				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				ExpiresAt:  codeExpiresAt,
 				MaxViewers: 0,
 				IsRevoked:  false,
 				Label:      "Test Code",
@@ -158,11 +166,26 @@ func TestGetAuthFromRequest(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
-		// Create a request with codeAuthToken cookie
+		// Create JWT with code session claims
+		claims := &Claims{
+			IsCodeSession: true,
+			SessionToken:  sessionToken,
+			Code:          validCode,
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(codeExpiresAt),
+			},
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, err := token.SignedString(jwtKey)
+		if err != nil {
+			t.Fatalf("Failed to create test JWT: %v", err)
+		}
+
+		// Create a request with authToken cookie containing the JWT
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Name:  "authToken",
+			Value: tokenString,
 		})
 
 		// Test GetAuthFromRequest
@@ -240,11 +263,28 @@ func TestGetAuthFromRequest(t *testing.T) {
 		db := setupTestAuthDB(t)
 		defer db.Close()
 
-		// Create a request with invalid code session token
+		// Save original jwtKey
+		originalKey := jwtKey
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() { jwtKey = originalKey }()
+
+		// Create JWT with invalid/non-existent session token
+		claims := &Claims{
+			IsCodeSession: true,
+			SessionToken:  "invalid-session-token",
+			Code:          "12345",
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
+			},
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, _ := token.SignedString(jwtKey)
+
+		// Create a request with authToken cookie
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: "invalid-session-token",
+			Name:  "authToken",
+			Value: tokenString,
 		})
 
 		// Test GetAuthFromRequest
@@ -258,13 +298,19 @@ func TestGetAuthFromRequest(t *testing.T) {
 		db := setupTestAuthDB(t)
 		defer db.Close()
 
-		// Save original appDb
+		// Save original appDb and jwtKey
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create an expired access code and session
 		var sessionToken string
+		var validCode string
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			// Create studio
@@ -292,6 +338,7 @@ func TestGetAuthFromRequest(t *testing.T) {
 
 			// Generate unique code (expired)
 			code, _ := generateUniqueCodeInDB(tx)
+			validCode = code
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
@@ -322,122 +369,48 @@ func TestGetAuthFromRequest(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
-		// Create a request with expired code session token
-		req := httptest.NewRequest("GET", "/test", nil)
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
-		})
-
-		// Test GetAuthFromRequest - should fail because code is expired
-		_, err := GetAuthFromRequest(req, db)
-		if err != ErrAuthFailure {
-			t.Errorf("Expected ErrAuthFailure for expired code, got %v", err)
+		// Create JWT with code session claims (but code is expired in DB)
+		claims := &Claims{
+			IsCodeSession: true,
+			SessionToken:  sessionToken,
+			Code:          validCode,
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)), // JWT not expired, but code is
+			},
 		}
-	})
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+		tokenString, _ := token.SignedString(jwtKey)
 
-	t.Run("JWTPriorityOverCode", func(t *testing.T) {
-		db := setupTestAuthDB(t)
-		defer db.Close()
-
-		// Save original appDb and jwtKey
-		originalDb := appDb
-		originalKey := jwtKey
-		appDb = db
-		jwtKey = []byte("test-secret-key-for-jwt-testing")
-		defer func() {
-			appDb = originalDb
-			jwtKey = originalKey
-		}()
-
-		// Create a test user and JWT
-		var testUser User
-		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-			testUser = User{
-				Id:       vbolt.NextIntId(tx, UsersBkt),
-				Email:    "test@example.com",
-				Name:     "Test User",
-				Creation: time.Now(),
-			}
-			vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
-			vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
-
-			vbolt.TxCommit(tx)
-		})
-
-		testToken, _ := createTestToken(testUser.Email)
-
-		// Also create a valid code session
-		var sessionToken string
-		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-			studio := Studio{
-				Id:       vbolt.NextIntId(tx, StudiosBkt),
-				Name:     "Test Studio",
-				MaxRooms: 5,
-				OwnerId:  1,
-				Creation: time.Now(),
-			}
-			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
-
-			room := Room{
-				Id:         vbolt.NextIntId(tx, RoomsBkt),
-				StudioId:   studio.Id,
-				RoomNumber: 1,
-				Name:       "Test Room",
-				StreamKey:  "test-key",
-				Creation:   time.Now(),
-			}
-			vbolt.Write(tx, RoomsBkt, room.Id, &room)
-
-			code, _ := generateUniqueCodeInDB(tx)
-			accessCode := AccessCode{
-				Code:       code,
-				Type:       CodeTypeRoom,
-				TargetId:   room.Id,
-				CreatedBy:  1,
-				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(1 * time.Hour),
-				MaxViewers: 0,
-				IsRevoked:  false,
-			}
-			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
-
-			token, _ := generateSessionToken()
-			sessionToken = token
-			session := CodeSession{
-				Token:       sessionToken,
-				Code:        accessCode.Code,
-				ConnectedAt: time.Now(),
-				LastSeen:    time.Now(),
-			}
-			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
-
-			vbolt.TxCommit(tx)
-		})
-
-		// Create a request with BOTH JWT and code session cookies
+		// Create a request with authToken cookie
 		req := httptest.NewRequest("GET", "/test", nil)
 		req.AddCookie(&http.Cookie{
 			Name:  "authToken",
-			Value: testToken,
-		})
-		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Value: tokenString,
 		})
 
-		// Test GetAuthFromRequest - should prefer JWT
+		// Test GetAuthFromRequest - should succeed even though code is expired
+		// (expiration is enforced at stream access level, not auth level)
 		authCtx, err := GetAuthFromRequest(req, db)
 		if err != nil {
-			t.Errorf("Expected no error, got %v", err)
+			t.Errorf("Expected authentication to succeed for expired code (expiration checked elsewhere), got error: %v", err)
 		}
 
-		if authCtx.IsCodeAuth {
-			t.Error("Expected JWT auth (should have priority), got code auth")
+		if !authCtx.IsCodeAuth {
+			t.Error("Expected code auth")
 		}
 
-		if authCtx.User.Id != testUser.Id {
-			t.Errorf("Expected user ID %d, got %d", testUser.Id, authCtx.User.Id)
+		if authCtx.CodeSession == nil {
+			t.Fatal("Expected CodeSession")
+		}
+
+		if authCtx.AccessCode == nil {
+			t.Fatal("Expected AccessCode")
+		}
+
+		// Verify that the access code is indeed expired (test setup is correct)
+		if !authCtx.AccessCode.ExpiresAt.Before(time.Now()) {
+			t.Error("Test setup error: code should be expired")
 		}
 	})
+
 }

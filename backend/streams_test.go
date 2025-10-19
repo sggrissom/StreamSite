@@ -137,14 +137,21 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 		db := setupTestStreamsDB(t)
 		defer db.Close()
 
-		// Save original appDb
+		// Save original appDb and jwtKey
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create room, code, and session
 		var roomId int
 		var sessionToken string
+		var accessCodeStr string
+		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			studio := Studio{
@@ -169,13 +176,15 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 
 			// Create access code for this room
 			code, _ := generateUniqueCodeInDB(tx)
+			accessCodeStr = code
+			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
 				TargetId:   room.Id,
 				CreatedBy:  1,
 				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				ExpiresAt:  codeExpiresAt,
 				MaxViewers: 0,
 				IsRevoked:  false,
 			}
@@ -195,11 +204,17 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
-		// Create request with code auth cookie
+		// Create JWT with code session claims
+		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		if err != nil {
+			t.Fatalf("Failed to create JWT: %v", err)
+		}
+
+		// Create request with authToken cookie
 		req := httptest.NewRequest("GET", "/streams/room/1.m3u8", nil)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Name:  "authToken",
+			Value: jwtToken,
 		})
 
 		// Test authentication
@@ -338,13 +353,20 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 		db := setupTestStreamsDB(t)
 		defer db.Close()
 
-		// Save original appDb
+		// Save original appDb and jwtKey
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create expired code and session
 		var sessionToken string
+		var accessCodeStr string
+		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			studio := Studio{
@@ -368,13 +390,15 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 
 			// Create EXPIRED access code
 			code, _ := generateUniqueCodeInDB(tx)
+			accessCodeStr = code
+			codeExpiresAt = time.Now().Add(-1 * time.Hour) // Expired 1 hour ago
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
 				TargetId:   room.Id,
 				CreatedBy:  1,
 				CreatedAt:  time.Now().Add(-2 * time.Hour),
-				ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				ExpiresAt:  codeExpiresAt,
 				MaxViewers: 0,
 				IsRevoked:  false,
 			}
@@ -395,15 +419,21 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
+		// Create JWT with expired code session claims (JWT will be expired)
+		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		if err != nil {
+			t.Fatalf("Failed to create JWT: %v", err)
+		}
+
 		// Create request with expired code session
 		req := httptest.NewRequest("GET", "/streams/room/1.m3u8", nil)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Name:  "authToken",
+			Value: jwtToken,
 		})
 
-		// Test authentication - should fail
-		_, err := GetAuthFromRequest(req, db)
+		// Test authentication - should fail (JWT is expired)
+		_, err = GetAuthFromRequest(req, db)
 		if err != ErrAuthFailure {
 			t.Errorf("Expected ErrAuthFailure for expired code, got %v", err)
 		}

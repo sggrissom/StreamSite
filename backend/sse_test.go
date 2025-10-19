@@ -168,13 +168,20 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		db := setupTestSSEDB(t)
 		defer db.Close()
 
-		// Save original appDb
+		// Save original appDb and jwtKey
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create room, code, and session
 		var sessionToken string
+		var accessCodeStr string
+		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			studio := Studio{
@@ -198,13 +205,15 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 			// Create access code for this room
 			code, _ := generateUniqueCodeInDB(tx)
+			accessCodeStr = code
+			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
 				TargetId:   room.Id,
 				CreatedBy:  1,
 				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				ExpiresAt:  codeExpiresAt,
 				MaxViewers: 0,
 				IsRevoked:  false,
 			}
@@ -224,17 +233,23 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
+		// Create JWT with code session claims
+		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		if err != nil {
+			t.Fatalf("Failed to create JWT: %v", err)
+		}
+
 		// Create SSE handler
 		handler := MakeStreamRoomEventsHandler(db)
 
-		// Create request with code auth cookie (with timeout context)
+		// Create request with authToken cookie (with timeout context)
 		ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 		defer cancel()
 
 		req := httptest.NewRequest("GET", "/sse/room?roomId=1", nil).WithContext(ctx)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Name:  "authToken",
+			Value: jwtToken,
 		})
 
 		w := httptest.NewRecorder()
@@ -257,14 +272,21 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		db := setupTestSSEDB(t)
 		defer db.Close()
 
-		// Save original appDb
+		// Save original appDb and jwtKey
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create two rooms and a code for room 1 only
 		var room1Id int
 		var sessionToken string
+		var accessCodeStr string
+		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			studio := Studio{
@@ -301,13 +323,15 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 			// Create access code ONLY for room 1
 			code, _ := generateUniqueCodeInDB(tx)
+			accessCodeStr = code
+			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
 				TargetId:   room1Id,
 				CreatedBy:  1,
 				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				ExpiresAt:  codeExpiresAt,
 				MaxViewers: 0,
 				IsRevoked:  false,
 			}
@@ -327,14 +351,20 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
+		// Create JWT with code session claims
+		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		if err != nil {
+			t.Fatalf("Failed to create JWT: %v", err)
+		}
+
 		// Create SSE handler
 		handler := MakeStreamRoomEventsHandler(db)
 
 		// Try to connect to room 2 with code for room 1
 		req := httptest.NewRequest("GET", "/sse/room?roomId=2", nil)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Name:  "authToken",
+			Value: jwtToken,
 		})
 
 		w := httptest.NewRecorder()
@@ -352,13 +382,20 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		db := setupTestSSEDB(t)
 		defer db.Close()
 
-		// Save original appDb
+		// Save original appDb and jwtKey
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create expired code and session
 		var sessionToken string
+		var accessCodeStr string
+		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			studio := Studio{
@@ -382,13 +419,15 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 			// Create EXPIRED access code
 			code, _ := generateUniqueCodeInDB(tx)
+			accessCodeStr = code
+			codeExpiresAt = time.Now().Add(-1 * time.Hour) // Expired 1 hour ago
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
 				TargetId:   room.Id,
 				CreatedBy:  1,
 				CreatedAt:  time.Now().Add(-2 * time.Hour),
-				ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				ExpiresAt:  codeExpiresAt,
 				MaxViewers: 0,
 				IsRevoked:  false,
 			}
@@ -409,14 +448,20 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
+		// Create JWT with code session claims (JWT itself will be expired since codeExpiresAt is in the past)
+		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		if err != nil {
+			t.Fatalf("Failed to create JWT: %v", err)
+		}
+
 		// Create SSE handler
 		handler := MakeStreamRoomEventsHandler(db)
 
 		// Create request with expired code session
 		req := httptest.NewRequest("GET", "/sse/room?roomId=1", nil)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Name:  "authToken",
+			Value: jwtToken,
 		})
 
 		w := httptest.NewRecorder()
@@ -424,7 +469,7 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		// Call handler
 		handler(w, req)
 
-		// Should return 401 Unauthorized (auth failed)
+		// Should return 401 Unauthorized (JWT expired)
 		if w.Code != http.StatusUnauthorized {
 			t.Errorf("Expected status 401 for expired code, got %d", w.Code)
 		}
@@ -643,12 +688,18 @@ func TestViewerCountTracking(t *testing.T) {
 		defer db.Close()
 
 		originalDb := appDb
+		originalKey := jwtKey
 		appDb = db
-		defer func() { appDb = originalDb }()
+		jwtKey = []byte("test-secret-key-for-jwt-testing")
+		defer func() {
+			appDb = originalDb
+			jwtKey = originalKey
+		}()
 
 		// Create room, code, and session
 		var sessionToken string
 		var code string
+		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			studio := Studio{
@@ -673,13 +724,14 @@ func TestViewerCountTracking(t *testing.T) {
 			// Create access code
 			codeVal, _ := generateUniqueCodeInDB(tx)
 			code = codeVal
+			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
 				TargetId:   room.Id,
 				CreatedBy:  1,
 				CreatedAt:  time.Now(),
-				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				ExpiresAt:  codeExpiresAt,
 				MaxViewers: 0,
 				IsRevoked:  false,
 			}
@@ -719,6 +771,12 @@ func TestViewerCountTracking(t *testing.T) {
 			t.Fatalf("Expected initial viewers 3, got %d", beforeViewers)
 		}
 
+		// Create JWT with code session claims
+		jwtToken, err := createCodeSessionToken(sessionToken, code, codeExpiresAt)
+		if err != nil {
+			t.Fatalf("Failed to create JWT: %v", err)
+		}
+
 		// Create SSE handler and connect with timeout context
 		handler := MakeStreamRoomEventsHandler(db)
 		ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -726,8 +784,8 @@ func TestViewerCountTracking(t *testing.T) {
 
 		req := httptest.NewRequest("GET", "/sse/room?roomId=1", nil).WithContext(ctx)
 		req.AddCookie(&http.Cookie{
-			Name:  "codeAuthToken",
-			Value: sessionToken,
+			Name:  "authToken",
+			Value: jwtToken,
 		})
 
 		w := httptest.NewRecorder()
