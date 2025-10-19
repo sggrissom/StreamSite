@@ -21,7 +21,10 @@ var ErrLoginFailure = errors.New("LoginFailure")
 var ErrAuthFailure = errors.New("AuthFailure")
 
 type Claims struct {
-	Username string `json:"username"`
+	Username      string `json:"username"`
+	IsCodeSession bool   `json:"isCodeSession,omitempty"` // True for code-based access
+	SessionToken  string `json:"sessionToken,omitempty"`  // UUID of CodeSession (if IsCodeSession)
+	Code          string `json:"code,omitempty"`          // Access code (for logging/debug)
 	jwt.RegisteredClaims
 }
 
@@ -251,10 +254,68 @@ func GetAuthUser(ctx *vbeam.Context) (user User, err error) {
 		return jwtKey, nil
 	})
 	if err != nil || !token.Valid {
+		LogWarn(LogCategoryAuth, "JWT parsing failed in GetAuthUser", map[string]interface{}{
+			"error": err,
+			"valid": token != nil && token.Valid,
+		})
 		return
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok {
+		// Check if this is a code session JWT
+		if claims.IsCodeSession {
+			// Load code session from database
+			var session CodeSession
+			vbolt.Read(ctx.Tx, CodeSessionsBkt, claims.SessionToken, &session)
+
+			if session.Token == "" {
+				LogWarn(LogCategoryAuth, "Code session not found in database", map[string]interface{}{
+					"sessionToken": claims.SessionToken,
+				})
+				return user, errors.New("code session not found")
+			}
+
+			// Validate the session (check code not revoked/expired/grace period)
+			var accessCode AccessCode
+			vbolt.Read(ctx.Tx, AccessCodesBkt, session.Code, &accessCode)
+
+			if accessCode.Code == "" {
+				LogWarn(LogCategoryAuth, "Access code not found in database", map[string]interface{}{
+					"code": session.Code,
+				})
+				return user, errors.New("access code not found")
+			}
+
+			if accessCode.IsRevoked {
+				LogWarn(LogCategoryAuth, "Access code is revoked", map[string]interface{}{
+					"code": accessCode.Code,
+				})
+				return user, errors.New("access code revoked")
+			}
+
+			// Check expiration with grace period
+			now := time.Now()
+			if !session.GracePeriodUntil.IsZero() {
+				// In grace period - check if grace has expired
+				if now.After(session.GracePeriodUntil) {
+					return user, errors.New("access code grace period expired")
+				}
+			} else if now.After(accessCode.ExpiresAt) {
+				// Code expired - would need grace period but can't write in read-only tx
+				// The session cleanup job will handle setting grace period on write operations
+				return user, errors.New("access code expired")
+			}
+
+			// Return pseudo-user for code sessions
+			user = User{
+				Id:    -1, // Special ID for anonymous code sessions
+				Email: "anonymous@code-session",
+				Name:  "Access Code User",
+			}
+			return user, nil
+		}
+
+		// Regular user JWT
 		user = GetUser(ctx.Tx, GetUserId(ctx.Tx, claims.Username))
 	}
 	return
@@ -269,47 +330,63 @@ type AuthContext struct {
 	AccessCode  *AccessCode  // Access code info if code auth
 }
 
-// GetAuthFromRequest checks both JWT and code-based authentication
+// GetAuthFromRequest checks JWT authentication (supports both user and code sessions)
 // Returns AuthContext with user or code session information
 // This is used in HTTP handlers that have access to the request object
 func GetAuthFromRequest(r *http.Request, db *vbolt.DB) (authCtx AuthContext, err error) {
-	// First try JWT authentication (authToken cookie)
+	// Read authToken cookie (works for both regular users and code sessions)
 	authCookie, authErr := r.Cookie("authToken")
-	if authErr == nil && authCookie.Value != "" {
-		// Parse JWT token
-		token, tokenErr := jwt.ParseWithClaims(authCookie.Value, &Claims{}, func(token *jwt.Token) (any, error) {
-			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-				return nil, errors.New("unexpected signing method")
-			}
-			return jwtKey, nil
-		})
-
-		if tokenErr == nil && token.Valid {
-			if claims, ok := token.Claims.(*Claims); ok {
-				// Load user from database
-				vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
-					authCtx.User = GetUser(tx, GetUserId(tx, claims.Username))
-				})
-
-				if authCtx.User.Id > 0 {
-					authCtx.IsCodeAuth = false
-					return authCtx, nil
-				}
-			}
-		}
+	if authErr != nil || authCookie.Value == "" {
+		return authCtx, ErrAuthFailure
 	}
 
-	// If JWT failed, try code-based authentication (codeAuthToken cookie)
-	var session CodeSession
-	var code AccessCode
-	var valid bool
-
-	// AuthenticateCodeSession updates LastSeen, so we need a write transaction
-	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-		session, code, valid, _ = AuthenticateCodeSession(r, tx)
+	// Parse JWT token
+	token, tokenErr := jwt.ParseWithClaims(authCookie.Value, &Claims{}, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return jwtKey, nil
 	})
 
-	if valid {
+	if tokenErr != nil || !token.Valid {
+		return authCtx, ErrAuthFailure
+	}
+
+	claims, ok := token.Claims.(*Claims)
+	if !ok {
+		return authCtx, ErrAuthFailure
+	}
+
+	// Check if this is a code session JWT
+	if claims.IsCodeSession {
+		// Load code session from database
+		var session CodeSession
+		var accessCode AccessCode
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, CodeSessionsBkt, claims.SessionToken, &session)
+
+			if session.Token == "" {
+				return
+			}
+
+			vbolt.Read(tx, AccessCodesBkt, session.Code, &accessCode)
+
+			if accessCode.Code == "" || accessCode.IsRevoked {
+				return
+			}
+
+			// Update LastSeen timestamp
+			session.LastSeen = time.Now()
+			vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+
+			vbolt.TxCommit(tx)
+		})
+
+		if session.Token == "" || accessCode.Code == "" {
+			return authCtx, ErrAuthFailure
+		}
+
 		// Create pseudo-user for code sessions
 		authCtx.User = User{
 			Id:    -1, // Special ID for anonymous code sessions
@@ -318,12 +395,21 @@ func GetAuthFromRequest(r *http.Request, db *vbolt.DB) (authCtx AuthContext, err
 		}
 		authCtx.IsCodeAuth = true
 		authCtx.CodeSession = &session
-		authCtx.AccessCode = &code
+		authCtx.AccessCode = &accessCode
 		return authCtx, nil
 	}
 
-	// No valid authentication found
-	return authCtx, ErrAuthFailure
+	// Regular user JWT
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		authCtx.User = GetUser(tx, GetUserId(tx, claims.Username))
+	})
+
+	if authCtx.User.Id == 0 {
+		return authCtx, ErrAuthFailure
+	}
+
+	authCtx.IsCodeAuth = false
+	return authCtx, nil
 }
 
 func refreshTokenHandler(w http.ResponseWriter, r *http.Request) {

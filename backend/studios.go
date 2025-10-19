@@ -3,9 +3,11 @@ package backend
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"errors"
 	"stream/cfg"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 	"go.hasen.dev/vpack"
@@ -914,19 +916,108 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 		return
 	}
 
-	// Check if user has permission to view this studio (Viewer+)
-	role := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
+	// Check if user has permission to view this studio
+	var role StudioRole
 
-	// Site admins can view all studios/rooms
-	if caller.Role != RoleSiteAdmin && role == -1 {
-		resp.Success = false
-		resp.Error = "You do not have permission to view this room"
-		return
-	}
+	// Special handling for code session users (Id == -1)
+	if caller.Id == -1 {
+		// This is a code session - validate access via access code
+		// Parse JWT to get session token
+		token, tokenErr := jwt.ParseWithClaims(ctx.Token, &Claims{}, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, errors.New("unexpected signing method")
+			}
+			return jwtKey, nil
+		})
 
-	// Site admins who aren't members get Owner role for display purposes
-	if caller.Role == RoleSiteAdmin && role == -1 {
-		role = StudioRoleOwner
+		if tokenErr != nil || !token.Valid {
+			LogErrorSimple(LogCategorySystem, "JWT parsing failed in GetRoomDetails", map[string]interface{}{
+				"error": tokenErr,
+			})
+			resp.Success = false
+			resp.Error = "Invalid session token"
+			return
+		}
+
+		claims, ok := token.Claims.(*Claims)
+		if !ok || !claims.IsCodeSession {
+			LogErrorSimple(LogCategorySystem, "Claims validation failed", map[string]interface{}{
+				"claimsOk":      ok,
+				"isCodeSession": claims.IsCodeSession,
+			})
+			resp.Success = false
+			resp.Error = "Invalid code session"
+			return
+		}
+
+		// Load the code session to check access
+		var session CodeSession
+		vbolt.Read(ctx.Tx, CodeSessionsBkt, claims.SessionToken, &session)
+
+		if session.Token == "" {
+			LogErrorSimple(LogCategorySystem, "Session not found in database", map[string]interface{}{
+				"sessionToken": claims.SessionToken,
+			})
+			resp.Success = false
+			resp.Error = "Session not found"
+			return
+		}
+
+		// Load the access code
+		var accessCode AccessCode
+		vbolt.Read(ctx.Tx, AccessCodesBkt, session.Code, &accessCode)
+
+		if accessCode.Code == "" {
+			LogErrorSimple(LogCategorySystem, "Access code not found", map[string]interface{}{
+				"code": session.Code,
+			})
+			resp.Success = false
+			resp.Error = "Access code not found"
+			return
+		}
+
+		// Check if code grants access to this room
+		if accessCode.Type == CodeTypeRoom {
+			// Room-specific code - must match requested room
+			if accessCode.TargetId != req.RoomId {
+				LogWarn(LogCategorySystem, "Room code does not match requested room", map[string]interface{}{
+					"codeTargetId": accessCode.TargetId,
+					"requestedId":  req.RoomId,
+				})
+				resp.Success = false
+				resp.Error = "You do not have permission to view this room"
+				return
+			}
+		} else if accessCode.Type == CodeTypeStudio {
+			// Studio-wide code - must match room's studio
+			if accessCode.TargetId != room.StudioId {
+				LogWarn(LogCategorySystem, "Studio code does not match room's studio", map[string]interface{}{
+					"codeStudioId": accessCode.TargetId,
+					"roomStudioId": room.StudioId,
+				})
+				resp.Success = false
+				resp.Error = "You do not have permission to view this room"
+				return
+			}
+		}
+
+		// Code session has valid access - treat as viewer
+		role = StudioRoleViewer
+	} else {
+		// Regular user - check studio membership
+		role = GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
+
+		// Site admins can view all studios/rooms
+		if caller.Role != RoleSiteAdmin && role == -1 {
+			resp.Success = false
+			resp.Error = "You do not have permission to view this room"
+			return
+		}
+
+		// Site admins who aren't members get Owner role for display purposes
+		if caller.Role == RoleSiteAdmin && role == -1 {
+			role = StudioRoleOwner
+		}
 	}
 
 	resp.Success = true

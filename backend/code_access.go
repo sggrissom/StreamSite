@@ -12,6 +12,7 @@ import (
 	"stream/cfg"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 	"go.hasen.dev/vpack"
@@ -378,32 +379,6 @@ func ValidateCodeSession(tx *vbolt.Tx, sessionToken string) (bool, CodeSession, 
 	return true, session, code, ""
 }
 
-// AuthenticateCodeSession authenticates an HTTP request using the codeAuthToken cookie
-// If valid, updates the session's LastSeen timestamp
-// Returns: session, code, isValid, errorMessage
-func AuthenticateCodeSession(r *http.Request, tx *vbolt.Tx) (CodeSession, AccessCode, bool, string) {
-	var session CodeSession
-	var code AccessCode
-
-	// Read codeAuthToken cookie
-	cookie, err := r.Cookie("codeAuthToken")
-	if err != nil || cookie.Value == "" {
-		return session, code, false, "No code authentication token"
-	}
-
-	// Validate the session token
-	valid, session, code, errorMsg := ValidateCodeSession(tx, cookie.Value)
-	if !valid {
-		return session, code, false, errorMsg
-	}
-
-	// Session is valid - update LastSeen timestamp
-	session.LastSeen = time.Now()
-	vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
-
-	return session, code, true, ""
-}
-
 // DecrementCodeViewerCount decrements the CurrentViewers count for a code session
 // This should be called when SSE clients disconnect to accurately track active viewers
 func DecrementCodeViewerCount(db *vbolt.DB, sessionToken string) error {
@@ -560,7 +535,7 @@ func StartCodeSessionCleanup(db *vbolt.DB) {
 // API Procedures
 
 // validateAccessCodeHandler is an HTTP handler that validates an access code
-// and sets the codeAuthToken cookie for authentication
+// and sets the authToken cookie with a JWT for authentication
 func validateAccessCodeHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != "POST" {
 		vbeam.RespondError(w, errors.New("validate-access-code must be POST"))
@@ -582,15 +557,37 @@ func validateAccessCodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If validation succeeded, set the codeAuthToken cookie
+	// If validation succeeded, generate JWT and set authToken cookie
 	if resp.Success {
+		// Generate JWT with code session claims
+		expirationTime := resp.ExpiresAt
+		claims := &Claims{
+			IsCodeSession: true,
+			SessionToken:  resp.SessionToken,
+			Code:          req.Code,
+			RegisteredClaims: jwt.RegisteredClaims{
+				ExpiresAt: jwt.NewNumericDate(expirationTime),
+			},
+		}
+		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+
+		tokenString, tokenErr := token.SignedString(jwtKey)
+		if tokenErr != nil {
+			LogErrorWithRequest(r, LogCategorySystem, "Failed to generate JWT for code session", map[string]interface{}{
+				"code":         req.Code,
+				"sessionToken": resp.SessionToken,
+				"error":        tokenErr.Error(),
+			})
+			vbeam.RespondError(w, errors.New("failed to generate session token"))
+			return
+		}
+
+		// Set authToken cookie (same as regular user auth)
 		http.SetCookie(w, &http.Cookie{
-			Name:     "codeAuthToken",
-			Value:    resp.SessionToken,
+			Name:     "authToken",
+			Value:    tokenString,
 			Path:     "/",
 			HttpOnly: true,
-			Secure:   true, // Always use secure cookies
-			SameSite: http.SameSiteLaxMode,
 			MaxAge:   60 * 60 * 24, // 24 hours
 		})
 	}
@@ -861,6 +858,8 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 		}
 
 		vbolt.Write(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+		vbolt.TxCommit(tx)
 	})
 
 	// If validation failed, return early
