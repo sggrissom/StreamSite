@@ -3,9 +3,11 @@ import * as server from "../../server";
 import { Header, Footer } from "../../layout";
 import { StudioHeader } from "./components/StudioHeader";
 import { RoomsSection } from "./components/RoomsSection";
+import { ActiveCodesList } from "./components/ActiveCodesList";
 import { MembersSection } from "./components/MembersSection";
 import "../../styles/global";
 import "./studio-styles";
+import "./components/ActiveCodesList-styles";
 
 type Data = server.GetStudioDashboardResponse;
 
@@ -87,6 +89,15 @@ export function view(
             rooms={rooms}
             canManageRooms={canManageRooms}
           />
+
+          {/* Access Codes Section - only visible to admins */}
+          {canManageRooms && (
+            <ActiveCodesList
+              studioId={studio.id}
+              studioName={studio.name}
+              rooms={rooms}
+            />
+          )}
 
           {/* Members Section with all member management */}
           <MembersSection
