@@ -2874,3 +2874,365 @@ func TestGetCodeAnalytics(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateCodeSession(t *testing.T) {
+	db := setupTestCodeDB(t)
+	defer db.Close()
+
+	// Setup test data
+	var adminUser User
+	var studio Studio
+	var room Room
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create admin user
+		adminUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Admin User",
+			Email:    "admin@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+		vbolt.Write(tx, EmailBkt, adminUser.Email, &adminUser.Id)
+
+		// Create studio
+		studio = Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "A test studio",
+			MaxRooms:    5,
+			OwnerId:     adminUser.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership for admin
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create room
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Session not found
+	t.Run("SessionNotFound", func(t *testing.T) {
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, _, _, msg := ValidateCodeSession(tx, "nonexistent-token")
+			if valid {
+				t.Errorf("Expected invalid for nonexistent session")
+			}
+			if msg != "Session not found" {
+				t.Errorf("Expected 'Session not found' message, got: %s", msg)
+			}
+		})
+	})
+
+	// Create a test code and session for remaining tests
+	var testCode string
+	var sessionToken string
+	adminToken, _ := createTestToken(adminUser.Email)
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+		req := GenerateAccessCodeRequest{
+			Type:            int(CodeTypeRoom),
+			TargetId:        room.Id,
+			DurationMinutes: 120,
+			MaxViewers:      0,
+			Label:           "Test Code",
+		}
+		resp, _ := GenerateAccessCode(ctx, req)
+		testCode = resp.Code
+	})
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx}
+		req := ValidateAccessCodeRequest{Code: testCode}
+		resp, _ := ValidateAccessCode(ctx, req)
+		sessionToken = resp.SessionToken
+	})
+
+	// Test 2: Valid session for active code
+	t.Run("ValidActiveSession", func(t *testing.T) {
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, session, code, msg := ValidateCodeSession(tx, sessionToken)
+			if !valid {
+				t.Errorf("Expected valid session, got error: %s", msg)
+			}
+			if session.Token != sessionToken {
+				t.Errorf("Expected session token %s, got %s", sessionToken, session.Token)
+			}
+			if code.Code != testCode {
+				t.Errorf("Expected code %s, got %s", testCode, code.Code)
+			}
+			if msg != "" {
+				t.Errorf("Expected empty message for valid session, got: %s", msg)
+			}
+		})
+	})
+
+	// Test 3: Code not found (orphaned session)
+	t.Run("CodeNotFound", func(t *testing.T) {
+		// Create orphaned session (session with invalid code)
+		orphanedToken := "orphaned-token"
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			orphanedSession := CodeSession{
+				Token:       orphanedToken,
+				Code:        "99999", // Non-existent code
+				ConnectedAt: time.Now(),
+				LastSeen:    time.Now(),
+			}
+			vbolt.Write(tx, CodeSessionsBkt, orphanedToken, &orphanedSession)
+			vbolt.TxCommit(tx)
+		})
+
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, _, _, msg := ValidateCodeSession(tx, orphanedToken)
+			if valid {
+				t.Errorf("Expected invalid for orphaned session")
+			}
+			if msg != "Access code not found" {
+				t.Errorf("Expected 'Access code not found' message, got: %s", msg)
+			}
+		})
+	})
+
+	// Test 4: Revoked code
+	t.Run("RevokedCode", func(t *testing.T) {
+		// Create a revoked code with session
+		var revokedCode string
+		var revokedSessionToken string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create revoked code
+			accessCode := AccessCode{
+				Code:       "55555",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  true, // Revoked
+				Label:      "Revoked Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+			revokedCode = accessCode.Code
+
+			// Create session for revoked code
+			revokedSessionToken = "revoked-session-token"
+			session := CodeSession{
+				Token:       revokedSessionToken,
+				Code:        revokedCode,
+				ConnectedAt: time.Now(),
+				LastSeen:    time.Now(),
+			}
+			vbolt.Write(tx, CodeSessionsBkt, revokedSessionToken, &session)
+			vbolt.TxCommit(tx)
+		})
+
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, _, _, msg := ValidateCodeSession(tx, revokedSessionToken)
+			if valid {
+				t.Errorf("Expected invalid for revoked code")
+			}
+			if msg != "Access code has been revoked" {
+				t.Errorf("Expected 'Access code has been revoked' message, got: %s", msg)
+			}
+		})
+	})
+
+	// Test 5: Expired code (no grace period set)
+	t.Run("ExpiredCodeNoGrace", func(t *testing.T) {
+		// Create expired code with session
+		var expiredCode string
+		var expiredSessionToken string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create expired code
+			accessCode := AccessCode{
+				Code:       "66666",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now().Add(-3 * time.Hour),
+				ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+			expiredCode = accessCode.Code
+
+			// Create session for expired code (no grace period set)
+			expiredSessionToken = "expired-session-token"
+			session := CodeSession{
+				Token:            expiredSessionToken,
+				Code:             expiredCode,
+				ConnectedAt:      time.Now().Add(-2 * time.Hour),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Time{}, // No grace period
+			}
+			vbolt.Write(tx, CodeSessionsBkt, expiredSessionToken, &session)
+			vbolt.TxCommit(tx)
+		})
+
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, _, _, msg := ValidateCodeSession(tx, expiredSessionToken)
+			if valid {
+				t.Errorf("Expected invalid for expired code without grace period")
+			}
+			if msg != "Access code has expired (grace period available)" {
+				t.Errorf("Expected 'Access code has expired (grace period available)' message, got: %s", msg)
+			}
+		})
+	})
+
+	// Test 6: Expired code within grace period
+	t.Run("ExpiredCodeWithinGrace", func(t *testing.T) {
+		// Create expired code with active grace period
+		var expiredCode string
+		var graceSessionToken string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create expired code
+			accessCode := AccessCode{
+				Code:       "77777",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now().Add(-3 * time.Hour),
+				ExpiresAt:  time.Now().Add(-5 * time.Minute), // Expired 5 min ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code with Grace",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+			expiredCode = accessCode.Code
+
+			// Create session with active grace period
+			graceSessionToken = "grace-session-token"
+			session := CodeSession{
+				Token:            graceSessionToken,
+				Code:             expiredCode,
+				ConnectedAt:      time.Now().Add(-2 * time.Hour),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Now().Add(10 * time.Minute), // Grace period ends in 10 min
+			}
+			vbolt.Write(tx, CodeSessionsBkt, graceSessionToken, &session)
+			vbolt.TxCommit(tx)
+		})
+
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, session, code, msg := ValidateCodeSession(tx, graceSessionToken)
+			if !valid {
+				t.Errorf("Expected valid for session within grace period, got error: %s", msg)
+			}
+			if code.Code != expiredCode {
+				t.Errorf("Expected code %s, got %s", expiredCode, code.Code)
+			}
+			if session.Token != graceSessionToken {
+				t.Errorf("Expected session token %s, got %s", graceSessionToken, session.Token)
+			}
+		})
+	})
+
+	// Test 7: Expired code past grace period
+	t.Run("ExpiredCodePastGrace", func(t *testing.T) {
+		// Create expired code with expired grace period
+		var expiredCode string
+		var expiredGraceToken string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create expired code
+			accessCode := AccessCode{
+				Code:       "88889",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now().Add(-3 * time.Hour),
+				ExpiresAt:  time.Now().Add(-20 * time.Minute), // Expired 20 min ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code Past Grace",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+			expiredCode = accessCode.Code
+
+			// Create session with expired grace period
+			expiredGraceToken = "expired-grace-token"
+			session := CodeSession{
+				Token:            expiredGraceToken,
+				Code:             expiredCode,
+				ConnectedAt:      time.Now().Add(-2 * time.Hour),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Now().Add(-5 * time.Minute), // Grace ended 5 min ago
+			}
+			vbolt.Write(tx, CodeSessionsBkt, expiredGraceToken, &session)
+			vbolt.TxCommit(tx)
+		})
+
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, _, _, msg := ValidateCodeSession(tx, expiredGraceToken)
+			if valid {
+				t.Errorf("Expected invalid for expired grace period")
+			}
+			if msg != "Access code has expired" {
+				t.Errorf("Expected 'Access code has expired' message, got: %s", msg)
+			}
+		})
+	})
+
+	// Test 8: Valid session returns correct data
+	t.Run("ReturnsCorrectData", func(t *testing.T) {
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			valid, session, code, _ := ValidateCodeSession(tx, sessionToken)
+			if !valid {
+				t.Fatalf("Expected valid session")
+			}
+
+			// Verify session data
+			if session.Code != testCode {
+				t.Errorf("Expected session.Code to be %s, got %s", testCode, session.Code)
+			}
+			if session.Token != sessionToken {
+				t.Errorf("Expected session.Token to be %s, got %s", sessionToken, session.Token)
+			}
+
+			// Verify code data
+			if code.Code != testCode {
+				t.Errorf("Expected code.Code to be %s, got %s", testCode, code.Code)
+			}
+			if code.Type != CodeTypeRoom {
+				t.Errorf("Expected code.Type to be Room, got %d", code.Type)
+			}
+			if code.TargetId != room.Id {
+				t.Errorf("Expected code.TargetId to be %d, got %d", room.Id, code.TargetId)
+			}
+			if code.Label != "Test Code" {
+				t.Errorf("Expected code.Label to be 'Test Code', got %s", code.Label)
+			}
+		})
+	})
+}

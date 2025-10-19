@@ -331,6 +331,50 @@ func generateSessionToken() (string, error) {
 	return base64.URLEncoding.EncodeToString(bytes), nil
 }
 
+// ValidateCodeSession validates a code session token and returns session + code info
+// Returns: isValid, session, code, errorMessage
+func ValidateCodeSession(tx *vbolt.Tx, sessionToken string) (bool, CodeSession, AccessCode, string) {
+	var session CodeSession
+	var code AccessCode
+
+	// Load session
+	vbolt.Read(tx, CodeSessionsBkt, sessionToken, &session)
+	if session.Token == "" {
+		return false, session, code, "Session not found"
+	}
+
+	// Load associated code
+	vbolt.Read(tx, AccessCodesBkt, session.Code, &code)
+	if code.Code == "" {
+		return false, session, code, "Access code not found"
+	}
+
+	// Check if code is revoked
+	if code.IsRevoked {
+		return false, session, code, "Access code has been revoked"
+	}
+
+	// Check expiration with grace period logic
+	now := time.Now()
+	if now.After(code.ExpiresAt) {
+		// Code has expired - check grace period
+		if !session.GracePeriodUntil.IsZero() && now.Before(session.GracePeriodUntil) {
+			// Still within grace period - allow access
+			return true, session, code, ""
+		} else if session.GracePeriodUntil.IsZero() {
+			// Code just expired, no grace period set yet
+			// This means we need to grant grace period (will be set by caller if they want to)
+			return false, session, code, "Access code has expired (grace period available)"
+		} else {
+			// Grace period has ended
+			return false, session, code, "Access code has expired"
+		}
+	}
+
+	// Code is valid and active
+	return true, session, code, ""
+}
+
 // API Procedures
 
 func RegisterCodeAccessMethods(app *vbeam.Application) {
