@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 )
 
@@ -151,22 +152,65 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 			return
 		}
 
-		// Authenticate user
-		user, authErr := AuthenticateRequest(r)
+		// Authenticate user (supports both JWT and code sessions)
+		authCtx, authErr := GetAuthFromRequest(r, db)
 		if authErr != nil {
+			LogWarnWithRequest(r, LogCategoryAuth, "Unauthorized SSE connection attempt", map[string]interface{}{
+				"roomId": roomID,
+			})
 			http.Error(w, "Authentication required", http.StatusUnauthorized)
 			return
 		}
 
-		// Check if user has permission to view this room
+		// Check permissions based on authentication type
 		var hasPermission bool
-		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
-			hasPermission = HasStudioPermission(tx, user.Id, room.StudioId, StudioRoleViewer)
-		})
 
-		if !hasPermission {
-			http.Error(w, "You do not have permission to view this room", http.StatusForbidden)
-			return
+		if authCtx.IsCodeAuth {
+			// For code-based auth, verify room access
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				ctx := &vbeam.Context{Tx: tx}
+				accessResp, _ := GetCodeStreamAccess(ctx, GetCodeStreamAccessRequest{
+					SessionToken: authCtx.CodeSession.Token,
+					RoomId:       roomID,
+				})
+				hasPermission = accessResp.Allowed
+			})
+
+			if !hasPermission {
+				LogWarnWithRequest(r, LogCategoryAuth, "Code session denied SSE access to room", map[string]interface{}{
+					"roomId":       roomID,
+					"code":         authCtx.AccessCode.Code,
+					"sessionToken": authCtx.CodeSession.Token,
+				})
+				http.Error(w, "Access denied to this room", http.StatusForbidden)
+				return
+			}
+
+			LogInfo(LogCategoryAuth, "Code session connected to SSE", map[string]interface{}{
+				"roomId": roomID,
+				"code":   authCtx.AccessCode.Code,
+			})
+		} else {
+			// For JWT auth, check studio permissions
+			vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+				hasPermission = HasStudioPermission(tx, authCtx.User.Id, room.StudioId, StudioRoleViewer)
+			})
+
+			if !hasPermission {
+				LogWarnWithRequest(r, LogCategoryAuth, "User denied SSE access to room", map[string]interface{}{
+					"roomId": roomID,
+					"userId": authCtx.User.Id,
+					"email":  authCtx.User.Email,
+				})
+				http.Error(w, "You do not have permission to view this room", http.StatusForbidden)
+				return
+			}
+
+			LogInfo(LogCategoryAuth, "User connected to SSE", map[string]interface{}{
+				"roomId": roomID,
+				"userId": authCtx.User.Id,
+				"email":  authCtx.User.Email,
+			})
 		}
 
 		// Set SSE headers
