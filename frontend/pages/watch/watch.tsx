@@ -12,13 +12,15 @@ type CodeEntryForm = {
   code: string;
   error: string;
   loading: boolean;
+  autoValidated: boolean; // Track if we've already auto-validated
 };
 
 const useCodeForm = vlens.declareHook(
-  (): CodeEntryForm => ({
+  (routeKey: string): CodeEntryForm => ({
     code: "",
     error: "",
     loading: false,
+    autoValidated: false,
   }),
 );
 
@@ -31,7 +33,19 @@ export function view(
   prefix: string,
   data: Data,
 ): preact.ComponentChild {
-  const form = useCodeForm();
+  // Extract code from URL if present (e.g., /watch/12345)
+  const urlCode = extractCodeFromRoute(route, prefix);
+
+  // Use route as cache key to maintain state across renders
+  const form = useCodeForm(route);
+
+  // Auto-validate if code is in URL and we haven't validated yet
+  if (urlCode && !form.autoValidated && !form.loading) {
+    form.code = urlCode;
+    form.autoValidated = true;
+    // Trigger validation asynchronously
+    setTimeout(() => autoValidateCode(form, urlCode), 0);
+  }
 
   return (
     <div>
@@ -86,19 +100,31 @@ export function view(
   );
 }
 
-async function onSubmitCode(form: CodeEntryForm, event: Event) {
-  event.preventDefault();
+function extractCodeFromRoute(route: string, prefix: string): string {
+  // Extract code from URL like /watch/12345
+  const afterPrefix = route.substring(prefix.length);
+  const parts = afterPrefix.split("/").filter((p) => p.length > 0);
 
-  if (form.code.length !== 5) {
-    form.error = "Please enter a 5-digit code";
-    vlens.scheduleRedraw();
-    return;
+  if (parts.length > 0) {
+    const code = parts[0];
+    // Validate it's a 5-digit code
+    if (/^\d{5}$/.test(code)) {
+      return code;
+    }
   }
 
+  return "";
+}
+
+async function autoValidateCode(form: CodeEntryForm, code: string) {
   form.loading = true;
   form.error = "";
   vlens.scheduleRedraw();
 
+  await validateCode(form, code);
+}
+
+async function validateCode(form: CodeEntryForm, code: string) {
   const nativeFetch = window.fetch.bind(window);
   try {
     const res = await nativeFetch("/api/validate-access-code", {
@@ -107,7 +133,7 @@ async function onSubmitCode(form: CodeEntryForm, event: Event) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        code: form.code,
+        code: code,
       }),
     });
 
@@ -127,4 +153,20 @@ async function onSubmitCode(form: CodeEntryForm, event: Event) {
     form.loading = false;
     vlens.scheduleRedraw();
   }
+}
+
+async function onSubmitCode(form: CodeEntryForm, event: Event) {
+  event.preventDefault();
+
+  if (form.code.length !== 5) {
+    form.error = "Please enter a 5-digit code";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  form.loading = true;
+  form.error = "";
+  vlens.scheduleRedraw();
+
+  await validateCode(form, form.code);
 }
