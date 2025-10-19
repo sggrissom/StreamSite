@@ -3996,3 +3996,1027 @@ func TestAuthenticateCodeSession(t *testing.T) {
 		}
 	})
 }
+
+func TestCleanupInactiveSessions(t *testing.T) {
+	t.Run("CleansUpStaleSessionsOnly", func(t *testing.T) {
+		db := setupTestDB(t)
+		defer db.Close()
+
+		var code string
+		var staleToken, activeToken string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create access code
+			codeVal, _ := generateUniqueCodeInDB(tx)
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   1,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Create analytics with 2 viewers
+			analytics := CodeAnalytics{
+				Code:           code,
+				CurrentViewers: 2,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			// Create stale session (LastSeen 15 minutes ago)
+			token1, _ := generateSessionToken()
+			staleToken = token1
+			staleSession := CodeSession{
+				Token:       staleToken,
+				Code:        code,
+				ConnectedAt: time.Now().Add(-20 * time.Minute),
+				LastSeen:    time.Now().Add(-15 * time.Minute), // 15 minutes ago
+			}
+			vbolt.Write(tx, CodeSessionsBkt, staleToken, &staleSession)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, staleToken, code)
+
+			// Create active session (LastSeen 2 minutes ago)
+			token2, _ := generateSessionToken()
+			activeToken = token2
+			activeSession := CodeSession{
+				Token:       activeToken,
+				Code:        code,
+				ConnectedAt: time.Now().Add(-5 * time.Minute),
+				LastSeen:    time.Now().Add(-2 * time.Minute), // 2 minutes ago
+			}
+			vbolt.Write(tx, CodeSessionsBkt, activeToken, &activeSession)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, activeToken, code)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run cleanup
+		cleanedCount := CleanupInactiveSessions(db)
+
+		// Verify only 1 session was cleaned
+		if cleanedCount != 1 {
+			t.Errorf("Expected 1 session cleaned, got %d", cleanedCount)
+		}
+
+		// Verify stale session was deleted
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, staleToken, &session)
+			if session.Token != "" {
+				t.Error("Stale session should have been deleted")
+			}
+		})
+
+		// Verify active session still exists
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, activeToken, &session)
+			if session.Token == "" {
+				t.Error("Active session should not have been deleted")
+			}
+		})
+
+		// Verify viewer count was decremented from 2 to 1
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			if analytics.CurrentViewers != 1 {
+				t.Errorf("Expected CurrentViewers=1, got %d", analytics.CurrentViewers)
+			}
+		})
+	})
+
+	t.Run("HandlesEmptyDatabase", func(t *testing.T) {
+		db := setupTestDB(t)
+		defer db.Close()
+
+		// Run cleanup on empty database
+		cleanedCount := CleanupInactiveSessions(db)
+
+		if cleanedCount != 0 {
+			t.Errorf("Expected 0 sessions cleaned, got %d", cleanedCount)
+		}
+	})
+
+	t.Run("HandlesMultipleStaleSessionsSameCode", func(t *testing.T) {
+		db := setupTestDB(t)
+		defer db.Close()
+
+		var code string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create access code
+			codeVal, _ := generateUniqueCodeInDB(tx)
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   1,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Create analytics with 3 viewers
+			analytics := CodeAnalytics{
+				Code:           code,
+				CurrentViewers: 3,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			// Create 3 stale sessions for the same code
+			for i := 0; i < 3; i++ {
+				token, _ := generateSessionToken()
+				session := CodeSession{
+					Token:       token,
+					Code:        code,
+					ConnectedAt: time.Now().Add(-20 * time.Minute),
+					LastSeen:    time.Now().Add(-15 * time.Minute),
+				}
+				vbolt.Write(tx, CodeSessionsBkt, token, &session)
+				vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, token, code)
+			}
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run cleanup
+		cleanedCount := CleanupInactiveSessions(db)
+
+		// Verify all 3 sessions were cleaned
+		if cleanedCount != 3 {
+			t.Errorf("Expected 3 sessions cleaned, got %d", cleanedCount)
+		}
+
+		// Verify viewer count was decremented to 0
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			if analytics.CurrentViewers != 0 {
+				t.Errorf("Expected CurrentViewers=0, got %d", analytics.CurrentViewers)
+			}
+		})
+	})
+
+	t.Run("DoesNotDecrementBelowZero", func(t *testing.T) {
+		db := setupTestDB(t)
+		defer db.Close()
+
+		var code string
+		var token string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create access code
+			codeVal, _ := generateUniqueCodeInDB(tx)
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   1,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Create analytics with CurrentViewers already at 0
+			analytics := CodeAnalytics{
+				Code:           code,
+				CurrentViewers: 0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			// Create stale session
+			tokenVal, _ := generateSessionToken()
+			token = tokenVal
+			session := CodeSession{
+				Token:       token,
+				Code:        code,
+				ConnectedAt: time.Now().Add(-20 * time.Minute),
+				LastSeen:    time.Now().Add(-15 * time.Minute),
+			}
+			vbolt.Write(tx, CodeSessionsBkt, token, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, token, code)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run cleanup
+		cleanedCount := CleanupInactiveSessions(db)
+
+		if cleanedCount != 1 {
+			t.Errorf("Expected 1 session cleaned, got %d", cleanedCount)
+		}
+
+		// Verify viewer count stayed at 0 (didn't go negative)
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+			if analytics.CurrentViewers != 0 {
+				t.Errorf("Expected CurrentViewers=0, got %d", analytics.CurrentViewers)
+			}
+		})
+	})
+}
+
+// TestEndToEndCodeAuthFlow tests the complete authentication flow from code generation to stream access
+func TestEndToEndCodeAuthFlow(t *testing.T) {
+	t.Run("CompleteFlowRoomCode", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		// Step 1: Set up test data - create user, studio, and room
+		var userId, studioId, roomId int
+		var userEmail string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			userId = vbolt.NextIntId(tx, UsersBkt)
+			userEmail = "teacher@example.com"
+			user := User{
+				Id:    userId,
+				Email: userEmail,
+				Name:  "Test Teacher",
+			}
+			vbolt.Write(tx, UsersBkt, userId, &user)
+			vbolt.Write(tx, EmailBkt, userEmail, &userId)
+
+			// Create studio
+			studioId = vbolt.NextIntId(tx, StudiosBkt)
+			studio := Studio{
+				Id:   studioId,
+				Name: "Test Studio",
+			}
+			vbolt.Write(tx, StudiosBkt, studioId, &studio)
+
+			// Create room
+			roomId = vbolt.NextIntId(tx, RoomsBkt)
+			room := Room{
+				Id:       roomId,
+				StudioId: studioId,
+				Name:     "Test Room",
+			}
+			vbolt.Write(tx, RoomsBkt, roomId, &room)
+
+			// Add user as studio admin
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   userId,
+				StudioId: studioId,
+				Role:     StudioRoleAdmin,
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Step 2: Generate access code as admin
+		var code string
+		adminToken, _ := createTestToken(userEmail)
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+
+			resp, err := GenerateAccessCode(ctx, GenerateAccessCodeRequest{
+				Type:            int(CodeTypeRoom),
+				TargetId:        roomId,
+				DurationMinutes: 60,
+				MaxViewers:      10,
+				Label:           "End-to-End Test Code",
+			})
+
+			if err != nil {
+				t.Fatalf("Failed to generate code: %v", err)
+			}
+
+			code = resp.Code
+
+			vbolt.TxCommit(tx)
+		})
+
+		if code == "" {
+			t.Fatal("Generated code is empty")
+		}
+
+		// Step 3: Validate code to get session token
+		var sessionToken string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+				Code: code,
+			})
+
+			if err != nil {
+				t.Fatalf("Failed to validate code: %v", err)
+			}
+
+			if !resp.Success {
+				t.Fatalf("Code validation failed: %s", resp.Error)
+			}
+
+			sessionToken = resp.SessionToken
+			vbolt.TxCommit(tx)
+		})
+
+		if sessionToken == "" {
+			t.Fatal("Session token is empty")
+		}
+
+		// Step 4: Use session token to check stream access
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			resp, err := GetCodeStreamAccess(ctx, GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       roomId,
+			})
+
+			if err != nil {
+				t.Fatalf("Failed to check stream access: %v", err)
+			}
+
+			if !resp.Allowed {
+				t.Fatalf("Stream access denied: %s", resp.Message)
+			}
+
+			if resp.RoomId != roomId {
+				t.Errorf("Expected roomId=%d, got %d", roomId, resp.RoomId)
+			}
+
+			if resp.ExpiresAt.Before(time.Now()) {
+				t.Error("Code already expired")
+			}
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Step 5: Verify analytics were updated
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+
+			if analytics.TotalConnections != 1 {
+				t.Errorf("Expected TotalConnections=1, got %d", analytics.TotalConnections)
+			}
+
+			if analytics.CurrentViewers != 1 {
+				t.Errorf("Expected CurrentViewers=1, got %d", analytics.CurrentViewers)
+			}
+
+			if analytics.PeakViewers != 1 {
+				t.Errorf("Expected PeakViewers=1, got %d", analytics.PeakViewers)
+			}
+		})
+
+		// Step 6: Simulate disconnection by calling DecrementCodeViewerCount
+		err := DecrementCodeViewerCount(db, sessionToken)
+		if err != nil {
+			t.Errorf("Failed to decrement viewer count: %v", err)
+		}
+
+		// Step 7: Verify viewer count decremented
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+
+			if analytics.CurrentViewers != 0 {
+				t.Errorf("Expected CurrentViewers=0 after disconnect, got %d", analytics.CurrentViewers)
+			}
+
+			// TotalConnections and PeakViewers should remain
+			if analytics.TotalConnections != 1 {
+				t.Errorf("Expected TotalConnections=1, got %d", analytics.TotalConnections)
+			}
+
+			if analytics.PeakViewers != 1 {
+				t.Errorf("Expected PeakViewers=1, got %d", analytics.PeakViewers)
+			}
+		})
+	})
+
+	t.Run("CompleteFlowStudioCode", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		// Set up test data
+		var userId, studioId, room1Id, room2Id int
+		var userEmail string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			userId = vbolt.NextIntId(tx, UsersBkt)
+			userEmail = "teacher@example.com"
+			user := User{
+				Id:    userId,
+				Email: userEmail,
+				Name:  "Test Teacher",
+			}
+			vbolt.Write(tx, UsersBkt, userId, &user)
+			vbolt.Write(tx, EmailBkt, userEmail, &userId)
+
+			// Create studio
+			studioId = vbolt.NextIntId(tx, StudiosBkt)
+			studio := Studio{
+				Id:   studioId,
+				Name: "Test Studio",
+			}
+			vbolt.Write(tx, StudiosBkt, studioId, &studio)
+
+			// Create two rooms in the studio
+			room1Id = vbolt.NextIntId(tx, RoomsBkt)
+			room1 := Room{
+				Id:       room1Id,
+				StudioId: studioId,
+				Name:     "Test Room 1",
+			}
+			vbolt.Write(tx, RoomsBkt, room1Id, &room1)
+
+			room2Id = vbolt.NextIntId(tx, RoomsBkt)
+			room2 := Room{
+				Id:       room2Id,
+				StudioId: studioId,
+				Name:     "Test Room 2",
+			}
+			vbolt.Write(tx, RoomsBkt, room2Id, &room2)
+
+			// Add user as studio admin
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   userId,
+				StudioId: studioId,
+				Role:     StudioRoleAdmin,
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Generate studio-wide access code
+		var code string
+		adminToken, _ := createTestToken(userEmail)
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+
+			resp, err := GenerateAccessCode(ctx, GenerateAccessCodeRequest{
+				Type:            int(CodeTypeStudio),
+				TargetId:        studioId,
+				DurationMinutes: 120,
+				MaxViewers:      0, // unlimited
+				Label:           "Studio-Wide Code",
+			})
+
+			if err != nil {
+				t.Fatalf("Failed to generate studio code: %v", err)
+			}
+
+			code = resp.Code
+			vbolt.TxCommit(tx)
+		})
+
+		// Validate code
+		var sessionToken string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+				Code: code,
+			})
+
+			if err != nil {
+				t.Fatalf("Failed to validate code: %v", err)
+			}
+
+			sessionToken = resp.SessionToken
+			vbolt.TxCommit(tx)
+		})
+
+		// Verify access to both rooms in the studio
+		for _, roomId := range []int{room1Id, room2Id} {
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				ctx := &vbeam.Context{Tx: tx}
+
+				resp, err := GetCodeStreamAccess(ctx, GetCodeStreamAccessRequest{
+					SessionToken: sessionToken,
+					RoomId:       roomId,
+				})
+
+				if err != nil {
+					t.Fatalf("Failed to check access for room %d: %v", roomId, err)
+				}
+
+				if !resp.Allowed {
+					t.Errorf("Studio code should grant access to room %d: %s", roomId, resp.Message)
+				}
+
+				if resp.StudioId != studioId {
+					t.Errorf("Expected studioId=%d, got %d", studioId, resp.StudioId)
+				}
+
+				vbolt.TxCommit(tx)
+			})
+		}
+	})
+
+	t.Run("HTTPHandlerWithCookie", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		// Set up test data
+		var userId, studioId, roomId int
+		var userEmail string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			userId = vbolt.NextIntId(tx, UsersBkt)
+			userEmail = "teacher@example.com"
+			user := User{
+				Id:    userId,
+				Email: userEmail,
+				Name:  "Test Teacher",
+			}
+			vbolt.Write(tx, UsersBkt, userId, &user)
+			vbolt.Write(tx, EmailBkt, userEmail, &userId)
+
+			studioId = vbolt.NextIntId(tx, StudiosBkt)
+			studio := Studio{
+				Id:   studioId,
+				Name: "Test Studio",
+			}
+			vbolt.Write(tx, StudiosBkt, studioId, &studio)
+
+			roomId = vbolt.NextIntId(tx, RoomsBkt)
+			room := Room{
+				Id:       roomId,
+				StudioId: studioId,
+				Name:     "Test Room",
+			}
+			vbolt.Write(tx, RoomsBkt, roomId, &room)
+
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   userId,
+				StudioId: studioId,
+				Role:     StudioRoleAdmin,
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Generate code
+		var code string
+		adminToken, _ := createTestToken(userEmail)
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+
+			resp, err := GenerateAccessCode(ctx, GenerateAccessCodeRequest{
+				Type:            int(CodeTypeRoom),
+				TargetId:        roomId,
+				DurationMinutes: 60,
+				MaxViewers:      5,
+				Label:           "HTTP Test Code",
+			})
+
+			if err != nil {
+				t.Fatalf("Failed to generate code: %v", err)
+			}
+
+			code = resp.Code
+			vbolt.TxCommit(tx)
+		})
+
+		// Test the HTTP handler - validate code endpoint
+		// Save original appDb and restore after test
+		originalDb := appDb
+		appDb = db
+		defer func() { appDb = originalDb }()
+
+		// Create request with code (note: lowercase "code" to match JSON tag)
+		reqBody := fmt.Sprintf(`{"code": "%s"}`, code)
+		req := httptest.NewRequest("POST", "/api/validate-access-code", strings.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		validateAccessCodeHandler(w, req)
+
+		// Check response
+		if w.Code != http.StatusOK {
+			t.Fatalf("Expected status 200, got %d", w.Code)
+		}
+
+		// Check cookie was set
+		cookies := w.Result().Cookies()
+		var codeAuthCookie *http.Cookie
+		for _, cookie := range cookies {
+			if cookie.Name == "codeAuthToken" {
+				codeAuthCookie = cookie
+				break
+			}
+		}
+
+		if codeAuthCookie == nil {
+			t.Fatal("codeAuthToken cookie was not set")
+		}
+
+		// Parse response body to verify success
+		var validateResp ValidateAccessCodeResponse
+		json.NewDecoder(w.Result().Body).Decode(&validateResp)
+
+		if !validateResp.Success {
+			t.Fatalf("Validation failed: %s", validateResp.Error)
+		}
+
+		sessionToken := validateResp.SessionToken
+		if sessionToken == "" {
+			t.Fatal("Session token in response is empty")
+		}
+
+		// Verify the cookie value matches the response
+		if codeAuthCookie.Value != sessionToken {
+			t.Errorf("Cookie value %s doesn't match response token %s", codeAuthCookie.Value, sessionToken)
+		}
+
+		// Verify cookie properties
+		if codeAuthCookie.Path != "/" {
+			t.Errorf("Expected cookie path /, got %s", codeAuthCookie.Path)
+		}
+
+		if !codeAuthCookie.HttpOnly {
+			t.Error("Expected HttpOnly=true")
+		}
+
+		if !codeAuthCookie.Secure {
+			t.Error("Expected Secure=true")
+		}
+
+		if codeAuthCookie.MaxAge != 60*60*24 {
+			t.Errorf("Expected MaxAge=86400 (24 hours), got %d", codeAuthCookie.MaxAge)
+		}
+
+		// Note: Database persistence and GetAuthFromRequest are tested in other test cases
+	})
+
+	t.Run("ExpiredCodeFlow", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		// Create code that expires immediately
+		var userId, studioId, roomId int
+		var code string
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			userId = vbolt.NextIntId(tx, UsersBkt)
+			user := User{Id: userId, Email: "teacher@example.com", Name: "Teacher"}
+			vbolt.Write(tx, UsersBkt, userId, &user)
+			vbolt.Write(tx, EmailBkt, user.Email, &userId)
+
+			studioId = vbolt.NextIntId(tx, StudiosBkt)
+			studio := Studio{Id: studioId, Name: "Studio"}
+			vbolt.Write(tx, StudiosBkt, studioId, &studio)
+
+			roomId = vbolt.NextIntId(tx, RoomsBkt)
+			room := Room{Id: roomId, StudioId: studioId, Name: "Room"}
+			vbolt.Write(tx, RoomsBkt, roomId, &room)
+
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   userId,
+				StudioId: studioId,
+				Role:     StudioRoleAdmin,
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+
+			// Create code that's already expired
+			codeVal, _ := GenerateUniqueCode()
+			code = codeVal
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   roomId,
+				CreatedBy:  userId,
+				CreatedAt:  time.Now().Add(-2 * time.Hour),
+				ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				MaxViewers: 10,
+				IsRevoked:  false,
+				Label:      "Expired Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code, &accessCode)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code, roomId)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Try to validate expired code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+				Code: code,
+			})
+
+			if err != nil {
+				t.Fatalf("ValidateAccessCode returned error: %v", err)
+			}
+
+			if resp.Success {
+				t.Error("Expected expired code to be rejected")
+			}
+
+			if !strings.Contains(resp.Error, "expired") && !strings.Contains(resp.Error, "Expired") {
+				t.Errorf("Expected error message to mention expiration, got: %s", resp.Error)
+			}
+
+			vbolt.TxCommit(tx)
+		})
+	})
+
+	t.Run("RevokedCodeFlow", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var userId, studioId, roomId int
+		var code, sessionToken string
+
+		// Create test data
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			userId = vbolt.NextIntId(tx, UsersBkt)
+			user := User{Id: userId, Email: "teacher@example.com", Name: "Teacher"}
+			vbolt.Write(tx, UsersBkt, userId, &user)
+			vbolt.Write(tx, EmailBkt, user.Email, &userId)
+
+			studioId = vbolt.NextIntId(tx, StudiosBkt)
+			studio := Studio{Id: studioId, Name: "Studio"}
+			vbolt.Write(tx, StudiosBkt, studioId, &studio)
+
+			roomId = vbolt.NextIntId(tx, RoomsBkt)
+			room := Room{Id: roomId, StudioId: studioId, Name: "Room"}
+			vbolt.Write(tx, RoomsBkt, roomId, &room)
+
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   userId,
+				StudioId: studioId,
+				Role:     StudioRoleAdmin,
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Generate code
+		adminToken, _ := createTestToken("teacher@example.com")
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+
+			genResp, err := GenerateAccessCode(ctx, GenerateAccessCodeRequest{
+				Type:            int(CodeTypeRoom),
+				TargetId:        roomId,
+				DurationMinutes: 60,
+				MaxViewers:      10,
+				Label:           "To Be Revoked",
+			})
+			if err != nil {
+				t.Fatalf("Failed to generate code: %v", err)
+			}
+			code = genResp.Code
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Validate code to create session
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			valResp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+				Code: code,
+			})
+			if err != nil {
+				t.Fatalf("Failed to validate code: %v", err)
+			}
+			sessionToken = valResp.SessionToken
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Revoke the code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+
+			resp, err := RevokeAccessCode(ctx, RevokeAccessCodeRequest{
+				Code: code,
+			})
+			if err != nil {
+				t.Fatalf("Failed to revoke code: %v", err)
+			}
+
+			if !resp.Success {
+				t.Error("Expected revocation to succeed")
+			}
+
+			if resp.SessionsKilled != 1 {
+				t.Errorf("Expected 1 session killed, got %d", resp.SessionsKilled)
+			}
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Try to use the revoked session
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			resp, err := GetCodeStreamAccess(ctx, GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       roomId,
+			})
+
+			if err != nil {
+				t.Fatalf("GetCodeStreamAccess returned error: %v", err)
+			}
+
+			if resp.Allowed {
+				t.Error("Expected revoked code session to be denied access")
+			}
+
+			// After revocation, the session is deleted, so we get "invalid session token" message
+			if !strings.Contains(strings.ToLower(resp.Message), "revoked") && !strings.Contains(strings.ToLower(resp.Message), "invalid") {
+				t.Errorf("Expected message to mention revocation or invalid session, got: %s", resp.Message)
+			}
+
+			vbolt.TxCommit(tx)
+		})
+	})
+
+	t.Run("ViewerLimitEnforcementEndToEnd", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var userId, studioId, roomId int
+		var code string
+
+		// Set up with MaxViewers=2
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			userId = vbolt.NextIntId(tx, UsersBkt)
+			user := User{Id: userId, Email: "teacher@example.com", Name: "Teacher"}
+			vbolt.Write(tx, UsersBkt, userId, &user)
+			vbolt.Write(tx, EmailBkt, user.Email, &userId)
+
+			studioId = vbolt.NextIntId(tx, StudiosBkt)
+			studio := Studio{Id: studioId, Name: "Studio"}
+			vbolt.Write(tx, StudiosBkt, studioId, &studio)
+
+			roomId = vbolt.NextIntId(tx, RoomsBkt)
+			room := Room{Id: roomId, StudioId: studioId, Name: "Room"}
+			vbolt.Write(tx, RoomsBkt, roomId, &room)
+
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   userId,
+				StudioId: studioId,
+				Role:     StudioRoleAdmin,
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+
+			adminToken, _ := createTestToken(user.Email)
+			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+
+			resp, err := GenerateAccessCode(ctx, GenerateAccessCodeRequest{
+				Type:            int(CodeTypeRoom),
+				TargetId:        roomId,
+				DurationMinutes: 60,
+				MaxViewers:      2, // Limit to 2 viewers
+				Label:           "Limited Code",
+			})
+			if err != nil {
+				t.Fatalf("Failed to generate code: %v", err)
+			}
+			code = resp.Code
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Create first two sessions - should succeed
+		var session1 string
+		for i := 0; i < 2; i++ {
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				ctx := &vbeam.Context{Tx: tx}
+
+				resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+					Code: code,
+				})
+				if err != nil {
+					t.Fatalf("Failed to validate code (session %d): %v", i+1, err)
+				}
+
+				if !resp.Success {
+					t.Errorf("Session %d should be allowed (under limit)", i+1)
+				}
+
+				if i == 0 {
+					session1 = resp.SessionToken
+				}
+
+				vbolt.TxCommit(tx)
+			})
+		}
+
+		// Verify current viewers = 2
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+
+			if analytics.CurrentViewers != 2 {
+				t.Errorf("Expected CurrentViewers=2, got %d", analytics.CurrentViewers)
+			}
+		})
+
+		// Try to create third session - should fail
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+				Code: code,
+			})
+			if err != nil {
+				t.Fatalf("ValidateAccessCode returned error: %v", err)
+			}
+
+			if resp.Success {
+				t.Error("Third session should be rejected (at capacity)")
+			}
+
+			if !strings.Contains(resp.Error, "capacity") && !strings.Contains(resp.Error, "full") {
+				t.Errorf("Expected error about capacity, got: %s", resp.Error)
+			}
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Disconnect first session
+		DecrementCodeViewerCount(db, session1)
+
+		// Now third session should succeed
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+
+			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+				Code: code,
+			})
+			if err != nil {
+				t.Fatalf("Failed to validate after disconnect: %v", err)
+			}
+
+			if !resp.Success {
+				t.Errorf("Third session should succeed after disconnect: %s", resp.Error)
+			}
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Verify final count = 2 (session2 + new session3)
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
+
+			if analytics.CurrentViewers != 2 {
+				t.Errorf("Expected CurrentViewers=2 after reconnect, got %d", analytics.CurrentViewers)
+			}
+
+			if analytics.TotalConnections != 3 {
+				t.Errorf("Expected TotalConnections=3, got %d", analytics.TotalConnections)
+			}
+		})
+	})
+}

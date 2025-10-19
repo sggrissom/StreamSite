@@ -36,6 +36,10 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	})
 
 	db := OpenDB(cfg.DBPath)
+
+	// Start background jobs
+	backend.StartCodeSessionCleanup(db)
+
 	var app = vbeam.NewApplication("Stream", db)
 
 	backend.SetupAuth(app)

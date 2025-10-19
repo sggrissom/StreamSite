@@ -454,6 +454,109 @@ func DecrementCodeViewerCount(db *vbolt.DB, sessionToken string) error {
 	return nil
 }
 
+// CleanupInactiveSessions removes code sessions that haven't been active
+// for more than 10 minutes. This prevents zombie sessions from keeping
+// viewer counts inflated and database bloat.
+// Returns the number of sessions cleaned up.
+//
+// Note: This iterates through all codes in the AccessCodesBkt. For better
+// performance in production, consider adding an index of all codes or
+// tracking recently active codes.
+func CleanupInactiveSessions(db *vbolt.DB) int {
+	cleanedCount := 0
+	cutoffTime := time.Now().Add(-10 * time.Minute)
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Collect all unique codes that have sessions
+		// We do this by reading all sessions from the SessionsByCodeIdx
+		codesWithSessions := make(map[string]bool)
+
+		// Iterate through all access codes and check their sessions
+		// Note: This approach reads from AccessCodesBkt directly
+		// For each access code, check if it has sessions
+		err := tx.Bucket([]byte("access_codes")).ForEach(func(k, v []byte) error {
+			code := string(k)
+			codesWithSessions[code] = true
+			return nil
+		})
+
+		if err != nil {
+			LogWarn(LogCategorySystem, "Error iterating access codes for cleanup", "error", err.Error())
+			return
+		}
+
+		// For each code that has sessions, check for inactive ones
+		for code := range codesWithSessions {
+			var sessionTokens []string
+			vbolt.ReadTermTargets(tx, SessionsByCodeIdx, code, &sessionTokens, vbolt.Window{})
+
+			for _, token := range sessionTokens {
+				var session CodeSession
+				vbolt.Read(tx, CodeSessionsBkt, token, &session)
+
+				if session.Token == "" {
+					continue
+				}
+
+				// Check if session is inactive (LastSeen > 10 minutes ago)
+				if session.LastSeen.Before(cutoffTime) {
+					// Decrement viewer count for this session's code
+					var analytics CodeAnalytics
+					vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &analytics)
+
+					if analytics.CurrentViewers > 0 {
+						analytics.CurrentViewers--
+						vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &analytics)
+					}
+
+					// Remove session from index
+					vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, "")
+
+					// Delete the session
+					vbolt.Delete(tx, CodeSessionsBkt, session.Token)
+
+					cleanedCount++
+
+					LogDebug(LogCategorySystem, "Cleaned up inactive code session", map[string]interface{}{
+						"sessionToken": token,
+						"code":         session.Code,
+						"lastSeen":     session.LastSeen,
+						"inactiveFor":  time.Since(session.LastSeen).String(),
+					})
+				}
+			}
+		}
+
+		vbolt.TxCommit(tx)
+	})
+
+	if cleanedCount > 0 {
+		LogInfo(LogCategorySystem, "Session cleanup completed", map[string]interface{}{
+			"sessionsRemoved": cleanedCount,
+		})
+	}
+
+	return cleanedCount
+}
+
+// StartCodeSessionCleanup starts a background goroutine that periodically
+// cleans up inactive code sessions every 5 minutes
+func StartCodeSessionCleanup(db *vbolt.DB) {
+	LogInfo(LogCategorySystem, "Starting code session cleanup job", map[string]interface{}{
+		"frequency":       "5 minutes",
+		"inactivityLimit": "10 minutes",
+	})
+
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			CleanupInactiveSessions(db)
+		}
+	}()
+}
+
 // API Procedures
 
 // validateAccessCodeHandler is an HTTP handler that validates an access code
