@@ -2397,3 +2397,480 @@ func TestListAccessCodes(t *testing.T) {
 		}
 	})
 }
+
+func TestGetCodeAnalytics(t *testing.T) {
+	db := setupTestCodeDB(t)
+	defer db.Close()
+
+	// Setup test data
+	var adminUser, viewerUser, nonMemberUser User
+	var studio Studio
+	var room Room
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create admin user
+		adminUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Admin User",
+			Email:    "admin@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+		vbolt.Write(tx, EmailBkt, adminUser.Email, &adminUser.Id)
+
+		// Create viewer user
+		viewerUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Viewer User",
+			Email:    "viewer@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, viewerUser.Id, &viewerUser)
+		vbolt.Write(tx, EmailBkt, viewerUser.Email, &viewerUser.Id)
+
+		// Create non-member user
+		nonMemberUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Non-Member User",
+			Email:    "nonmember@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, nonMemberUser.Id, &nonMemberUser)
+		vbolt.Write(tx, EmailBkt, nonMemberUser.Email, &nonMemberUser.Id)
+
+		// Create studio
+		studio = Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "A test studio",
+			MaxRooms:    5,
+			OwnerId:     adminUser.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership for admin
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create studio membership for viewer
+		viewerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		viewerMembership := StudioMembership{
+			UserId:   viewerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleViewer,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, viewerMembershipId, &viewerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, viewerMembershipId, viewerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, viewerMembershipId, studio.Id)
+
+		// Create room
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Code not found
+	t.Run("CodeNotFound", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GetCodeAnalyticsRequest{Code: "99999"}
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when code not found")
+		}
+		if resp.Error != "Access code not found" {
+			t.Errorf("Expected 'Access code not found' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 2: Authentication required
+	t.Run("AuthenticationRequired", func(t *testing.T) {
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: "", // No token
+			}
+
+			req := GetCodeAnalyticsRequest{Code: "12345"}
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when not authenticated")
+		}
+		if resp.Error != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 3: Invalid code format
+	t.Run("InvalidCodeFormat", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GetCodeAnalyticsRequest{Code: "123"} // Too short
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for invalid code format")
+		}
+		if resp.Error != "Invalid code format" {
+			t.Errorf("Expected 'Invalid code format' error, got: %s", resp.Error)
+		}
+	})
+
+	// Create a test code for remaining tests
+	var testCode string
+	adminToken, _ := createTestToken(adminUser.Email)
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+		req := GenerateAccessCodeRequest{
+			Type:            int(CodeTypeRoom),
+			TargetId:        room.Id,
+			DurationMinutes: 120,
+			MaxViewers:      10,
+			Label:           "Analytics Test Code",
+		}
+		resp, _ := GenerateAccessCode(ctx, req)
+		testCode = resp.Code
+	})
+
+	// Test 4: Permission denied (viewer)
+	t.Run("PermissionDenied", func(t *testing.T) {
+		viewerToken, err := createTestToken(viewerUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: viewerToken,
+			}
+
+			req := GetCodeAnalyticsRequest{Code: testCode}
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when viewer tries to access analytics")
+		}
+		if resp.Error != "Only studio admins can view code analytics" {
+			t.Errorf("Expected admin permission error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 5: Successful analytics for active code (no sessions)
+	t.Run("ActiveCodeNoSessions", func(t *testing.T) {
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GetCodeAnalyticsRequest{Code: testCode}
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.Code != testCode {
+			t.Errorf("Expected code %s, got %s", testCode, resp.Code)
+		}
+		if resp.Type != int(CodeTypeRoom) {
+			t.Errorf("Expected type Room, got %d", resp.Type)
+		}
+		if resp.Label != "Analytics Test Code" {
+			t.Errorf("Expected label 'Analytics Test Code', got %s", resp.Label)
+		}
+		if resp.Status != "active" {
+			t.Errorf("Expected status 'active', got %s", resp.Status)
+		}
+		if resp.TotalConnections != 0 {
+			t.Errorf("Expected 0 total connections, got %d", resp.TotalConnections)
+		}
+		if resp.CurrentViewers != 0 {
+			t.Errorf("Expected 0 current viewers, got %d", resp.CurrentViewers)
+		}
+		if len(resp.Sessions) != 0 {
+			t.Errorf("Expected 0 sessions, got %d", len(resp.Sessions))
+		}
+	})
+
+	// Create some sessions for testing
+	var sessionToken1, sessionToken2 string
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx}
+
+		// Session 1
+		req := ValidateAccessCodeRequest{Code: testCode}
+		resp, _ := ValidateAccessCode(ctx, req)
+		sessionToken1 = resp.SessionToken
+	})
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx}
+
+		// Session 2
+		req := ValidateAccessCodeRequest{Code: testCode}
+		resp, _ := ValidateAccessCode(ctx, req)
+		sessionToken2 = resp.SessionToken
+	})
+
+	// Manually set ClientIP and UserAgent for testing
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		var session1 CodeSession
+		vbolt.Read(tx, CodeSessionsBkt, sessionToken1, &session1)
+		session1.ClientIP = "192.168.1.100"
+		session1.UserAgent = "Mozilla/5.0 Test Browser"
+		vbolt.Write(tx, CodeSessionsBkt, sessionToken1, &session1)
+
+		var session2 CodeSession
+		vbolt.Read(tx, CodeSessionsBkt, sessionToken2, &session2)
+		session2.ClientIP = "10.0.0.50"
+		session2.UserAgent = "Mobile Safari Test"
+		// Set LastSeen to 11 minutes ago to make it inactive
+		session2.LastSeen = time.Now().Add(-11 * time.Minute)
+		vbolt.Write(tx, CodeSessionsBkt, sessionToken2, &session2)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 6: Analytics with active sessions
+	t.Run("ActiveCodeWithSessions", func(t *testing.T) {
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GetCodeAnalyticsRequest{Code: testCode}
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.TotalConnections != 2 {
+			t.Errorf("Expected 2 total connections, got %d", resp.TotalConnections)
+		}
+		if resp.CurrentViewers != 2 {
+			t.Errorf("Expected 2 current viewers, got %d", resp.CurrentViewers)
+		}
+		if len(resp.Sessions) != 2 {
+			t.Fatalf("Expected 2 sessions, got %d", len(resp.Sessions))
+		}
+
+		// Find sessions by their characteristics (order may vary)
+		var activeSession, inactiveSession *SessionInfo
+		for i := range resp.Sessions {
+			if resp.Sessions[i].ClientIP == "192.168.1.xxx" {
+				activeSession = &resp.Sessions[i]
+			} else if resp.Sessions[i].ClientIP == "10.0.0.xxx" {
+				inactiveSession = &resp.Sessions[i]
+			}
+		}
+
+		// Verify active session (192.168.1.100)
+		if activeSession == nil {
+			t.Fatal("Expected to find session with IP 192.168.1.xxx")
+		}
+		if activeSession.UserAgent != "Mozilla/5.0 Test Browser" {
+			t.Errorf("Expected user agent 'Mozilla/5.0 Test Browser', got %s", activeSession.UserAgent)
+		}
+		if !activeSession.IsActive {
+			t.Errorf("Expected active session to have IsActive=true")
+		}
+
+		// Verify inactive session (10.0.0.50)
+		if inactiveSession == nil {
+			t.Fatal("Expected to find session with IP 10.0.0.xxx")
+		}
+		if inactiveSession.UserAgent != "Mobile Safari Test" {
+			t.Errorf("Expected user agent 'Mobile Safari Test', got %s", inactiveSession.UserAgent)
+		}
+		if inactiveSession.IsActive {
+			t.Errorf("Expected inactive session to have IsActive=false (LastSeen > 10 min ago)")
+		}
+	})
+
+	// Test 7: Expired code
+	t.Run("ExpiredCode", func(t *testing.T) {
+		// Create an expired code
+		var expiredCode string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			accessCode := AccessCode{
+				Code:       "88888",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now().Add(-3 * time.Hour),
+				ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             accessCode.Code,
+				TotalConnections: 10,
+				CurrentViewers:   0,
+				PeakViewers:      5,
+				PeakViewersAt:    time.Now().Add(-2 * time.Hour),
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+			expiredCode = accessCode.Code
+			vbolt.TxCommit(tx)
+		})
+
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GetCodeAnalyticsRequest{Code: expiredCode}
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.Status != "expired" {
+			t.Errorf("Expected status 'expired', got %s", resp.Status)
+		}
+		if resp.TotalConnections != 10 {
+			t.Errorf("Expected 10 total connections, got %d", resp.TotalConnections)
+		}
+		if resp.PeakViewers != 5 {
+			t.Errorf("Expected 5 peak viewers, got %d", resp.PeakViewers)
+		}
+	})
+
+	// Test 8: Revoked code
+	t.Run("RevokedCode", func(t *testing.T) {
+		// Create a revoked code
+		var revokedCode string
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			accessCode := AccessCode{
+				Code:       "77777",
+				Type:       CodeTypeStudio,
+				TargetId:   studio.Id,
+				CreatedBy:  adminUser.Id,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  true, // Revoked
+				Label:      "Revoked Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             accessCode.Code,
+				TotalConnections: 3,
+				CurrentViewers:   0,
+				PeakViewers:      2,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+			revokedCode = accessCode.Code
+			vbolt.TxCommit(tx)
+		})
+
+		var resp GetCodeAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := GetCodeAnalyticsRequest{Code: revokedCode}
+			resp, _ = GetCodeAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.Status != "revoked" {
+			t.Errorf("Expected status 'revoked', got %s", resp.Status)
+		}
+		if resp.Type != int(CodeTypeStudio) {
+			t.Errorf("Expected type Studio, got %d", resp.Type)
+		}
+	})
+
+	// Test 9: IP anonymization edge cases
+	t.Run("IPAnonymization", func(t *testing.T) {
+		testCases := []struct {
+			input    string
+			expected string
+		}{
+			{"192.168.1.100", "192.168.1.xxx"},
+			{"10.0.0.1", "10.0.0.xxx"},
+			{"", ""},
+			{"invalid", "xxx"},
+			{"2001:db8::1", "2001:db8::xxx"}, // IPv6 keeps the :: notation
+		}
+
+		for _, tc := range testCases {
+			result := anonymizeIP(tc.input)
+			if result != tc.expected {
+				t.Errorf("anonymizeIP(%q) = %q, expected %q", tc.input, result, tc.expected)
+			}
+		}
+	})
+}

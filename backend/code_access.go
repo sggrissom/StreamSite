@@ -268,6 +268,34 @@ type ListAccessCodesResponse struct {
 	Codes   []AccessCodeListItem `json:"codes,omitempty"`
 }
 
+type GetCodeAnalyticsRequest struct {
+	Code string `json:"code"` // 5-digit code
+}
+
+type SessionInfo struct {
+	ConnectedAt time.Time `json:"connectedAt"` // When session started
+	Duration    int       `json:"duration"`    // Seconds since connection (or until LastSeen if inactive)
+	ClientIP    string    `json:"clientIP"`    // Anonymized IP address
+	UserAgent   string    `json:"userAgent"`   // Browser/device info
+	IsActive    bool      `json:"isActive"`    // Whether session is still active (LastSeen < 10min ago)
+}
+
+type GetCodeAnalyticsResponse struct {
+	Success          bool          `json:"success"`
+	Error            string        `json:"error,omitempty"`
+	Code             string        `json:"code,omitempty"`
+	Type             int           `json:"type,omitempty"`             // 0=room, 1=studio
+	Label            string        `json:"label,omitempty"`            // Description
+	Status           string        `json:"status,omitempty"`           // "active", "expired", "revoked"
+	CreatedAt        time.Time     `json:"createdAt,omitempty"`        // When code was created
+	ExpiresAt        time.Time     `json:"expiresAt,omitempty"`        // When code expires
+	TotalConnections int           `json:"totalConnections,omitempty"` // Lifetime connection count
+	CurrentViewers   int           `json:"currentViewers,omitempty"`   // Active sessions right now
+	PeakViewers      int           `json:"peakViewers,omitempty"`      // Historical maximum
+	PeakViewersAt    time.Time     `json:"peakViewersAt,omitempty"`    // When peak occurred
+	Sessions         []SessionInfo `json:"sessions,omitempty"`         // Current active sessions
+}
+
 // Helper functions
 
 // codeExistsInDB checks if a code already exists in the database
@@ -311,6 +339,7 @@ func RegisterCodeAccessMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, GetCodeStreamAccess)
 	vbeam.RegisterProc(app, RevokeAccessCode)
 	vbeam.RegisterProc(app, ListAccessCodes)
+	vbeam.RegisterProc(app, GetCodeAnalytics)
 }
 
 // GenerateAccessCode creates a new temporary access code for room or studio viewing
@@ -883,5 +912,142 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 
 	resp.Success = true
 	resp.Codes = items
+	return
+}
+
+// anonymizeIP masks the last octet of an IP address for privacy
+func anonymizeIP(ip string) string {
+	if ip == "" {
+		return ""
+	}
+	// Simple anonymization: replace last segment with "xxx"
+	// e.g., "192.168.1.100" -> "192.168.1.xxx"
+	lastDot := -1
+	for i := len(ip) - 1; i >= 0; i-- {
+		if ip[i] == '.' || ip[i] == ':' {
+			lastDot = i
+			break
+		}
+	}
+	if lastDot > 0 {
+		return ip[:lastDot+1] + "xxx"
+	}
+	return "xxx" // Fallback if no dot/colon found
+}
+
+// GetCodeAnalytics returns detailed analytics for a specific access code
+func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp GetCodeAnalyticsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Validate code format
+	if len(req.Code) != 5 {
+		resp.Success = false
+		resp.Error = "Invalid code format"
+		return
+	}
+
+	// Look up code
+	var accessCode AccessCode
+	vbolt.Read(ctx.Tx, AccessCodesBkt, req.Code, &accessCode)
+
+	if accessCode.Code == "" {
+		resp.Success = false
+		resp.Error = "Access code not found"
+		return
+	}
+
+	// Determine studio ID for permission check
+	var studioId int
+	if accessCode.Type == CodeTypeRoom {
+		room := GetRoom(ctx.Tx, accessCode.TargetId)
+		if room.Id == 0 {
+			resp.Success = false
+			resp.Error = "Room not found"
+			return
+		}
+		studioId = room.StudioId
+	} else {
+		studioId = accessCode.TargetId
+	}
+
+	// Check admin permission
+	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleAdmin) {
+		resp.Success = false
+		resp.Error = "Only studio admins can view code analytics"
+		return
+	}
+
+	// Load analytics
+	var analytics CodeAnalytics
+	vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+	// Calculate status
+	now := time.Now()
+	status := "active"
+	if accessCode.IsRevoked {
+		status = "revoked"
+	} else if now.After(accessCode.ExpiresAt) {
+		status = "expired"
+	}
+
+	// Load active sessions
+	var sessionTokens []string
+	vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIdx, accessCode.Code, &sessionTokens, vbolt.Window{})
+
+	var sessions []SessionInfo
+	for _, token := range sessionTokens {
+		var session CodeSession
+		vbolt.Read(ctx.Tx, CodeSessionsBkt, token, &session)
+		if session.Token == "" {
+			continue // Skip if session not found
+		}
+
+		// Calculate duration
+		duration := int(session.LastSeen.Sub(session.ConnectedAt).Seconds())
+
+		// Determine if session is still active (LastSeen within last 10 minutes)
+		isActive := now.Sub(session.LastSeen) < 10*time.Minute
+
+		// Build session info
+		info := SessionInfo{
+			ConnectedAt: session.ConnectedAt,
+			Duration:    duration,
+			ClientIP:    anonymizeIP(session.ClientIP),
+			UserAgent:   session.UserAgent,
+			IsActive:    isActive,
+		}
+		sessions = append(sessions, info)
+	}
+
+	// Log access
+	LogInfo(LogCategorySystem, "Code analytics viewed", map[string]interface{}{
+		"code":         accessCode.Code,
+		"type":         accessCode.Type,
+		"targetId":     accessCode.TargetId,
+		"studioId":     studioId,
+		"status":       status,
+		"sessionCount": len(sessions),
+		"viewedBy":     caller.Id,
+		"userEmail":    caller.Email,
+	})
+
+	resp.Success = true
+	resp.Code = accessCode.Code
+	resp.Type = int(accessCode.Type)
+	resp.Label = accessCode.Label
+	resp.Status = status
+	resp.CreatedAt = accessCode.CreatedAt
+	resp.ExpiresAt = accessCode.ExpiresAt
+	resp.TotalConnections = analytics.TotalConnections
+	resp.CurrentViewers = analytics.CurrentViewers
+	resp.PeakViewers = analytics.PeakViewers
+	resp.PeakViewersAt = analytics.PeakViewersAt
+	resp.Sessions = sessions
 	return
 }
