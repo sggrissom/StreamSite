@@ -825,3 +825,672 @@ func TestValidateAccessCode(t *testing.T) {
 		})
 	})
 }
+
+func TestGetCodeStreamAccess(t *testing.T) {
+	t.Run("ValidSessionRoomCode", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var sessionToken string
+		var roomId int = 1
+
+		// Setup: Create user, studio, room, and code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			user := User{
+				Id:    1,
+				Name:  "Test User",
+				Email: "test@example.com",
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			vbolt.Write(tx, EmailBkt, user.Email, &user.Id)
+
+			// Create studio
+			studio := Studio{
+				Id:       1,
+				Name:     "Test Studio",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			// Create membership
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				UserId:   user.Id,
+				StudioId: studio.Id,
+				Role:     StudioRoleAdmin,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, user.Id)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studio.Id)
+
+			// Create room
+			room := Room{
+				Id:       roomId,
+				StudioId: studio.Id,
+				Name:     "Test Room",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create access code
+			code := AccessCode{
+				Code:       "12345",
+				Type:       CodeTypeRoom,
+				TargetId:   roomId,
+				CreatedBy:  user.Id,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Test Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+
+			// Add to index
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, roomId)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Use ValidateAccessCode to create session (this is the normal flow)
+		var validateResp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "12345"}
+			validateResp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if !validateResp.Success {
+			t.Fatalf("Failed to validate code: %s", validateResp.Error)
+		}
+		sessionToken = validateResp.SessionToken
+
+		// Test: Access the room with the session
+		var resp GetCodeStreamAccessResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       roomId,
+			}
+			resp, _ = GetCodeStreamAccess(ctx, req)
+		})
+
+		if !resp.Allowed {
+			t.Fatalf("Expected access to be allowed, got: %s", resp.Message)
+		}
+		if resp.RoomId != roomId {
+			t.Errorf("Expected roomId %d, got %d", roomId, resp.RoomId)
+		}
+		if resp.StudioId != 1 {
+			t.Errorf("Expected studioId 1, got %d", resp.StudioId)
+		}
+		if resp.GracePeriod {
+			t.Errorf("Expected not in grace period")
+		}
+	})
+
+	t.Run("ValidSessionStudioCode", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var sessionToken string
+		var studioId int = 1
+		var room1Id int = 10
+		var room2Id int = 20
+
+		// Setup: Create studio with multiple rooms and studio-wide code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio
+			studio := Studio{
+				Id:       studioId,
+				Name:     "Test Studio",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			// Create room 1
+			room1 := Room{
+				Id:       room1Id,
+				StudioId: studioId,
+				Name:     "Room 1",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room1.Id, &room1)
+
+			// Create room 2
+			room2 := Room{
+				Id:       room2Id,
+				StudioId: studioId,
+				Name:     "Room 2",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room2.Id, &room2)
+
+			// Create studio-wide access code
+			code := AccessCode{
+				Code:       "99999",
+				Type:       CodeTypeStudio,
+				TargetId:   studioId,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Studio Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+
+			// Add to index
+			vbolt.SetTargetSingleTerm(tx, CodesByStudioIdx, code.Code, studioId)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Use ValidateAccessCode to create session
+		var validateResp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "99999"}
+			validateResp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if !validateResp.Success {
+			t.Fatalf("Failed to validate code: %s", validateResp.Error)
+		}
+		sessionToken = validateResp.SessionToken
+
+		// Test: Access both rooms with studio-wide code
+		for _, roomId := range []int{room1Id, room2Id} {
+			var resp GetCodeStreamAccessResponse
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				ctx := &vbeam.Context{Tx: tx}
+				req := GetCodeStreamAccessRequest{
+					SessionToken: sessionToken,
+					RoomId:       roomId,
+				}
+				resp, _ = GetCodeStreamAccess(ctx, req)
+			})
+
+			if !resp.Allowed {
+				t.Fatalf("Expected access to room %d to be allowed, got: %s", roomId, resp.Message)
+			}
+			if resp.RoomId != roomId {
+				t.Errorf("Expected roomId %d, got %d", roomId, resp.RoomId)
+			}
+			if resp.StudioId != studioId {
+				t.Errorf("Expected studioId %d, got %d", studioId, resp.StudioId)
+			}
+		}
+	})
+
+	t.Run("InvalidSessionToken", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var resp GetCodeStreamAccessResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := GetCodeStreamAccessRequest{
+				SessionToken: "invalid-token-xyz",
+				RoomId:       1,
+			}
+			resp, _ = GetCodeStreamAccess(ctx, req)
+		})
+
+		if resp.Allowed {
+			t.Errorf("Expected access to be denied for invalid token")
+		}
+		if resp.Message != "Invalid session token" {
+			t.Errorf("Expected 'Invalid session token' message, got: %s", resp.Message)
+		}
+	})
+
+	t.Run("RevokedCode", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var sessionToken string
+		var roomId int = 1
+
+		// Setup: Create code and session
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create room
+			room := Room{
+				Id:       roomId,
+				StudioId: 1,
+				Name:     "Test Room",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create access code
+			code := AccessCode{
+				Code:       "12345",
+				Type:       CodeTypeRoom,
+				TargetId:   roomId,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false, // Not revoked yet
+				Label:      "Test Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, roomId)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Create session using ValidateAccessCode
+		var validateResp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "12345"}
+			validateResp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if !validateResp.Success {
+			t.Fatalf("Failed to validate code: %s", validateResp.Error)
+		}
+		sessionToken = validateResp.SessionToken
+
+		// Now revoke the code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			var code AccessCode
+			vbolt.Read(tx, AccessCodesBkt, "12345", &code)
+			code.IsRevoked = true
+			vbolt.Write(tx, AccessCodesBkt, "12345", &code)
+			vbolt.TxCommit(tx)
+		})
+
+		// Test: Try to access with revoked code
+		var resp GetCodeStreamAccessResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       roomId,
+			}
+			resp, _ = GetCodeStreamAccess(ctx, req)
+		})
+
+		if resp.Allowed {
+			t.Errorf("Expected access to be denied for revoked code")
+		}
+		if resp.Message != "Access code has been revoked" {
+			t.Errorf("Expected 'Access code has been revoked' message, got: %s", resp.Message)
+		}
+	})
+
+	t.Run("ExpiredCodeGrantsGracePeriod", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var sessionToken string
+		var roomId int = 1
+
+		// Setup: Create code and session, then expire the code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create room
+			room := Room{
+				Id:       roomId,
+				StudioId: 1,
+				Name:     "Test Room",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create access code that will be expired
+			code := AccessCode{
+				Code:       "12345",
+				Type:       CodeTypeRoom,
+				TargetId:   roomId,
+				CreatedBy:  1,
+				CreatedAt:  time.Now().Add(-3 * time.Hour),
+				ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, roomId)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Manually create a session (since ValidateAccessCode would reject expired code)
+		token, _ := generateSessionToken()
+		sessionToken = token
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			session := CodeSession{
+				Token:            sessionToken,
+				Code:             "12345",
+				ConnectedAt:      time.Now().Add(-2 * time.Hour),
+				LastSeen:         time.Now().Add(-1 * time.Minute),
+				GracePeriodUntil: time.Time{}, // No grace period yet
+			}
+			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, sessionToken, "12345")
+			vbolt.TxCommit(tx)
+		})
+
+		// Test: Access should be granted with grace period
+		var resp GetCodeStreamAccessResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       roomId,
+			}
+			resp, _ = GetCodeStreamAccess(ctx, req)
+		})
+
+		if !resp.Allowed {
+			t.Fatalf("Expected access to be allowed with grace period, got: %s", resp.Message)
+		}
+		if !resp.GracePeriod {
+			t.Errorf("Expected to be in grace period")
+		}
+	})
+
+	t.Run("GracePeriodExpired", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var sessionToken string
+		var roomId int = 1
+
+		// Setup: Create expired code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create room
+			room := Room{
+				Id:       roomId,
+				StudioId: 1,
+				Name:     "Test Room",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create expired access code
+			code := AccessCode{
+				Code:       "12345",
+				Type:       CodeTypeRoom,
+				TargetId:   roomId,
+				CreatedBy:  1,
+				CreatedAt:  time.Now().Add(-3 * time.Hour),
+				ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, roomId)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Manually create session with expired grace period
+		token, _ := generateSessionToken()
+		sessionToken = token
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			session := CodeSession{
+				Token:            sessionToken,
+				Code:             "12345",
+				ConnectedAt:      time.Now().Add(-2 * time.Hour),
+				LastSeen:         time.Now().Add(-1 * time.Minute),
+				GracePeriodUntil: time.Now().Add(-5 * time.Minute), // Grace period expired 5 min ago
+			}
+			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, sessionToken, "12345")
+			vbolt.TxCommit(tx)
+		})
+
+		// Test: Access should be denied
+		var resp GetCodeStreamAccessResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       roomId,
+			}
+			resp, _ = GetCodeStreamAccess(ctx, req)
+		})
+
+		if resp.Allowed {
+			t.Errorf("Expected access to be denied after grace period expired")
+		}
+		if resp.Message != "Access code has expired" {
+			t.Errorf("Expected 'Access code has expired' message, got: %s", resp.Message)
+		}
+	})
+
+	t.Run("RoomCodeWrongRoom", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var sessionToken string
+		var targetRoomId int = 1
+		var wrongRoomId int = 2
+
+		// Setup: Create two rooms and room-specific code
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create target room
+			room1 := Room{
+				Id:       targetRoomId,
+				StudioId: 1,
+				Name:     "Target Room",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room1.Id, &room1)
+
+			// Create other room
+			room2 := Room{
+				Id:       wrongRoomId,
+				StudioId: 1,
+				Name:     "Other Room",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room2.Id, &room2)
+
+			// Create room-specific access code for room 1
+			code := AccessCode{
+				Code:       "12345",
+				Type:       CodeTypeRoom,
+				TargetId:   targetRoomId, // Only valid for room 1
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Room 1 Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, targetRoomId)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Create session using ValidateAccessCode
+		var validateResp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "12345"}
+			validateResp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if !validateResp.Success {
+			t.Fatalf("Failed to validate code: %s", validateResp.Error)
+		}
+		sessionToken = validateResp.SessionToken
+
+		// Test: Try to access wrong room
+		var resp GetCodeStreamAccessResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       wrongRoomId, // Wrong room!
+			}
+			resp, _ = GetCodeStreamAccess(ctx, req)
+		})
+
+		if resp.Allowed {
+			t.Errorf("Expected access to be denied for wrong room")
+		}
+		if resp.Message != "This code is not valid for this room" {
+			t.Errorf("Expected 'This code is not valid for this room' message, got: %s", resp.Message)
+		}
+	})
+
+	t.Run("StudioCodeWrongStudio", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		var sessionToken string
+		var studio1Id int = 1
+		var studio2Id int = 2
+		var room2Id int = 20
+
+		// Setup: Create two studios with studio-wide code for studio 1
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio 1
+			studio1 := Studio{
+				Id:       studio1Id,
+				Name:     "Studio 1",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio1.Id, &studio1)
+
+			// Create studio 2
+			studio2 := Studio{
+				Id:       studio2Id,
+				Name:     "Studio 2",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio2.Id, &studio2)
+
+			// Create room in studio 2
+			room2 := Room{
+				Id:       room2Id,
+				StudioId: studio2Id,
+				Name:     "Studio 2 Room",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room2.Id, &room2)
+
+			// Create studio-wide access code for studio 1
+			code := AccessCode{
+				Code:       "99999",
+				Type:       CodeTypeStudio,
+				TargetId:   studio1Id, // Only valid for studio 1
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(2 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Studio 1 Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByStudioIdx, code.Code, studio1Id)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+				PeakViewers:      0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Create session using ValidateAccessCode
+		var validateResp ValidateAccessCodeResponse
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := ValidateAccessCodeRequest{Code: "99999"}
+			validateResp, _ = ValidateAccessCode(ctx, req)
+		})
+
+		if !validateResp.Success {
+			t.Fatalf("Failed to validate code: %s", validateResp.Error)
+		}
+		sessionToken = validateResp.SessionToken
+
+		// Test: Try to access room in studio 2
+		var resp GetCodeStreamAccessResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx}
+			req := GetCodeStreamAccessRequest{
+				SessionToken: sessionToken,
+				RoomId:       room2Id, // Room in wrong studio!
+			}
+			resp, _ = GetCodeStreamAccess(ctx, req)
+		})
+
+		if resp.Allowed {
+			t.Errorf("Expected access to be denied for room in wrong studio")
+		}
+		if resp.Message != "This code is not valid for this studio" {
+			t.Errorf("Expected 'This code is not valid for this studio' message, got: %s", resp.Message)
+		}
+	})
+}

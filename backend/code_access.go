@@ -220,6 +220,20 @@ type ValidateAccessCodeResponse struct {
 	TargetId     int       `json:"targetId,omitempty"`     // Room or Studio ID
 }
 
+type GetCodeStreamAccessRequest struct {
+	SessionToken string `json:"sessionToken"` // Session token from ValidateAccessCode
+	RoomId       int    `json:"roomId"`       // Which room trying to access
+}
+
+type GetCodeStreamAccessResponse struct {
+	Allowed     bool      `json:"allowed"`               // Whether access is granted
+	RoomId      int       `json:"roomId,omitempty"`      // Room ID (echoed back)
+	StudioId    int       `json:"studioId,omitempty"`    // Studio ID (for context)
+	ExpiresAt   time.Time `json:"expiresAt,omitempty"`   // When code expires
+	GracePeriod bool      `json:"gracePeriod,omitempty"` // Whether in grace period
+	Message     string    `json:"message,omitempty"`     // Human-readable status
+}
+
 // Helper functions
 
 // codeExistsInDB checks if a code already exists in the database
@@ -530,5 +544,97 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 	resp.ExpiresAt = accessCode.ExpiresAt
 	resp.Type = int(accessCode.Type)
 	resp.TargetId = accessCode.TargetId
+	return
+}
+
+// GetCodeStreamAccess checks if a session token can access a specific room
+func GetCodeStreamAccess(ctx *vbeam.Context, req GetCodeStreamAccessRequest) (resp GetCodeStreamAccessResponse, err error) {
+	now := time.Now()
+
+	// Look up session by token
+	var session CodeSession
+	vbolt.Read(ctx.Tx, CodeSessionsBkt, req.SessionToken, &session)
+
+	if session.Token == "" {
+		resp.Allowed = false
+		resp.Message = "Invalid session token"
+		return
+	}
+
+	// Load the associated code
+	var accessCode AccessCode
+	vbolt.Read(ctx.Tx, AccessCodesBkt, session.Code, &accessCode)
+
+	if accessCode.Code == "" {
+		resp.Allowed = false
+		resp.Message = "Access code not found"
+		return
+	}
+
+	// Check if code is revoked
+	if accessCode.IsRevoked {
+		resp.Allowed = false
+		resp.Message = "Access code has been revoked"
+		return
+	}
+
+	// Check expiration with grace period logic
+	inGracePeriod := false
+	if now.After(accessCode.ExpiresAt) {
+		// Code has expired - check if we're in grace period
+		if !session.GracePeriodUntil.IsZero() && now.Before(session.GracePeriodUntil) {
+			// Still in grace period
+			inGracePeriod = true
+		} else if session.GracePeriodUntil.IsZero() {
+			// Code just expired, grant 15-minute grace period
+			vbeam.UseWriteTx(ctx)
+			session.GracePeriodUntil = now.Add(15 * time.Minute)
+			vbolt.Write(ctx.Tx, CodeSessionsBkt, session.Token, &session)
+			inGracePeriod = true
+		} else {
+			// Grace period has ended
+			resp.Allowed = false
+			resp.Message = "Access code has expired"
+			return
+		}
+	}
+
+	// Validate room access based on code type
+	if accessCode.Type == CodeTypeRoom {
+		// Room-specific code: verify roomId matches exactly
+		if accessCode.TargetId != req.RoomId {
+			resp.Allowed = false
+			resp.Message = "This code is not valid for this room"
+			return
+		}
+	} else {
+		// Studio-wide code: verify roomId belongs to the same studio
+		room := GetRoom(ctx.Tx, req.RoomId)
+		if room.Id == 0 {
+			resp.Allowed = false
+			resp.Message = "Room not found"
+			return
+		}
+		if room.StudioId != accessCode.TargetId {
+			resp.Allowed = false
+			resp.Message = "This code is not valid for this studio"
+			return
+		}
+	}
+
+	// Access granted - update LastSeen timestamp
+	vbeam.UseWriteTx(ctx)
+	session.LastSeen = now
+	vbolt.Write(ctx.Tx, CodeSessionsBkt, session.Token, &session)
+
+	// Get room to return studioId
+	room := GetRoom(ctx.Tx, req.RoomId)
+
+	resp.Allowed = true
+	resp.RoomId = req.RoomId
+	resp.StudioId = room.StudioId
+	resp.ExpiresAt = accessCode.ExpiresAt
+	resp.GracePeriod = inGracePeriod
+	resp.Message = "Access granted"
 	return
 }
