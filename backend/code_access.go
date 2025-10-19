@@ -532,6 +532,113 @@ func StartCodeSessionCleanup(db *vbolt.DB) {
 	}()
 }
 
+// CleanupOldAccessCodes removes access codes that have been expired for more than
+// the specified retention period. This prevents database bloat from accumulating
+// old codes and their associated data.
+//
+// Returns the number of codes cleaned up.
+//
+// For each old code, this function:
+//   - Deletes the code entry from AccessCodesBkt
+//   - Deletes analytics from CodeAnalyticsBkt
+//   - Deletes any remaining sessions from CodeSessionsBkt
+//   - Removes the code from all indexes (room, studio, creator)
+func CleanupOldAccessCodes(db *vbolt.DB, retentionDays int) int {
+	cleanedCount := 0
+	cutoffTime := time.Now().Add(-time.Duration(retentionDays) * 24 * time.Hour)
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Iterate through all codes to find ones to delete
+		var codesToDelete []string
+
+		err := tx.Bucket([]byte("access_codes")).ForEach(func(k, v []byte) error {
+			codeStr := string(k)
+			var code AccessCode
+			vbolt.Read(tx, AccessCodesBkt, codeStr, &code)
+
+			// Check if code is expired and beyond retention period
+			if code.ExpiresAt.Before(cutoffTime) {
+				codesToDelete = append(codesToDelete, codeStr)
+			}
+			return nil
+		})
+
+		if err != nil {
+			LogWarn(LogCategorySystem, "Error iterating access codes for cleanup", "error", err.Error())
+			return
+		}
+
+		// Delete each old code and its associated data
+		for _, codeStr := range codesToDelete {
+			// Load the code to get its metadata for index removal
+			var code AccessCode
+			vbolt.Read(tx, AccessCodesBkt, codeStr, &code)
+			if code.Code == "" {
+				continue // Code already deleted
+			}
+
+			// Delete code from bucket
+			vbolt.Delete(tx, AccessCodesBkt, codeStr)
+
+			// Delete analytics
+			vbolt.Delete(tx, CodeAnalyticsBkt, codeStr)
+
+			// Delete any remaining sessions for this code
+			// Use the SessionsByCodeIdx to find sessions efficiently
+			var sessionTokens []string
+			vbolt.ReadTermTargets(tx, SessionsByCodeIdx, codeStr, &sessionTokens, vbolt.Window{})
+			for _, token := range sessionTokens {
+				vbolt.Delete(tx, CodeSessionsBkt, token)
+				vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, token, "")
+			}
+
+			// Remove from indexes
+			if code.Type == CodeTypeRoom {
+				vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, codeStr, -1)
+			} else {
+				vbolt.SetTargetSingleTerm(tx, CodesByStudioIdx, codeStr, -1)
+			}
+			vbolt.SetTargetSingleTerm(tx, CodesByCreatorIdx, codeStr, -1)
+
+			cleanedCount++
+		}
+
+		if cleanedCount > 0 {
+			LogInfo(LogCategorySystem, "Cleaned up old access codes", map[string]interface{}{
+				"codesDeleted":  cleanedCount,
+				"retentionDays": retentionDays,
+				"cutoffDate":    cutoffTime.Format("2006-01-02"),
+			})
+		}
+	})
+
+	return cleanedCount
+}
+
+// StartOldCodeCleanup starts a background goroutine that periodically
+// cleans up access codes that have been expired for more than 7 days
+func StartOldCodeCleanup(db *vbolt.DB) {
+	const retentionDays = 7
+
+	LogInfo(LogCategorySystem, "Starting old code cleanup job", map[string]interface{}{
+		"frequency":     "daily",
+		"retentionDays": retentionDays,
+	})
+
+	go func() {
+		// Run immediately on startup
+		CleanupOldAccessCodes(db, retentionDays)
+
+		// Then run daily
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			CleanupOldAccessCodes(db, retentionDays)
+		}
+	}()
+}
+
 // API Procedures
 
 // validateAccessCodeHandler is an HTTP handler that validates an access code

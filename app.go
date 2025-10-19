@@ -39,6 +39,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 
 	// Start background jobs
 	backend.StartCodeSessionCleanup(db)
+	backend.StartOldCodeCleanup(db)
 
 	var app = vbeam.NewApplication("Stream", db)
 
