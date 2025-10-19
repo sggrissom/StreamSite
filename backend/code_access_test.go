@@ -1934,3 +1934,466 @@ func TestRevokeAccessCode(t *testing.T) {
 		})
 	})
 }
+
+func TestListAccessCodes(t *testing.T) {
+	db := setupTestCodeDB(t)
+	defer db.Close()
+
+	// Setup test data
+	var adminUser, viewerUser, nonMemberUser User
+	var studio Studio
+	var room Room
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create admin user
+		adminUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Admin User",
+			Email:    "admin@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, adminUser.Id, &adminUser)
+		vbolt.Write(tx, EmailBkt, adminUser.Email, &adminUser.Id)
+
+		// Create viewer user
+		viewerUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Viewer User",
+			Email:    "viewer@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, viewerUser.Id, &viewerUser)
+		vbolt.Write(tx, EmailBkt, viewerUser.Email, &viewerUser.Id)
+
+		// Create non-member user
+		nonMemberUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Non-Member User",
+			Email:    "nonmember@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, nonMemberUser.Id, &nonMemberUser)
+		vbolt.Write(tx, EmailBkt, nonMemberUser.Email, &nonMemberUser.Id)
+
+		// Create studio
+		studio = Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "A test studio",
+			MaxRooms:    5,
+			OwnerId:     adminUser.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership for admin (Admin role)
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		adminMembership := StudioMembership{
+			UserId:   adminUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, adminUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create studio membership for viewer (Viewer role)
+		viewerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		viewerMembership := StudioMembership{
+			UserId:   viewerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleViewer,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, viewerMembershipId, &viewerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, viewerMembershipId, viewerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, viewerMembershipId, studio.Id)
+
+		// Create room
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: List room codes (empty list)
+	t.Run("EmptyList", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeRoom),
+				TargetId: room.Id,
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if len(resp.Codes) != 0 {
+			t.Errorf("Expected empty list, got %d codes", len(resp.Codes))
+		}
+	})
+
+	// Test 2: Authentication required
+	t.Run("AuthenticationRequired", func(t *testing.T) {
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: "", // No token
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeRoom),
+				TargetId: room.Id,
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when listing without authentication")
+		}
+		if resp.Error != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 3: Room not found
+	t.Run("RoomNotFound", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeRoom),
+				TargetId: 99999, // Non-existent room
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when room not found")
+		}
+		if resp.Error != "Room not found" {
+			t.Errorf("Expected 'Room not found' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 4: Studio not found
+	t.Run("StudioNotFound", func(t *testing.T) {
+		adminToken, err := createTestToken(adminUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeStudio),
+				TargetId: 99999, // Non-existent studio
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when studio not found")
+		}
+		if resp.Error != "Studio not found" {
+			t.Errorf("Expected 'Studio not found' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 5: Permission denied (non-member)
+	t.Run("PermissionDenied", func(t *testing.T) {
+		nonMemberToken, err := createTestToken(nonMemberUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: nonMemberToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeRoom),
+				TargetId: room.Id,
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when non-member tries to list codes")
+		}
+		if resp.Error != "You do not have permission to view access codes for this room" {
+			t.Errorf("Expected permission error, got: %s", resp.Error)
+		}
+	})
+
+	// Create some test codes for the remaining tests
+	var code1, code2, code3 string
+	adminToken, _ := createTestToken(adminUser.Email)
+
+	// Code 1: Active room code
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx, Token: adminToken}
+		req := GenerateAccessCodeRequest{
+			Type:            int(CodeTypeRoom),
+			TargetId:        room.Id,
+			DurationMinutes: 120,
+			MaxViewers:      10,
+			Label:           "First Code",
+		}
+		resp, _ := GenerateAccessCode(ctx, req)
+		code1 = resp.Code
+		time.Sleep(10 * time.Millisecond) // Ensure different timestamps
+	})
+
+	// Code 2: Expired room code
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		accessCode := AccessCode{
+			Code:       "11111",
+			Type:       CodeTypeRoom,
+			TargetId:   room.Id,
+			CreatedBy:  adminUser.Id,
+			CreatedAt:  time.Now().Add(-3 * time.Hour),
+			ExpiresAt:  time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+			MaxViewers: 0,
+			IsRevoked:  false,
+			Label:      "Expired Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+		vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, accessCode.Code, room.Id)
+
+		// Initialize analytics
+		analytics := CodeAnalytics{
+			Code:             accessCode.Code,
+			TotalConnections: 5,
+			CurrentViewers:   0,
+			PeakViewers:      3,
+			PeakViewersAt:    time.Now().Add(-2 * time.Hour),
+		}
+		vbolt.Write(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+		code2 = accessCode.Code
+		vbolt.TxCommit(tx)
+		time.Sleep(10 * time.Millisecond)
+	})
+
+	// Code 3: Revoked studio code
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		accessCode := AccessCode{
+			Code:       "22222",
+			Type:       CodeTypeStudio,
+			TargetId:   studio.Id,
+			CreatedBy:  adminUser.Id,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(2 * time.Hour),
+			MaxViewers: 0,
+			IsRevoked:  true, // Revoked
+			Label:      "Revoked Studio Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+		vbolt.SetTargetSingleTerm(tx, CodesByStudioIdx, accessCode.Code, studio.Id)
+
+		// Initialize analytics
+		analytics := CodeAnalytics{
+			Code:             accessCode.Code,
+			TotalConnections: 2,
+			CurrentViewers:   0,
+			PeakViewers:      2,
+		}
+		vbolt.Write(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+		code3 = accessCode.Code
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 6: List room codes as admin
+	t.Run("ListRoomCodesAsAdmin", func(t *testing.T) {
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeRoom),
+				TargetId: room.Id,
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if len(resp.Codes) != 2 {
+			t.Fatalf("Expected 2 room codes, got %d", len(resp.Codes))
+		}
+
+		// Verify sorting (newest first)
+		if resp.Codes[0].Code != code1 {
+			t.Errorf("Expected first code to be %s, got %s", code1, resp.Codes[0].Code)
+		}
+		if resp.Codes[1].Code != code2 {
+			t.Errorf("Expected second code to be %s, got %s", code2, resp.Codes[1].Code)
+		}
+
+		// Verify first code details
+		if resp.Codes[0].Type != int(CodeTypeRoom) {
+			t.Errorf("Expected type Room, got %d", resp.Codes[0].Type)
+		}
+		if resp.Codes[0].Label != "First Code" {
+			t.Errorf("Expected label 'First Code', got %s", resp.Codes[0].Label)
+		}
+		if resp.Codes[0].IsRevoked {
+			t.Errorf("Expected code1 not to be revoked")
+		}
+		if resp.Codes[0].IsExpired {
+			t.Errorf("Expected code1 not to be expired")
+		}
+		if resp.Codes[0].CurrentViewers != 0 {
+			t.Errorf("Expected 0 current viewers, got %d", resp.Codes[0].CurrentViewers)
+		}
+
+		// Verify second code is expired
+		if !resp.Codes[1].IsExpired {
+			t.Errorf("Expected code2 to be expired")
+		}
+		if resp.Codes[1].TotalViews != 5 {
+			t.Errorf("Expected 5 total views, got %d", resp.Codes[1].TotalViews)
+		}
+	})
+
+	// Test 7: List room codes as viewer
+	t.Run("ListRoomCodesAsViewer", func(t *testing.T) {
+		viewerToken, err := createTestToken(viewerUser.Email)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: viewerToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeRoom),
+				TargetId: room.Id,
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success for viewer, got error: %s", resp.Error)
+		}
+		if len(resp.Codes) != 2 {
+			t.Errorf("Viewer should see same codes as admin, got %d", len(resp.Codes))
+		}
+	})
+
+	// Test 8: List studio codes
+	t.Run("ListStudioCodes", func(t *testing.T) {
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     int(CodeTypeStudio),
+				TargetId: studio.Id,
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Fatalf("Expected success, got error: %s", resp.Error)
+		}
+		if len(resp.Codes) != 1 {
+			t.Fatalf("Expected 1 studio code, got %d", len(resp.Codes))
+		}
+
+		// Verify studio code details
+		if resp.Codes[0].Code != code3 {
+			t.Errorf("Expected code %s, got %s", code3, resp.Codes[0].Code)
+		}
+		if resp.Codes[0].Type != int(CodeTypeStudio) {
+			t.Errorf("Expected type Studio, got %d", resp.Codes[0].Type)
+		}
+		if !resp.Codes[0].IsRevoked {
+			t.Errorf("Expected code to be revoked")
+		}
+		if resp.Codes[0].IsExpired {
+			t.Errorf("Expected code not to be expired (only revoked)")
+		}
+		if resp.Codes[0].TotalViews != 2 {
+			t.Errorf("Expected 2 total views, got %d", resp.Codes[0].TotalViews)
+		}
+	})
+
+	// Test 9: Invalid code type
+	t.Run("InvalidCodeType", func(t *testing.T) {
+		var resp ListAccessCodesResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{
+				Tx:    tx,
+				Token: adminToken,
+			}
+
+			req := ListAccessCodesRequest{
+				Type:     99, // Invalid type
+				TargetId: room.Id,
+			}
+			resp, _ = ListAccessCodes(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for invalid code type")
+		}
+		if resp.Error != "Invalid code type (must be 0 for room or 1 for studio)" {
+			t.Errorf("Expected invalid type error, got: %s", resp.Error)
+		}
+	})
+}

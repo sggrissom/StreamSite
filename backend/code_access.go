@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"math/big"
+	"sort"
 	"stream/cfg"
 	"time"
 
@@ -244,6 +245,29 @@ type RevokeAccessCodeResponse struct {
 	SessionsKilled int    `json:"sessionsKilled,omitempty"` // Number of active sessions terminated
 }
 
+type ListAccessCodesRequest struct {
+	Type     int `json:"type"`     // 0=room, 1=studio
+	TargetId int `json:"targetId"` // Room ID or Studio ID
+}
+
+type AccessCodeListItem struct {
+	Code           string    `json:"code"`
+	Type           int       `json:"type"`
+	Label          string    `json:"label"`
+	CreatedAt      time.Time `json:"createdAt"`
+	ExpiresAt      time.Time `json:"expiresAt"`
+	IsRevoked      bool      `json:"isRevoked"`
+	IsExpired      bool      `json:"isExpired"`
+	CurrentViewers int       `json:"currentViewers"`
+	TotalViews     int       `json:"totalViews"`
+}
+
+type ListAccessCodesResponse struct {
+	Success bool                 `json:"success"`
+	Error   string               `json:"error,omitempty"`
+	Codes   []AccessCodeListItem `json:"codes,omitempty"`
+}
+
 // Helper functions
 
 // codeExistsInDB checks if a code already exists in the database
@@ -286,6 +310,7 @@ func RegisterCodeAccessMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, ValidateAccessCode)
 	vbeam.RegisterProc(app, GetCodeStreamAccess)
 	vbeam.RegisterProc(app, RevokeAccessCode)
+	vbeam.RegisterProc(app, ListAccessCodes)
 }
 
 // GenerateAccessCode creates a new temporary access code for room or studio viewing
@@ -747,5 +772,116 @@ func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp Rev
 
 	resp.Success = true
 	resp.SessionsKilled = sessionsKilled
+	return
+}
+
+// ListAccessCodes returns all access codes for a room or studio
+func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListAccessCodesResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Validate code type
+	if req.Type != int(CodeTypeRoom) && req.Type != int(CodeTypeStudio) {
+		resp.Success = false
+		resp.Error = "Invalid code type (must be 0 for room or 1 for studio)"
+		return
+	}
+
+	var studioId int
+	var targetName string
+
+	// Validate target and check permissions based on type
+	if req.Type == int(CodeTypeRoom) {
+		// Room code list - validate room exists and check permission
+		room := GetRoom(ctx.Tx, req.TargetId)
+		if room.Id == 0 {
+			resp.Success = false
+			resp.Error = "Room not found"
+			return
+		}
+		studioId = room.StudioId
+		targetName = room.Name
+	} else {
+		// Studio code list - validate studio exists and check permission
+		studio := GetStudioById(ctx.Tx, req.TargetId)
+		if studio.Id == 0 {
+			resp.Success = false
+			resp.Error = "Studio not found"
+			return
+		}
+		studioId = studio.Id
+		targetName = studio.Name
+	}
+
+	// Check if user has Viewer+ permission for the studio
+	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleViewer) {
+		resp.Success = false
+		resp.Error = "You do not have permission to view access codes for this " +
+			map[bool]string{true: "room", false: "studio"}[req.Type == int(CodeTypeRoom)]
+		return
+	}
+
+	// Query appropriate index to get code strings
+	var codes []string
+	if req.Type == int(CodeTypeRoom) {
+		vbolt.ReadTermTargets(ctx.Tx, CodesByRoomIdx, req.TargetId, &codes, vbolt.Window{})
+	} else {
+		vbolt.ReadTermTargets(ctx.Tx, CodesByStudioIdx, req.TargetId, &codes, vbolt.Window{})
+	}
+
+	// Build list items
+	var items []AccessCodeListItem
+	now := time.Now()
+
+	for _, code := range codes {
+		// Load access code
+		var accessCode AccessCode
+		vbolt.Read(ctx.Tx, AccessCodesBkt, code, &accessCode)
+		if accessCode.Code == "" {
+			continue // Skip if code not found
+		}
+
+		// Load analytics
+		var analytics CodeAnalytics
+		vbolt.Read(ctx.Tx, CodeAnalyticsBkt, code, &analytics)
+
+		// Build list item
+		item := AccessCodeListItem{
+			Code:           accessCode.Code,
+			Type:           int(accessCode.Type),
+			Label:          accessCode.Label,
+			CreatedAt:      accessCode.CreatedAt,
+			ExpiresAt:      accessCode.ExpiresAt,
+			IsRevoked:      accessCode.IsRevoked,
+			IsExpired:      now.After(accessCode.ExpiresAt),
+			CurrentViewers: analytics.CurrentViewers,
+			TotalViews:     analytics.TotalConnections,
+		}
+		items = append(items, item)
+	}
+
+	// Sort by creation time (newest first)
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].CreatedAt.After(items[j].CreatedAt)
+	})
+
+	// Log access
+	LogInfo(LogCategorySystem, "Access codes listed", map[string]interface{}{
+		"type":      req.Type,
+		"targetId":  req.TargetId,
+		"target":    targetName,
+		"studioId":  studioId,
+		"codeCount": len(items),
+		"requestBy": caller.Id,
+		"userEmail": caller.Email,
+	})
+
+	resp.Success = true
+	resp.Codes = items
 	return
 }
