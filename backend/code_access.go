@@ -3,6 +3,8 @@ package backend
 import (
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
@@ -404,9 +406,52 @@ func AuthenticateCodeSession(r *http.Request, tx *vbolt.Tx) (CodeSession, Access
 
 // API Procedures
 
+// validateAccessCodeHandler is an HTTP handler that validates an access code
+// and sets the codeAuthToken cookie for authentication
+func validateAccessCodeHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		vbeam.RespondError(w, errors.New("validate-access-code must be POST"))
+		return
+	}
+
+	var req ValidateAccessCodeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		vbeam.RespondError(w, err)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+
+	// Call validation logic
+	resp, err := validateAccessCodeLogic(appDb, req.Code)
+	if err != nil {
+		vbeam.RespondError(w, err)
+		return
+	}
+
+	// If validation succeeded, set the codeAuthToken cookie
+	if resp.Success {
+		http.SetCookie(w, &http.Cookie{
+			Name:     "codeAuthToken",
+			Value:    resp.SessionToken,
+			Path:     "/",
+			HttpOnly: true,
+			Secure:   true, // Always use secure cookies
+			SameSite: http.SameSiteLaxMode,
+			MaxAge:   60 * 60 * 24, // 24 hours
+		})
+	}
+
+	// Send JSON response
+	json.NewEncoder(w).Encode(resp)
+}
+
 func RegisterCodeAccessMethods(app *vbeam.Application) {
+	// Register HTTP handler for code validation (needs cookie setting)
+	app.HandleFunc("/api/validate-access-code", validateAccessCodeHandler)
+
+	// Register vbeam procedures
 	vbeam.RegisterProc(app, GenerateAccessCode)
-	vbeam.RegisterProc(app, ValidateAccessCode)
 	vbeam.RegisterProc(app, GetCodeStreamAccess)
 	vbeam.RegisterProc(app, RevokeAccessCode)
 	vbeam.RegisterProc(app, ListAccessCodes)
@@ -565,7 +610,140 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 	return
 }
 
+// validateAccessCodeLogic contains the core validation logic for access codes.
+// This is extracted as a helper to allow both HTTP handler and procedure usage.
+func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCodeResponse, err error) {
+	// Validate code format (5 digits)
+	if len(code) != 5 {
+		resp.Success = false
+		resp.Error = "Invalid code format"
+		return
+	}
+
+	var accessCode AccessCode
+	var sessionToken string
+	var validationFailed bool
+	now := time.Now()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Look up code in database
+		vbolt.Read(tx, AccessCodesBkt, code, &accessCode)
+
+		// Check if code exists
+		if accessCode.Code == "" {
+			resp.Success = false
+			resp.Error = "Invalid code"
+			validationFailed = true
+			return
+		}
+
+		// Check if code is revoked
+		if accessCode.IsRevoked {
+			resp.Success = false
+			resp.Error = "Code has been revoked"
+			validationFailed = true
+			return
+		}
+
+		// Check if code is expired
+		if now.After(accessCode.ExpiresAt) {
+			resp.Success = false
+			resp.Error = "Code has expired"
+			validationFailed = true
+			return
+		}
+
+		// Check viewer limit (if set)
+		if accessCode.MaxViewers > 0 {
+			// Load current analytics to check viewer count
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+			if analytics.CurrentViewers >= accessCode.MaxViewers {
+				resp.Success = false
+				resp.Error = fmt.Sprintf("Stream is at capacity (%d/%d viewers)", analytics.CurrentViewers, accessCode.MaxViewers)
+				validationFailed = true
+				return
+			}
+		}
+
+		// Generate session token
+		var tokenErr error
+		sessionToken, tokenErr = generateSessionToken()
+		if tokenErr != nil {
+			resp.Success = false
+			resp.Error = "Failed to generate session token"
+			err = tokenErr
+			validationFailed = true
+			return
+		}
+
+		// Create code session
+		session := CodeSession{
+			Token:            sessionToken,
+			Code:             accessCode.Code,
+			ConnectedAt:      now,
+			LastSeen:         now,
+			GracePeriodUntil: time.Time{}, // Not in grace period yet
+			ClientIP:         "",          // Will be set by middleware later
+			UserAgent:        "",          // Will be set by middleware later
+		}
+		vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+
+		// Add to session index
+		vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, sessionToken, accessCode.Code)
+
+		// Update analytics
+		var analytics CodeAnalytics
+		vbolt.Read(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+
+		analytics.TotalConnections++
+		analytics.CurrentViewers++
+		analytics.LastConnectionAt = now
+
+		// Update peak viewers if necessary
+		if analytics.CurrentViewers > analytics.PeakViewers {
+			analytics.PeakViewers = analytics.CurrentViewers
+			analytics.PeakViewersAt = now
+		}
+
+		vbolt.Write(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+	})
+
+	// If validation failed, return early
+	if validationFailed || err != nil {
+		return
+	}
+
+	// Build redirect URL based on code type
+	var redirectTo string
+	if accessCode.Type == CodeTypeRoom {
+		redirectTo = fmt.Sprintf("/stream/%d", accessCode.TargetId)
+	} else {
+		// For studio codes, redirect to studio page (they can choose which room)
+		redirectTo = fmt.Sprintf("/studio/%d", accessCode.TargetId)
+	}
+
+	// Log validation success
+	LogInfo(LogCategorySystem, "Access code validated", map[string]interface{}{
+		"code":         accessCode.Code,
+		"sessionToken": sessionToken,
+		"type":         accessCode.Type,
+		"targetId":     accessCode.TargetId,
+	})
+
+	resp.Success = true
+	resp.SessionToken = sessionToken
+	resp.RedirectTo = redirectTo
+	resp.ExpiresAt = accessCode.ExpiresAt
+	resp.Type = int(accessCode.Type)
+	resp.TargetId = accessCode.TargetId
+	return
+}
+
 // ValidateAccessCode validates a 5-digit code and creates a viewing session
+// This vbeam procedure works within an existing transaction context
+// Note: The HTTP handler uses validateAccessCodeHandler instead (sets cookies)
 func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp ValidateAccessCodeResponse, err error) {
 	// Validate code format (5 digits)
 	if len(req.Code) != 5 {

@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"stream/cfg"
+	"strings"
 	"testing"
 	"time"
 
@@ -825,6 +827,192 @@ func TestValidateAccessCode(t *testing.T) {
 				t.Errorf("Expected peak viewers 4, got %d", analytics.PeakViewers)
 			}
 		})
+	})
+}
+
+func TestValidateAccessCodeHandler(t *testing.T) {
+	t.Run("SuccessfulValidationSetsCookie", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		// Save original appDb and restore after test
+		originalDb := appDb
+		appDb = db
+		defer func() { appDb = originalDb }()
+
+		// Setup: Create a valid code
+		var validCode AccessCode
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio
+			studio := Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "Test Studio",
+				Description: "Test",
+				MaxRooms:    5,
+				OwnerId:     1,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			// Create room
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Generate unique code
+			code, _ := generateUniqueCodeInDB(tx)
+			validCode = AccessCode{
+				Code:       code,
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Test Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, validCode.Code, &validCode)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             validCode.Code,
+				TotalConnections: 0,
+				CurrentViewers:   0,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, validCode.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Create request
+		reqBody := fmt.Sprintf(`{"code":"%s"}`, validCode.Code)
+		req := httptest.NewRequest("POST", "/api/validate-access-code", strings.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		// Call handler
+		validateAccessCodeHandler(w, req)
+
+		// Check response
+		resp := w.Result()
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", resp.StatusCode)
+		}
+
+		// Parse response body first to check if validation succeeded
+		var response ValidateAccessCodeResponse
+		json.NewDecoder(resp.Body).Decode(&response)
+
+		if !response.Success {
+			t.Fatalf("Expected validation to succeed, got error: %s", response.Error)
+		}
+
+		// Check that codeAuthToken cookie is set
+		cookies := resp.Cookies()
+		var foundCookie *http.Cookie
+		for _, cookie := range cookies {
+			if cookie.Name == "codeAuthToken" {
+				foundCookie = cookie
+				break
+			}
+		}
+
+		if foundCookie == nil {
+			t.Fatal("Expected codeAuthToken cookie to be set")
+		}
+
+		// Verify cookie attributes
+		if foundCookie.HttpOnly != true {
+			t.Errorf("Expected HttpOnly=true, got %v", foundCookie.HttpOnly)
+		}
+		if foundCookie.Secure != true {
+			t.Errorf("Expected Secure=true, got %v", foundCookie.Secure)
+		}
+		if foundCookie.SameSite != http.SameSiteLaxMode {
+			t.Errorf("Expected SameSite=Lax, got %v", foundCookie.SameSite)
+		}
+		if foundCookie.MaxAge != 60*60*24 {
+			t.Errorf("Expected MaxAge=86400 (24 hours), got %d", foundCookie.MaxAge)
+		}
+		if foundCookie.Path != "/" {
+			t.Errorf("Expected Path=/, got %s", foundCookie.Path)
+		}
+
+		// Verify cookie value is a valid session token
+		if len(foundCookie.Value) == 0 {
+			t.Error("Expected non-empty session token in cookie")
+		}
+
+		// Verify cookie value matches session token in response
+		if response.SessionToken != foundCookie.Value {
+			t.Errorf("Expected cookie value to match session token in response")
+		}
+	})
+
+	t.Run("FailedValidationDoesNotSetCookie", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		// Save original appDb and restore after test
+		originalDb := appDb
+		appDb = db
+		defer func() { appDb = originalDb }()
+
+		// Create request with invalid code
+		reqBody := `{"code":"99999"}`
+		req := httptest.NewRequest("POST", "/api/validate-access-code", strings.NewReader(reqBody))
+		req.Header.Set("Content-Type", "application/json")
+		w := httptest.NewRecorder()
+
+		// Call handler
+		validateAccessCodeHandler(w, req)
+
+		// Check response
+		resp := w.Result()
+
+		// Check that codeAuthToken cookie is NOT set
+		cookies := resp.Cookies()
+		for _, cookie := range cookies {
+			if cookie.Name == "codeAuthToken" {
+				t.Error("Expected codeAuthToken cookie NOT to be set for invalid code")
+			}
+		}
+
+		// Parse response body
+		var response ValidateAccessCodeResponse
+		json.NewDecoder(resp.Body).Decode(&response)
+
+		if response.Success {
+			t.Error("Expected success=false for invalid code")
+		}
+	})
+
+	t.Run("RequiresPOSTMethod", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		originalDb := appDb
+		appDb = db
+		defer func() { appDb = originalDb }()
+
+		// Try GET request
+		req := httptest.NewRequest("GET", "/api/validate-access-code", nil)
+		w := httptest.NewRecorder()
+
+		validateAccessCodeHandler(w, req)
+
+		resp := w.Result()
+		if resp.StatusCode == http.StatusOK {
+			t.Error("Expected error for GET request, but got 200 OK")
+		}
 	})
 }
 
