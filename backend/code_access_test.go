@@ -24,10 +24,10 @@ func setupTestCodeDB(t *testing.T) *vbolt.DB {
 }
 
 // createTestToken generates a JWT token for testing
-func createTestToken(email string) (string, error) {
+func createTestToken(userId int) (string, error) {
 	expirationTime := time.Now().Add(24 * time.Hour)
 	claims := &Claims{
-		Username: email,
+		UserId: userId,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 		},
@@ -36,12 +36,11 @@ func createTestToken(email string) (string, error) {
 	return token.SignedString(jwtKey)
 }
 
-// createCodeSessionToken creates a JWT for code session authentication
-func createCodeSessionToken(sessionToken, code string, expiresAt time.Time) (string, error) {
+// createCodeSessionToken creates a JWT for anonymous code session authentication
+func createCodeSessionToken(sessionToken string, expiresAt time.Time) (string, error) {
 	claims := &Claims{
-		IsCodeSession: true,
-		SessionToken:  sessionToken,
-		Code:          code,
+		UserId:       -1, // Anonymous code session
+		SessionToken: sessionToken,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expiresAt),
 		},
@@ -341,7 +340,7 @@ func TestGenerateAccessCode(t *testing.T) {
 
 	// Test 1: Generate room code as admin (should succeed)
 	t.Run("RoomCodeAsAdmin", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -417,7 +416,7 @@ func TestGenerateAccessCode(t *testing.T) {
 
 	// Test 2: Generate studio code as admin (should succeed)
 	t.Run("StudioCodeAsAdmin", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -453,7 +452,7 @@ func TestGenerateAccessCode(t *testing.T) {
 
 	// Test 3: Generate code as non-admin (should fail)
 	t.Run("CodeAsNonAdmin", func(t *testing.T) {
-		regularToken, err := createTestToken(regularUser.Email)
+		regularToken, err := createTestToken(regularUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -489,7 +488,7 @@ func TestGenerateAccessCode(t *testing.T) {
 
 	// Test 4: Invalid room ID (should fail)
 	t.Run("InvalidRoomId", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -525,7 +524,7 @@ func TestGenerateAccessCode(t *testing.T) {
 
 	// Test 5: Invalid duration (should fail)
 	t.Run("InvalidDuration", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -977,16 +976,12 @@ func TestValidateAccessCodeHandler(t *testing.T) {
 			t.Fatal("Failed to extract claims from JWT")
 		}
 
-		if !claims.IsCodeSession {
-			t.Error("Expected IsCodeSession=true in JWT claims")
+		if claims.UserId != -1 {
+			t.Errorf("Expected UserId=-1 for anonymous code session, got %d", claims.UserId)
 		}
 
 		if claims.SessionToken != response.SessionToken {
 			t.Errorf("Expected JWT to contain session token %s, got %s", response.SessionToken, claims.SessionToken)
-		}
-
-		if claims.Code != validCode.Code {
-			t.Errorf("Expected JWT to contain code %s, got %s", validCode.Code, claims.Code)
 		}
 	})
 
@@ -1803,7 +1798,7 @@ func TestRevokeAccessCode(t *testing.T) {
 
 	// Test 1: Revoke non-existent code
 	t.Run("NonExistentCode", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -1893,7 +1888,7 @@ func TestRevokeAccessCode(t *testing.T) {
 		})
 
 		// Try to revoke as regular viewer
-		viewerToken, err := createTestToken(regularUser.Email)
+		viewerToken, err := createTestToken(regularUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -1921,7 +1916,7 @@ func TestRevokeAccessCode(t *testing.T) {
 
 	// Test 4: Successfully revoke valid code with active sessions
 	t.Run("SuccessfulRevocation", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2058,7 +2053,7 @@ func TestRevokeAccessCode(t *testing.T) {
 
 	// Test 5: Attempt to revoke already-revoked code
 	t.Run("AlreadyRevoked", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2104,7 +2099,7 @@ func TestRevokeAccessCode(t *testing.T) {
 
 	// Test 6: Revoke studio code
 	t.Run("RevokeStudioCode", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2254,7 +2249,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Test 1: List room codes (empty list)
 	t.Run("EmptyList", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2307,7 +2302,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Test 3: Room not found
 	t.Run("RoomNotFound", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2336,7 +2331,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Test 4: Studio not found
 	t.Run("StudioNotFound", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2365,7 +2360,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Test 5: Permission denied (non-member)
 	t.Run("PermissionDenied", func(t *testing.T) {
-		nonMemberToken, err := createTestToken(nonMemberUser.Email)
+		nonMemberToken, err := createTestToken(nonMemberUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2394,7 +2389,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Create some test codes for the remaining tests
 	var code1, code2, code3 string
-	adminToken, _ := createTestToken(adminUser.Email)
+	adminToken, _ := createTestToken(adminUser.Id)
 
 	// Code 1: Active room code
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -2528,7 +2523,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Test 7: List room codes as viewer
 	t.Run("ListRoomCodesAsViewer", func(t *testing.T) {
-		viewerToken, err := createTestToken(viewerUser.Email)
+		viewerToken, err := createTestToken(viewerUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2717,7 +2712,7 @@ func TestGetCodeAnalytics(t *testing.T) {
 
 	// Test 1: Code not found
 	t.Run("CodeNotFound", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2764,7 +2759,7 @@ func TestGetCodeAnalytics(t *testing.T) {
 
 	// Test 3: Invalid code format
 	t.Run("InvalidCodeFormat", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Email)
+		adminToken, err := createTestToken(adminUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -2790,7 +2785,7 @@ func TestGetCodeAnalytics(t *testing.T) {
 
 	// Create a test code for remaining tests
 	var testCode string
-	adminToken, _ := createTestToken(adminUser.Email)
+	adminToken, _ := createTestToken(adminUser.Id)
 
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		ctx := &vbeam.Context{Tx: tx, Token: adminToken}
@@ -2807,7 +2802,7 @@ func TestGetCodeAnalytics(t *testing.T) {
 
 	// Test 4: Permission denied (viewer)
 	t.Run("PermissionDenied", func(t *testing.T) {
-		viewerToken, err := createTestToken(viewerUser.Email)
+		viewerToken, err := createTestToken(viewerUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -3174,7 +3169,7 @@ func TestValidateCodeSession(t *testing.T) {
 	// Create a test code and session for remaining tests
 	var testCode string
 	var sessionToken string
-	adminToken, _ := createTestToken(adminUser.Email)
+	adminToken, _ := createTestToken(adminUser.Id)
 
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		ctx := &vbeam.Context{Tx: tx, Token: adminToken}
@@ -3750,7 +3745,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 
 		// Step 2: Generate access code as admin
 		var code string
-		adminToken, _ := createTestToken(userEmail)
+		adminToken, _ := createTestToken(userId)
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
@@ -3937,7 +3932,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 
 		// Generate studio-wide access code
 		var code string
-		adminToken, _ := createTestToken(userEmail)
+		adminToken, _ := createTestToken(userId)
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
@@ -4059,7 +4054,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 
 		// Generate code
 		var code string
-		adminToken, _ := createTestToken(userEmail)
+		adminToken, _ := createTestToken(userId)
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
@@ -4135,8 +4130,8 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		}
 
 		claims, ok := token.Claims.(*Claims)
-		if !ok || !claims.IsCodeSession {
-			t.Error("Expected JWT with IsCodeSession=true in claims")
+		if !ok || claims.UserId != -1 {
+			t.Errorf("Expected JWT with UserId=-1, got %d", claims.UserId)
 		}
 
 		if claims.SessionToken != sessionToken {
@@ -4288,7 +4283,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		})
 
 		// Generate code
-		adminToken, _ := createTestToken("teacher@example.com")
+		adminToken, _ := createTestToken(userId)
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
 
@@ -4405,7 +4400,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
 			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
 
-			adminToken, _ := createTestToken(user.Email)
+			adminToken, _ := createTestToken(user.Id)
 			ctx := &vbeam.Context{Tx: tx, Token: adminToken}
 
 			resp, err := GenerateAccessCode(ctx, GenerateAccessCodeRequest{

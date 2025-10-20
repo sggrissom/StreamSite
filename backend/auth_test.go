@@ -50,7 +50,7 @@ func TestGetAuthFromRequest(t *testing.T) {
 		})
 
 		// Create a JWT token for the user
-		testToken, err := createTestToken(testUser.Email)
+		testToken, err := createTestToken(testUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -166,11 +166,10 @@ func TestGetAuthFromRequest(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
-		// Create JWT with code session claims
+		// Create JWT with code session claims (userId=-1)
 		claims := &Claims{
-			IsCodeSession: true,
-			SessionToken:  sessionToken,
-			Code:          validCode,
+			UserId:       -1,
+			SessionToken: sessionToken,
 			RegisteredClaims: jwt.RegisteredClaims{
 				ExpiresAt: jwt.NewNumericDate(codeExpiresAt),
 			},
@@ -270,9 +269,8 @@ func TestGetAuthFromRequest(t *testing.T) {
 
 		// Create JWT with invalid/non-existent session token
 		claims := &Claims{
-			IsCodeSession: true,
-			SessionToken:  "invalid-session-token",
-			Code:          "12345",
+			UserId:       -1,
+			SessionToken: "invalid-session-token",
 			RegisteredClaims: jwt.RegisteredClaims{
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)),
 			},
@@ -310,7 +308,6 @@ func TestGetAuthFromRequest(t *testing.T) {
 
 		// Create an expired access code and session
 		var sessionToken string
-		var validCode string
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			// Create studio
@@ -338,7 +335,6 @@ func TestGetAuthFromRequest(t *testing.T) {
 
 			// Generate unique code (expired)
 			code, _ := generateUniqueCodeInDB(tx)
-			validCode = code
 			accessCode := AccessCode{
 				Code:       code,
 				Type:       CodeTypeRoom,
@@ -371,9 +367,8 @@ func TestGetAuthFromRequest(t *testing.T) {
 
 		// Create JWT with code session claims (but code is expired in DB)
 		claims := &Claims{
-			IsCodeSession: true,
-			SessionToken:  sessionToken,
-			Code:          validCode,
+			UserId:       -1,
+			SessionToken: sessionToken,
 			RegisteredClaims: jwt.RegisteredClaims{
 				ExpiresAt: jwt.NewNumericDate(time.Now().Add(1 * time.Hour)), // JWT not expired, but code is
 			},
@@ -413,4 +408,359 @@ func TestGetAuthFromRequest(t *testing.T) {
 		}
 	})
 
+}
+
+// TestUnifiedJWT_AnonymousCodeSession tests JWT issuance with userId=-1 for anonymous code users
+func TestUnifiedJWT_AnonymousCodeSession(t *testing.T) {
+	db := setupTestAuthDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create access code and session
+	var sessionToken string
+	var codeExpiresAt time.Time
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create studio
+		studio := Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "Test",
+			MaxRooms:    5,
+			OwnerId:     1,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create room
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-key",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+		// Generate code
+		code, _ := generateUniqueCodeInDB(tx)
+		codeExpiresAt = time.Now().Add(1 * time.Hour)
+		accessCode := AccessCode{
+			Code:       code,
+			Type:       CodeTypeRoom,
+			TargetId:   room.Id,
+			CreatedBy:  1,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  codeExpiresAt,
+			MaxViewers: 0,
+			IsRevoked:  false,
+			Label:      "Test Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+		// Create session
+		token, _ := generateSessionToken()
+		sessionToken = token
+		session := CodeSession{
+			Token:            sessionToken,
+			Code:             accessCode.Code,
+			ConnectedAt:      time.Now(),
+			LastSeen:         time.Now(),
+			GracePeriodUntil: time.Time{},
+			ClientIP:         "127.0.0.1",
+			UserAgent:        "test-agent",
+		}
+		vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Create JWT with userId=-1 and sessionToken
+	claims := &Claims{
+		UserId:       -1,
+		SessionToken: sessionToken,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(codeExpiresAt),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(jwtKey)
+	if err != nil {
+		t.Fatalf("Failed to create test JWT: %v", err)
+	}
+
+	// Create request with JWT
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  "authToken",
+		Value: tokenString,
+	})
+
+	// Test GetAuthFromRequest
+	authCtx, err := GetAuthFromRequest(req, db)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	// Verify userId=-1
+	if authCtx.User.Id != -1 {
+		t.Errorf("Expected userId=-1, got %d", authCtx.User.Id)
+	}
+
+	// Verify IsCodeAuth
+	if !authCtx.IsCodeAuth {
+		t.Error("Expected IsCodeAuth=true for anonymous code session")
+	}
+
+	// Verify CodeSession populated
+	if authCtx.CodeSession == nil {
+		t.Fatal("Expected CodeSession, got nil")
+	}
+
+	if authCtx.CodeSession.Token != sessionToken {
+		t.Errorf("Expected session token %s, got %s", sessionToken, authCtx.CodeSession.Token)
+	}
+
+	// Verify NO entry in UserCodeSessionsBkt (this is anonymous)
+	var storedSessionToken string
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, UserCodeSessionsBkt, -1, &storedSessionToken)
+	})
+	if storedSessionToken != "" {
+		t.Error("Expected no entry in UserCodeSessionsBkt for anonymous session")
+	}
+}
+
+// TestUnifiedJWT_LoggedInUserWithCode tests logged-in user adding code access
+func TestUnifiedJWT_LoggedInUserWithCode(t *testing.T) {
+	db := setupTestAuthDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create test user
+	var testUser User
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		testUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Email:    "test@example.com",
+			Name:     "Test User",
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
+		vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
+		vbolt.TxCommit(tx)
+	})
+
+	// Create access code and session
+	var sessionToken string
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create studio/room
+		studio := Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "Test",
+			MaxRooms:    5,
+			OwnerId:     1,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-key",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+		// Create code
+		code, _ := generateUniqueCodeInDB(tx)
+		accessCode := AccessCode{
+			Code:       code,
+			Type:       CodeTypeRoom,
+			TargetId:   room.Id,
+			CreatedBy:  1,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(1 * time.Hour),
+			MaxViewers: 0,
+			IsRevoked:  false,
+			Label:      "Test Code",
+		}
+		vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+		// Create session
+		token, _ := generateSessionToken()
+		sessionToken = token
+		session := CodeSession{
+			Token:            sessionToken,
+			Code:             accessCode.Code,
+			ConnectedAt:      time.Now(),
+			LastSeen:         time.Now(),
+			GracePeriodUntil: time.Time{},
+			ClientIP:         "127.0.0.1",
+			UserAgent:        "test-agent",
+		}
+		vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+
+		// Store mapping in UserCodeSessionsBkt
+		vbolt.Write(tx, UserCodeSessionsBkt, testUser.Id, &sessionToken)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Create JWT with real userId (no sessionToken in claims)
+	claims := &Claims{
+		UserId: testUser.Id,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(jwtKey)
+	if err != nil {
+		t.Fatalf("Failed to create test JWT: %v", err)
+	}
+
+	// Create request with JWT
+	req := httptest.NewRequest("GET", "/test", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  "authToken",
+		Value: tokenString,
+	})
+
+	// Test GetAuthFromRequest
+	authCtx, err := GetAuthFromRequest(req, db)
+	if err != nil {
+		t.Errorf("Expected no error, got %v", err)
+	}
+
+	// Verify real user populated
+	if authCtx.User.Id != testUser.Id {
+		t.Errorf("Expected userId=%d, got %d", testUser.Id, authCtx.User.Id)
+	}
+
+	if authCtx.User.Email != testUser.Email {
+		t.Errorf("Expected email=%s, got %s", testUser.Email, authCtx.User.Email)
+	}
+
+	// Verify UserCodeSession populated (user has code access)
+	if authCtx.UserCodeSession == nil {
+		t.Fatal("Expected UserCodeSession, got nil")
+	}
+
+	if authCtx.UserCodeSession.Token != sessionToken {
+		t.Errorf("Expected session token %s, got %s", sessionToken, authCtx.UserCodeSession.Token)
+	}
+
+	// Verify entry exists in UserCodeSessionsBkt
+	var storedSessionToken string
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, UserCodeSessionsBkt, testUser.Id, &storedSessionToken)
+	})
+	if storedSessionToken != sessionToken {
+		t.Errorf("Expected UserCodeSessionsBkt[%d]=%s, got %s", testUser.Id, sessionToken, storedSessionToken)
+	}
+}
+
+// TestUnifiedJWT_LogoutClearsCodeSession tests that logout clears UserCodeSessionsBkt
+func TestUnifiedJWT_LogoutClearsCodeSession(t *testing.T) {
+	db := setupTestAuthDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create test user
+	var testUser User
+	var sessionToken string
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		testUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Email:    "test@example.com",
+			Name:     "Test User",
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
+		vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
+
+		// Add code session mapping
+		sessionToken = "test-session-token"
+		vbolt.Write(tx, UserCodeSessionsBkt, testUser.Id, &sessionToken)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Verify entry exists before logout
+	var storedBefore string
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, UserCodeSessionsBkt, testUser.Id, &storedBefore)
+	})
+	if storedBefore != sessionToken {
+		t.Fatalf("Test setup error: expected session token in DB before logout")
+	}
+
+	// Create JWT for user
+	claims := &Claims{
+		UserId: testUser.Id,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		},
+	}
+	token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
+	tokenString, err := token.SignedString(jwtKey)
+	if err != nil {
+		t.Fatalf("Failed to create test JWT: %v", err)
+	}
+
+	// Create logout request
+	req := httptest.NewRequest("POST", "/api/logout", nil)
+	req.AddCookie(&http.Cookie{
+		Name:  "authToken",
+		Value: tokenString,
+	})
+
+	// Create response recorder
+	w := httptest.NewRecorder()
+
+	// Call logout handler
+	logoutHandler(w, req)
+
+	// Verify UserCodeSessionsBkt entry is cleared
+	var storedAfter string
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, UserCodeSessionsBkt, testUser.Id, &storedAfter)
+	})
+	if storedAfter != "" {
+		t.Errorf("Expected UserCodeSessionsBkt entry to be cleared after logout, got %s", storedAfter)
+	}
 }

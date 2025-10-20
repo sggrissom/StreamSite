@@ -21,10 +21,8 @@ var ErrLoginFailure = errors.New("LoginFailure")
 var ErrAuthFailure = errors.New("AuthFailure")
 
 type Claims struct {
-	Username      string `json:"username"`
-	IsCodeSession bool   `json:"isCodeSession,omitempty"` // True for code-based access
-	SessionToken  string `json:"sessionToken,omitempty"`  // UUID of CodeSession (if IsCodeSession)
-	Code          string `json:"code,omitempty"`          // Access code (for logging/debug)
+	UserId       int    `json:"userId"`                 // User ID (-1 for anonymous code sessions, >0 for logged-in users)
+	SessionToken string `json:"sessionToken,omitempty"` // UUID of CodeSession (only for userId=-1)
 	jwt.RegisteredClaims
 }
 
@@ -152,6 +150,15 @@ func logoutHandler(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Clear UserCodeSessionsBkt entry if user had code session access
+	if user.Id > 0 {
+		vbolt.WithWriteTx(appDb, func(tx *vbolt.Tx) {
+			// Delete user's code session mapping
+			vbolt.Delete(tx, UserCodeSessionsBkt, user.Id)
+			vbolt.TxCommit(tx)
+		})
+	}
+
 	// Clear auth token cookie
 	http.SetCookie(w, &http.Cookie{
 		Name:     "authToken",
@@ -194,7 +201,7 @@ func generateToken(n int) (string, error) {
 func generateAuthJwt(user User, w http.ResponseWriter) (tokenString string, err error) {
 	expirationTime := time.Now().Add(24 * time.Hour) // 24 hour expiry
 	claims := &Claims{
-		Username: user.Email,
+		UserId: user.Id,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ExpiresAt: jwt.NewNumericDate(expirationTime),
 		},
@@ -262,8 +269,8 @@ func GetAuthUser(ctx *vbeam.Context) (user User, err error) {
 	}
 
 	if claims, ok := token.Claims.(*Claims); ok {
-		// Check if this is a code session JWT
-		if claims.IsCodeSession {
+		// Check if this is anonymous code session (userId=-1)
+		if claims.UserId == -1 {
 			// Load code session from database
 			var session CodeSession
 			vbolt.Read(ctx.Tx, CodeSessionsBkt, claims.SessionToken, &session)
@@ -315,8 +322,8 @@ func GetAuthUser(ctx *vbeam.Context) (user User, err error) {
 			return user, nil
 		}
 
-		// Regular user JWT
-		user = GetUser(ctx.Tx, GetUserId(ctx.Tx, claims.Username))
+		// Regular user JWT (userId > 0)
+		user = GetUser(ctx.Tx, claims.UserId)
 	}
 	return
 }
@@ -324,10 +331,11 @@ func GetAuthUser(ctx *vbeam.Context) (user User, err error) {
 // AuthContext represents the authentication context for a request
 // It can be either a regular user (via JWT) or a code session (via access code)
 type AuthContext struct {
-	User        User         // Actual user (if JWT auth), or pseudo-user with Id=-1 for code sessions
-	IsCodeAuth  bool         // True if authenticated via access code
-	CodeSession *CodeSession // Session info if code auth
-	AccessCode  *AccessCode  // Access code info if code auth
+	User            User         // Actual user (if JWT auth), or pseudo-user with Id=-1 for code sessions
+	IsCodeAuth      bool         // True if authenticated via access code
+	CodeSession     *CodeSession // Session info if anonymous code auth (userId=-1)
+	UserCodeSession *CodeSession // Session info if logged-in user with code access (userId>0)
+	AccessCode      *AccessCode  // Access code info if code auth
 }
 
 // GetAuthFromRequest checks JWT authentication (supports both user and code sessions)
@@ -357,9 +365,9 @@ func GetAuthFromRequest(r *http.Request, db *vbolt.DB) (authCtx AuthContext, err
 		return authCtx, ErrAuthFailure
 	}
 
-	// Check if this is a code session JWT
-	if claims.IsCodeSession {
-		// Load code session from database
+	// Check if this is anonymous code session (userId=-1)
+	if claims.UserId == -1 {
+		// Load code session from database using sessionToken from JWT claims
 		var session CodeSession
 		var accessCode AccessCode
 
@@ -387,7 +395,7 @@ func GetAuthFromRequest(r *http.Request, db *vbolt.DB) (authCtx AuthContext, err
 			return authCtx, ErrAuthFailure
 		}
 
-		// Create pseudo-user for code sessions
+		// Create pseudo-user for anonymous code sessions
 		authCtx.User = User{
 			Id:    -1, // Special ID for anonymous code sessions
 			Email: "anonymous@code-session",
@@ -399,9 +407,41 @@ func GetAuthFromRequest(r *http.Request, db *vbolt.DB) (authCtx AuthContext, err
 		return authCtx, nil
 	}
 
-	// Regular user JWT
-	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
-		authCtx.User = GetUser(tx, GetUserId(tx, claims.Username))
+	// Logged-in user JWT (userId > 0)
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Load user
+		authCtx.User = GetUser(tx, claims.UserId)
+
+		if authCtx.User.Id == 0 {
+			return
+		}
+
+		// Check if user has additional code session access
+		var sessionToken string
+		vbolt.Read(tx, UserCodeSessionsBkt, authCtx.User.Id, &sessionToken)
+
+		if sessionToken != "" {
+			// User has code-based access in addition to normal auth
+			var session CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, sessionToken, &session)
+
+			if session.Token != "" {
+				// Load access code for the session
+				var accessCode AccessCode
+				vbolt.Read(tx, AccessCodesBkt, session.Code, &accessCode)
+
+				if accessCode.Code != "" && !accessCode.IsRevoked {
+					// Update LastSeen timestamp
+					session.LastSeen = time.Now()
+					vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+
+					authCtx.UserCodeSession = &session
+					authCtx.AccessCode = &accessCode
+				}
+			}
+		}
+
+		vbolt.TxCommit(tx)
 	})
 
 	if authCtx.User.Id == 0 {

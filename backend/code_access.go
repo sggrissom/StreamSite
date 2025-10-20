@@ -107,6 +107,10 @@ var CodeSessionsBkt = vbolt.Bucket(&cfg.Info, "code_sessions", vpack.StringZ, Pa
 // CodeAnalyticsBkt: code (string) -> CodeAnalytics
 var CodeAnalyticsBkt = vbolt.Bucket(&cfg.Info, "code_analytics", vpack.StringZ, PackCodeAnalytics)
 
+// UserCodeSessionsBkt: userId (int) -> sessionToken (string)
+// Maps logged-in users to their active code sessions for dual authentication
+var UserCodeSessionsBkt = vbolt.Bucket(&cfg.Info, "user_code_sessions", vpack.FInt, vpack.StringZ)
+
 // Indexes for relationship queries
 
 // CodesByRoomIdx: roomId (term) -> code (target)
@@ -806,41 +810,65 @@ func validateAccessCodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If validation succeeded, reset violation count and generate JWT
+	// If validation succeeded, reset violation count and handle JWT/session
 	if resp.Success {
 		// Reset violation tracking on successful validation
 		globalRateLimiter.ResetViolations("code_validation", clientIP)
-		// Generate JWT with code session claims
-		expirationTime := resp.ExpiresAt
-		claims := &Claims{
-			IsCodeSession: true,
-			SessionToken:  resp.SessionToken,
-			Code:          req.Code,
-			RegisteredClaims: jwt.RegisteredClaims{
-				ExpiresAt: jwt.NewNumericDate(expirationTime),
-			},
-		}
-		token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
-		tokenString, tokenErr := token.SignedString(jwtKey)
-		if tokenErr != nil {
-			LogErrorWithRequest(r, LogCategorySystem, "Failed to generate JWT for code session", map[string]interface{}{
+		// Check if user is already logged in (has existing JWT)
+		authCtx, authErr := GetAuthFromRequest(r, appDb)
+		isLoggedIn := (authErr == nil && authCtx.User.Id > 0)
+
+		if isLoggedIn {
+			// User is already logged in - store code session in UserCodeSessionsBkt
+			// Don't issue new JWT, keep existing one
+			vbolt.WithWriteTx(appDb, func(tx *vbolt.Tx) {
+				vbolt.Write(tx, UserCodeSessionsBkt, authCtx.User.Id, &resp.SessionToken)
+				vbolt.TxCommit(tx)
+			})
+
+			LogInfoWithRequest(r, LogCategoryAuth, "Logged-in user added code access", map[string]interface{}{
+				"userId":       authCtx.User.Id,
 				"code":         req.Code,
 				"sessionToken": resp.SessionToken,
-				"error":        tokenErr.Error(),
 			})
-			vbeam.RespondError(w, errors.New("failed to generate session token"))
-			return
-		}
+		} else {
+			// User is not logged in - issue JWT with userId=-1
+			expirationTime := resp.ExpiresAt
+			claims := &Claims{
+				UserId:       -1, // Anonymous code session
+				SessionToken: resp.SessionToken,
+				RegisteredClaims: jwt.RegisteredClaims{
+					ExpiresAt: jwt.NewNumericDate(expirationTime),
+				},
+			}
+			token := jwt.NewWithClaims(jwt.SigningMethodHS256, claims)
 
-		// Set authToken cookie (same as regular user auth)
-		http.SetCookie(w, &http.Cookie{
-			Name:     "authToken",
-			Value:    tokenString,
-			Path:     "/",
-			HttpOnly: true,
-			MaxAge:   60 * 60 * 24, // 24 hours
-		})
+			tokenString, tokenErr := token.SignedString(jwtKey)
+			if tokenErr != nil {
+				LogErrorWithRequest(r, LogCategorySystem, "Failed to generate JWT for code session", map[string]interface{}{
+					"code":         req.Code,
+					"sessionToken": resp.SessionToken,
+					"error":        tokenErr.Error(),
+				})
+				vbeam.RespondError(w, errors.New("failed to generate session token"))
+				return
+			}
+
+			// Set authToken cookie
+			http.SetCookie(w, &http.Cookie{
+				Name:     "authToken",
+				Value:    tokenString,
+				Path:     "/",
+				HttpOnly: true,
+				MaxAge:   60 * 60 * 24, // 24 hours
+			})
+
+			LogInfoWithRequest(r, LogCategoryAuth, "Anonymous user authenticated via code", map[string]interface{}{
+				"code":         req.Code,
+				"sessionToken": resp.SessionToken,
+			})
+		}
 	}
 
 	// Send JSON response

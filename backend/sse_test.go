@@ -130,7 +130,7 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		})
 
 		// Create JWT token
-		testToken, err := createTestToken(testUser.Email)
+		testToken, err := createTestToken(testUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -180,7 +180,6 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 		// Create room, code, and session
 		var sessionToken string
-		var accessCodeStr string
 		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -205,7 +204,6 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 			// Create access code for this room
 			code, _ := generateUniqueCodeInDB(tx)
-			accessCodeStr = code
 			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
@@ -234,7 +232,7 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		})
 
 		// Create JWT with code session claims
-		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		jwtToken, err := createCodeSessionToken(sessionToken, codeExpiresAt)
 		if err != nil {
 			t.Fatalf("Failed to create JWT: %v", err)
 		}
@@ -285,7 +283,6 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		// Create two rooms and a code for room 1 only
 		var room1Id int
 		var sessionToken string
-		var accessCodeStr string
 		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -323,7 +320,6 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 			// Create access code ONLY for room 1
 			code, _ := generateUniqueCodeInDB(tx)
-			accessCodeStr = code
 			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
@@ -352,7 +348,7 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		})
 
 		// Create JWT with code session claims
-		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		jwtToken, err := createCodeSessionToken(sessionToken, codeExpiresAt)
 		if err != nil {
 			t.Fatalf("Failed to create JWT: %v", err)
 		}
@@ -394,7 +390,6 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 		// Create expired code and session
 		var sessionToken string
-		var accessCodeStr string
 		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -419,7 +414,6 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 
 			// Create EXPIRED access code
 			code, _ := generateUniqueCodeInDB(tx)
-			accessCodeStr = code
 			codeExpiresAt = time.Now().Add(-1 * time.Hour) // Expired 1 hour ago
 			accessCode := AccessCode{
 				Code:       code,
@@ -449,7 +443,7 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 		})
 
 		// Create JWT with code session claims (JWT itself will be expired since codeExpiresAt is in the past)
-		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		jwtToken, err := createCodeSessionToken(sessionToken, codeExpiresAt)
 		if err != nil {
 			t.Fatalf("Failed to create JWT: %v", err)
 		}
@@ -503,7 +497,7 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
-		testToken, _ := createTestToken(testUser.Email)
+		testToken, _ := createTestToken(testUser.Id)
 
 		// Create SSE handler
 		handler := MakeStreamRoomEventsHandler(db)
@@ -576,7 +570,7 @@ func TestSSEAuthenticationEvents(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
-		testToken, _ := createTestToken(testUser.Email)
+		testToken, _ := createTestToken(testUser.Id)
 
 		// Create SSE handler
 		handler := MakeStreamRoomEventsHandler(db)
@@ -772,7 +766,7 @@ func TestViewerCountTracking(t *testing.T) {
 		}
 
 		// Create JWT with code session claims
-		jwtToken, err := createCodeSessionToken(sessionToken, code, codeExpiresAt)
+		jwtToken, err := createCodeSessionToken(sessionToken, codeExpiresAt)
 		if err != nil {
 			t.Fatalf("Failed to create JWT: %v", err)
 		}
@@ -995,7 +989,7 @@ func TestViewerCountTracking(t *testing.T) {
 		})
 
 		// Create JWT token
-		testToken, _ := createTestToken(testUser.Email)
+		testToken, _ := createTestToken(testUser.Id)
 
 		// Create SSE handler and connect with JWT (not code session)
 		handler := MakeStreamRoomEventsHandler(db)

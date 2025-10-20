@@ -955,10 +955,10 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 		}
 
 		claims, ok := token.Claims.(*Claims)
-		if !ok || !claims.IsCodeSession {
+		if !ok || claims.UserId != -1 {
 			LogErrorSimple(LogCategorySystem, "Claims validation failed", map[string]interface{}{
-				"claimsOk":      ok,
-				"isCodeSession": claims.IsCodeSession,
+				"claimsOk": ok,
+				"userId":   claims.UserId,
 			})
 			resp.Success = false
 			resp.Error = "Invalid code session"
@@ -1074,7 +1074,7 @@ func ListMyAccessibleRooms(ctx *vbeam.Context, req ListMyAccessibleRoomsRequest)
 		}
 
 		claims, ok := token.Claims.(*Claims)
-		if !ok || !claims.IsCodeSession {
+		if !ok || claims.UserId != -1 {
 			err = errors.New("invalid code session")
 			return
 		}
@@ -1181,10 +1181,10 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 	}
 
 	claims, ok := token.Claims.(*Claims)
-	if !ok || !claims.IsCodeSession {
+	if !ok || claims.UserId != -1 {
 		LogErrorSimple(LogCategorySystem, "Claims validation failed", map[string]interface{}{
-			"claimsOk":      ok,
-			"isCodeSession": claims.IsCodeSession,
+			"claimsOk": ok,
+			"userId":   claims.UserId,
 		})
 		resp.Success = false
 		resp.Error = "Invalid code session"

@@ -61,10 +61,14 @@ func AuthenticateRequest(r *http.Request) (User, error) {
 		return user, errors.New("invalid claims")
 	}
 
+	// Skip anonymous code sessions (userId=-1)
+	if claims.UserId == -1 {
+		return user, errors.New("anonymous code session not allowed")
+	}
+
 	vbolt.WithReadTx(appDb, func(tx *vbolt.Tx) {
-		userId := GetUserId(tx, claims.Username)
-		if userId != 0 {
-			user = GetUser(tx, userId)
+		if claims.UserId > 0 {
+			user = GetUser(tx, claims.UserId)
 		}
 	})
 

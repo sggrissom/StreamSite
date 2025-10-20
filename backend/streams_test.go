@@ -106,7 +106,7 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 		})
 
 		// Create JWT token
-		testToken, err := createTestToken(testUser.Email)
+		testToken, err := createTestToken(testUser.Id)
 		if err != nil {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
@@ -150,7 +150,6 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 		// Create room, code, and session
 		var roomId int
 		var sessionToken string
-		var accessCodeStr string
 		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -176,7 +175,6 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 
 			// Create access code for this room
 			code, _ := generateUniqueCodeInDB(tx)
-			accessCodeStr = code
 			codeExpiresAt = time.Now().Add(1 * time.Hour)
 			accessCode := AccessCode{
 				Code:       code,
@@ -205,7 +203,7 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 		})
 
 		// Create JWT with code session claims
-		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		jwtToken, err := createCodeSessionToken(sessionToken, codeExpiresAt)
 		if err != nil {
 			t.Fatalf("Failed to create JWT: %v", err)
 		}
@@ -365,7 +363,6 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 
 		// Create expired code and session
 		var sessionToken string
-		var accessCodeStr string
 		var codeExpiresAt time.Time
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -390,7 +387,6 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 
 			// Create EXPIRED access code
 			code, _ := generateUniqueCodeInDB(tx)
-			accessCodeStr = code
 			codeExpiresAt = time.Now().Add(-1 * time.Hour) // Expired 1 hour ago
 			accessCode := AccessCode{
 				Code:       code,
@@ -420,7 +416,7 @@ func TestAuthenticatedStreamProxy(t *testing.T) {
 		})
 
 		// Create JWT with expired code session claims (JWT will be expired)
-		jwtToken, err := createCodeSessionToken(sessionToken, accessCodeStr, codeExpiresAt)
+		jwtToken, err := createCodeSessionToken(sessionToken, codeExpiresAt)
 		if err != nil {
 			t.Fatalf("Failed to create JWT: %v", err)
 		}
