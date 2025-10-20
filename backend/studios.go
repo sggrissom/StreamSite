@@ -339,6 +339,18 @@ type GetRoomDetailsResponse struct {
 	CodeExpiresAt *time.Time `json:"codeExpiresAt,omitempty"` // When the access code expires
 }
 
+type GetStudioRoomsForCodeSessionRequest struct {
+	StudioId int `json:"studioId"`
+}
+
+type GetStudioRoomsForCodeSessionResponse struct {
+	Success       bool       `json:"success"`
+	Error         string     `json:"error,omitempty"`
+	StudioName    string     `json:"studioName,omitempty"`
+	Rooms         []Room     `json:"rooms,omitempty"`
+	CodeExpiresAt *time.Time `json:"codeExpiresAt,omitempty"` // When the access code expires
+}
+
 type RoomWithStudio struct {
 	Room
 	StudioName string `json:"studioName"`
@@ -349,7 +361,8 @@ type ListMyAccessibleRoomsRequest struct {
 }
 
 type ListMyAccessibleRoomsResponse struct {
-	Rooms []RoomWithStudio `json:"rooms"`
+	Rooms         []RoomWithStudio `json:"rooms"`
+	CodeExpiresAt *time.Time       `json:"codeExpiresAt,omitempty"` // Set when accessed via code session
 }
 
 // API Procedures
@@ -1042,11 +1055,82 @@ func ListMyAccessibleRooms(ctx *vbeam.Context, req ListMyAccessibleRoomsRequest)
 		return
 	}
 
-	// Get all studios user is a member of
+	resp.Rooms = make([]RoomWithStudio, 0)
+
+	// Handle code sessions differently
+	if caller.Id == -1 {
+		// Code session - get rooms based on the access code
+		// Parse JWT to get session token
+		token, tokenErr := jwt.ParseWithClaims(ctx.Token, &Claims{}, func(token *jwt.Token) (any, error) {
+			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+				return nil, errors.New("unexpected signing method")
+			}
+			return jwtKey, nil
+		})
+
+		if tokenErr != nil || !token.Valid {
+			err = errors.New("invalid session token")
+			return
+		}
+
+		claims, ok := token.Claims.(*Claims)
+		if !ok || !claims.IsCodeSession {
+			err = errors.New("invalid code session")
+			return
+		}
+
+		// Load the code session
+		var session CodeSession
+		vbolt.Read(ctx.Tx, CodeSessionsBkt, claims.SessionToken, &session)
+
+		if session.Token == "" {
+			err = errors.New("session not found")
+			return
+		}
+
+		// Load the access code
+		var accessCode AccessCode
+		vbolt.Read(ctx.Tx, AccessCodesBkt, session.Code, &accessCode)
+
+		if accessCode.Code == "" {
+			err = errors.New("access code not found")
+			return
+		}
+
+		// Get rooms based on code type
+		if accessCode.Type == CodeTypeRoom {
+			// Room-specific code: return just that room
+			room := GetRoom(ctx.Tx, accessCode.TargetId)
+			if room.Id != 0 {
+				studio := GetStudioById(ctx.Tx, room.StudioId)
+				resp.Rooms = append(resp.Rooms, RoomWithStudio{
+					Room:       room,
+					StudioName: studio.Name,
+				})
+			}
+		} else {
+			// Studio-wide code: return all rooms in that studio
+			studio := GetStudioById(ctx.Tx, accessCode.TargetId)
+			if studio.Id != 0 {
+				rooms := ListStudioRooms(ctx.Tx, studio.Id)
+				for _, room := range rooms {
+					resp.Rooms = append(resp.Rooms, RoomWithStudio{
+						Room:       room,
+						StudioName: studio.Name,
+					})
+				}
+			}
+		}
+
+		// Set expiration time for code sessions
+		resp.CodeExpiresAt = &accessCode.ExpiresAt
+		return
+	}
+
+	// Regular authenticated user - get all studios user is a member of
 	studios := ListUserStudios(ctx.Tx, caller.Id)
 
 	// Collect all rooms from all studios
-	resp.Rooms = make([]RoomWithStudio, 0)
 	for _, studio := range studios {
 		// Get all rooms for this studio
 		rooms := ListStudioRooms(ctx.Tx, studio.Id)
@@ -1060,6 +1144,125 @@ func ListMyAccessibleRooms(ctx *vbeam.Context, req ListMyAccessibleRoomsRequest)
 		}
 	}
 
+	return
+}
+
+func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeSessionRequest) (resp GetStudioRoomsForCodeSessionResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// This endpoint is specifically for code sessions
+	if caller.Id != -1 {
+		resp.Success = false
+		resp.Error = "This endpoint is for code session access only"
+		return
+	}
+
+	// Parse JWT to get session token
+	token, tokenErr := jwt.ParseWithClaims(ctx.Token, &Claims{}, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return jwtKey, nil
+	})
+
+	if tokenErr != nil || !token.Valid {
+		LogErrorSimple(LogCategorySystem, "JWT parsing failed in GetStudioRoomsForCodeSession", map[string]interface{}{
+			"error": tokenErr,
+		})
+		resp.Success = false
+		resp.Error = "Invalid session token"
+		return
+	}
+
+	claims, ok := token.Claims.(*Claims)
+	if !ok || !claims.IsCodeSession {
+		LogErrorSimple(LogCategorySystem, "Claims validation failed", map[string]interface{}{
+			"claimsOk":      ok,
+			"isCodeSession": claims.IsCodeSession,
+		})
+		resp.Success = false
+		resp.Error = "Invalid code session"
+		return
+	}
+
+	// Load the code session
+	var session CodeSession
+	vbolt.Read(ctx.Tx, CodeSessionsBkt, claims.SessionToken, &session)
+
+	if session.Token == "" {
+		LogErrorSimple(LogCategorySystem, "Session not found in database", map[string]interface{}{
+			"sessionToken": claims.SessionToken,
+		})
+		resp.Success = false
+		resp.Error = "Session not found"
+		return
+	}
+
+	// Load the access code
+	var accessCode AccessCode
+	vbolt.Read(ctx.Tx, AccessCodesBkt, session.Code, &accessCode)
+
+	if accessCode.Code == "" {
+		LogErrorSimple(LogCategorySystem, "Access code not found", map[string]interface{}{
+			"code": session.Code,
+		})
+		resp.Success = false
+		resp.Error = "Access code not found"
+		return
+	}
+
+	// Verify this is a studio-level code and matches requested studio
+	if accessCode.Type != CodeTypeStudio {
+		resp.Success = false
+		resp.Error = "This code is not for studio access"
+		return
+	}
+
+	if accessCode.TargetId != req.StudioId {
+		LogWarn(LogCategorySystem, "Studio code does not match requested studio", map[string]interface{}{
+			"codeStudioId":      accessCode.TargetId,
+			"requestedStudioId": req.StudioId,
+		})
+		resp.Success = false
+		resp.Error = "You do not have permission to view this studio"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, req.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Get all rooms for this studio
+	var roomIds []int
+	vbolt.ReadTermTargets(ctx.Tx, RoomsByStudioIdx, studio.Id, &roomIds, vbolt.Window{})
+
+	var rooms []Room
+	for _, roomId := range roomIds {
+		room := GetRoom(ctx.Tx, roomId)
+		if room.Id != 0 {
+			rooms = append(rooms, room)
+		}
+	}
+
+	// Initialize empty slice if no rooms found
+	if rooms == nil {
+		rooms = []Room{}
+	}
+
+	resp.Success = true
+	resp.StudioName = studio.Name
+	resp.Rooms = rooms
+	resp.CodeExpiresAt = &accessCode.ExpiresAt
 	return
 }
 
@@ -1446,6 +1649,7 @@ func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateRoom)
 	vbeam.RegisterProc(app, ListRooms)
 	vbeam.RegisterProc(app, GetRoomDetails)
+	vbeam.RegisterProc(app, GetStudioRoomsForCodeSession)
 	vbeam.RegisterProc(app, ListMyAccessibleRooms)
 	vbeam.RegisterProc(app, GetRoomStreamKey)
 	vbeam.RegisterProc(app, UpdateRoom)

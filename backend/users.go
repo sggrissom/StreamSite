@@ -192,7 +192,7 @@ func CreateAccount(ctx *vbeam.Context, req CreateAccountRequest) (resp CreateAcc
 
 func GetAuthContext(ctx *vbeam.Context, req Empty) (resp AuthResponse, err error) {
 	user, authErr := GetAuthUser(ctx)
-	if authErr == nil && user.Id > 0 {
+	if authErr == nil && user.Id != 0 {
 		resp = GetAuthResponseFromUser(ctx.Tx, user)
 	}
 	return

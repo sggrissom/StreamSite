@@ -3,17 +3,46 @@ import { block } from "vlens/css";
 block(`
 .dashboard-container {
   min-height: calc(100vh - 200px);
+  padding: 40px 20px;
+}
+`);
+
+block(`
+.expiration-banner {
+  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+  color: white;
+  padding: 0.75rem 1rem;
+  border-radius: 8px;
+  margin-bottom: 2rem;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+  max-width: 1200px;
+  margin-left: auto;
+  margin-right: auto;
+}
+`);
+
+block(`
+.expiration-content {
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 40px 20px;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+`);
+
+block(`
+.expiration-icon {
+  font-size: 1.25rem;
 }
 `);
 
 block(`
 .dashboard-content {
   text-align: center;
-  max-width: 600px;
+  max-width: 1200px;
+  margin: 0 auto;
 }
 `);
 

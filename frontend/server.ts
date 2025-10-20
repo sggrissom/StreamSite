@@ -191,11 +191,24 @@ export interface GetRoomDetailsResponse {
     codeExpiresAt: string | null
 }
 
+export interface GetStudioRoomsForCodeSessionRequest {
+    studioId: number
+}
+
+export interface GetStudioRoomsForCodeSessionResponse {
+    success: boolean
+    error: string
+    studioName: string
+    rooms: Room[]
+    codeExpiresAt: string | null
+}
+
 export interface ListMyAccessibleRoomsRequest {
 }
 
 export interface ListMyAccessibleRoomsResponse {
     rooms: RoomWithStudio[]
+    codeExpiresAt: string | null
 }
 
 export interface GetRoomStreamKeyRequest {
@@ -561,6 +574,10 @@ export async function ListRooms(data: ListRoomsRequest): Promise<rpc.Response<Li
 
 export async function GetRoomDetails(data: GetRoomDetailsRequest): Promise<rpc.Response<GetRoomDetailsResponse>> {
     return await rpc.call<GetRoomDetailsResponse>('GetRoomDetails', JSON.stringify(data));
+}
+
+export async function GetStudioRoomsForCodeSession(data: GetStudioRoomsForCodeSessionRequest): Promise<rpc.Response<GetStudioRoomsForCodeSessionResponse>> {
+    return await rpc.call<GetStudioRoomsForCodeSessionResponse>('GetStudioRoomsForCodeSession', JSON.stringify(data));
 }
 
 export async function ListMyAccessibleRooms(data: ListMyAccessibleRoomsRequest): Promise<rpc.Response<ListMyAccessibleRoomsResponse>> {

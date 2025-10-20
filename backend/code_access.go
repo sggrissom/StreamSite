@@ -1140,8 +1140,8 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 	if accessCode.Type == CodeTypeRoom {
 		redirectTo = fmt.Sprintf("/stream/%d", accessCode.TargetId)
 	} else {
-		// For studio codes, redirect to studio page (they can choose which room)
-		redirectTo = fmt.Sprintf("/studio/%d", accessCode.TargetId)
+		// For studio codes, redirect to dashboard (they can choose which room)
+		redirectTo = "/dashboard"
 	}
 
 	// Log validation success
@@ -1259,8 +1259,8 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 	if accessCode.Type == CodeTypeRoom {
 		redirectTo = fmt.Sprintf("/stream/%d", accessCode.TargetId)
 	} else {
-		// For studio codes, redirect to studio page (they can choose which room)
-		redirectTo = fmt.Sprintf("/studio/%d", accessCode.TargetId)
+		// For studio codes, redirect to dashboard (they can choose which room)
+		redirectTo = "/dashboard"
 	}
 
 	// Log validation success
