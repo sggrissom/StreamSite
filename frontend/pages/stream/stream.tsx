@@ -6,6 +6,71 @@ import "./stream-styles";
 
 type Data = server.GetRoomDetailsResponse;
 
+// Countdown timer for code expiration
+type CountdownState = {
+  timeRemaining: number; // seconds
+  formattedTime: string;
+  intervalId: number | null;
+  cleanup: () => void;
+};
+
+const useCountdown = vlens.declareHook((expiresAt: string): CountdownState => {
+  const state: CountdownState = {
+    timeRemaining: 0,
+    formattedTime: "",
+    intervalId: null,
+    cleanup: () => {
+      if (state.intervalId !== null) {
+        clearInterval(state.intervalId);
+        state.intervalId = null;
+      }
+    },
+  };
+
+  // Calculate time remaining
+  const updateTimeRemaining = () => {
+    const now = Date.now();
+    const expiryTime = new Date(expiresAt).getTime();
+    const secondsLeft = Math.max(0, Math.floor((expiryTime - now) / 1000));
+    state.timeRemaining = secondsLeft;
+
+    // Format based on time remaining
+    if (secondsLeft <= 0) {
+      state.formattedTime = "Expired";
+      state.cleanup();
+    } else if (secondsLeft < 600) {
+      // Under 10 minutes: show MM:SS
+      const minutes = Math.floor(secondsLeft / 60);
+      const seconds = secondsLeft % 60;
+      state.formattedTime = `${minutes}:${seconds.toString().padStart(2, "0")}`;
+    } else if (secondsLeft < 3600) {
+      // Under 1 hour: show minutes
+      const minutes = Math.ceil(secondsLeft / 60);
+      state.formattedTime = `${minutes} minute${minutes !== 1 ? "s" : ""}`;
+    } else if (secondsLeft < 86400) {
+      // Under 24 hours: show hours
+      const hours = Math.ceil(secondsLeft / 3600);
+      state.formattedTime = `${hours} hour${hours !== 1 ? "s" : ""}`;
+    } else {
+      // 24+ hours: show days
+      const days = Math.ceil(secondsLeft / 86400);
+      state.formattedTime = `${days} day${days !== 1 ? "s" : ""}`;
+    }
+
+    vlens.scheduleRedraw();
+  };
+
+  // Initial calculation
+  updateTimeRemaining();
+
+  // Set up interval if not expired
+  if (state.timeRemaining > 0 && state.intervalId === null) {
+    state.intervalId = window.setInterval(updateTimeRemaining, 1000);
+  }
+
+  return state;
+});
+
 type StreamState = {
   videoElement: HTMLVideoElement | null;
   hlsInstance: any;
@@ -315,6 +380,17 @@ export function view(
           <div className="code-session-banner">
             <span className="banner-icon">🔑</span>
             <span className="banner-text">Watching via access code</span>
+            {data.codeExpiresAt &&
+              (() => {
+                const countdown = useCountdown(data.codeExpiresAt);
+                return (
+                  <span className="banner-countdown">
+                    {countdown.timeRemaining > 0
+                      ? `Expires in ${countdown.formattedTime}`
+                      : "Code expired"}
+                  </span>
+                );
+              })()}
           </div>
         )}
 

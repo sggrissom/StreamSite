@@ -161,6 +161,19 @@ block(`
 `);
 
 block(`
+.code-session-banner .banner-countdown {
+  margin-left: auto;
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  background: rgba(255, 255, 255, 0.15);
+  padding: 0.375rem 0.75rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+`);
+
+block(`
 .video-container {
   margin-top: 2rem;
 }
@@ -271,10 +284,16 @@ block(`
   .code-session-banner {
     padding: 0.875rem 1rem;
     margin-top: 1rem;
+    flex-wrap: wrap;
   }
 
   .code-session-banner .banner-text {
     font-size: 0.875rem;
+  }
+
+  .code-session-banner .banner-countdown {
+    font-size: 0.8125rem;
+    padding: 0.25rem 0.5rem;
   }
 }
 `);
