@@ -270,9 +270,12 @@ func (rl *RateLimiter) cleanup() {
 		delete(rl.entries, key)
 	}
 
-	// Clean up expired violations (lockout expired)
+	// Clean up expired violations (lockout expired + 1 hour grace period)
+	// Violations persist for 1 hour after lockout expires to allow escalation
+	// if user continues to fail. Only cleared on successful validation or after grace period.
 	for key, violation := range rl.violations {
-		if now.After(violation.lockedUntil) {
+		gracePeriod := 1 * time.Hour
+		if now.After(violation.lockedUntil.Add(gracePeriod)) {
 			violationsToDelete = append(violationsToDelete, key)
 		}
 	}
