@@ -203,12 +203,6 @@ export function view(
                       >
                         {room.isActive ? "Watch Stream" : "View Stream"}
                       </a>
-                      <a
-                        href={`/studio/${room.studioId}`}
-                        className="btn btn-secondary btn-sm"
-                      >
-                        Studio
-                      </a>
                     </div>
                   </div>
                 ))}

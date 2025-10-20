@@ -229,3 +229,69 @@ func GetRoomsAccessibleViaCode(tx *vbolt.Tx, accessCode AccessCode) []RoomWithSt
 
 	return rooms
 }
+
+// StudioAccessResult encapsulates the result of a studio access check
+type StudioAccessResult struct {
+	Allowed      bool       // Whether access is granted
+	Role         StudioRole // User's role in the studio (if allowed)
+	IsSiteAdmin  bool       // Whether user is a site admin
+	DenialReason string     // Human-readable reason for denial
+}
+
+// CheckStudioAccess is the single source of truth for studio access permissions
+// Handles studio membership and site admin privileges
+//
+// Parameters:
+//   - tx: Database transaction
+//   - user: The user attempting access
+//   - studioId: The studio being accessed
+//
+// Returns: StudioAccessResult with access decision and metadata
+func CheckStudioAccess(tx *vbolt.Tx, user User, studioId int) StudioAccessResult {
+	// Get studio
+	studio := GetStudioById(tx, studioId)
+	if studio.Id == 0 {
+		return StudioAccessResult{
+			Allowed:      false,
+			DenialReason: "Studio not found",
+		}
+	}
+
+	// Anonymous users (userId=-1) cannot access studio pages
+	if user.Id == -1 {
+		return StudioAccessResult{
+			Allowed:      false,
+			DenialReason: "You must be logged in to access studio management",
+		}
+	}
+
+	// Site admins have full access to all studios
+	if user.Role == RoleSiteAdmin {
+		// Get actual role if they're a member, otherwise grant Owner role
+		role := GetUserStudioRole(tx, user.Id, studioId)
+		if role == -1 {
+			role = StudioRoleOwner
+		}
+		return StudioAccessResult{
+			Allowed:     true,
+			Role:        role,
+			IsSiteAdmin: true,
+		}
+	}
+
+	// Check studio membership
+	role := GetUserStudioRole(tx, user.Id, studioId)
+	if role != -1 {
+		return StudioAccessResult{
+			Allowed:     true,
+			Role:        role,
+			IsSiteAdmin: false,
+		}
+	}
+
+	// No access granted
+	return StudioAccessResult{
+		Allowed:      false,
+		DenialReason: "You do not have permission to view this studio",
+	}
+}

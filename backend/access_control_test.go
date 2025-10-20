@@ -833,3 +833,491 @@ func TestGetRoomsAccessibleViaCode(t *testing.T) {
 		}
 	})
 }
+
+func TestCheckStudioAccess(t *testing.T) {
+	t.Run("StudioNotFound", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		user := User{Id: 1, Email: "test@example.com", Name: "Test User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, user, 99999)
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied for non-existent studio")
+		}
+
+		if result.DenialReason != "Studio not found" {
+			t.Errorf("Expected 'Studio not found', got '%s'", result.DenialReason)
+		}
+	})
+
+	t.Run("AnonymousUserDenied", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+			vbolt.TxCommit(tx)
+		})
+
+		anonymousUser := User{Id: -1, Email: "anonymous@code-session", Name: "Access Code User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, anonymousUser, studioId)
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied for anonymous user")
+		}
+
+		if result.DenialReason != "You must be logged in to access studio management" {
+			t.Errorf("Expected login required message, got '%s'", result.DenialReason)
+		}
+	})
+
+	t.Run("LoggedInUserWithCodeSessionButNoMembership", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user (not a studio member)
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "user@example.com",
+				Name:     "Test User",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+
+			// User has code session but NOT studio membership
+			code := "12345"
+			accessCode := AccessCode{
+				Code:       code,
+				Type:       CodeTypeStudio,
+				TargetId:   studioId,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour),
+				MaxViewers: 10,
+				IsRevoked:  false,
+			}
+			vbolt.Write(tx, AccessCodesBkt, accessCode.Code, &accessCode)
+
+			sessionToken, _ := generateSessionToken()
+			session := CodeSession{
+				Token:       sessionToken,
+				Code:        code,
+				ConnectedAt: time.Now(),
+				LastSeen:    time.Now(),
+			}
+			vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+			vbolt.Write(tx, UserCodeSessionsBkt, userId, &sessionToken)
+
+			vbolt.TxCommit(tx)
+		})
+
+		loggedInUser := User{Id: userId, Email: "user@example.com", Name: "Test User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, loggedInUser, studioId)
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied for user with code session but no membership")
+		}
+
+		if result.DenialReason != "You do not have permission to view this studio" {
+			t.Errorf("Expected permission denied message, got '%s'", result.DenialReason)
+		}
+	})
+
+	t.Run("StudioViewer", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "viewer@example.com",
+				Name:     "Viewer User",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+
+			// Add user as viewer
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				StudioId: studioId,
+				UserId:   userId,
+				Role:     StudioRoleViewer,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		viewerUser := User{Id: userId, Email: "viewer@example.com", Name: "Viewer User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, viewerUser, studioId)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be allowed for studio viewer")
+		}
+
+		if result.Role != StudioRoleViewer {
+			t.Errorf("Expected role Viewer, got %d", result.Role)
+		}
+
+		if result.IsSiteAdmin {
+			t.Error("Expected IsSiteAdmin to be false")
+		}
+	})
+
+	t.Run("StudioMember", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "member@example.com",
+				Name:     "Member User",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+
+			// Add user as member
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				StudioId: studioId,
+				UserId:   userId,
+				Role:     StudioRoleMember,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		memberUser := User{Id: userId, Email: "member@example.com", Name: "Member User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, memberUser, studioId)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be allowed for studio member")
+		}
+
+		if result.Role != StudioRoleMember {
+			t.Errorf("Expected role Member, got %d", result.Role)
+		}
+
+		if result.IsSiteAdmin {
+			t.Error("Expected IsSiteAdmin to be false")
+		}
+	})
+
+	t.Run("StudioAdmin", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "admin@example.com",
+				Name:     "Admin User",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+
+			// Add user as admin
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				StudioId: studioId,
+				UserId:   userId,
+				Role:     StudioRoleAdmin,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		adminUser := User{Id: userId, Email: "admin@example.com", Name: "Admin User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, adminUser, studioId)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be allowed for studio admin")
+		}
+
+		if result.Role != StudioRoleAdmin {
+			t.Errorf("Expected role Admin, got %d", result.Role)
+		}
+
+		if result.IsSiteAdmin {
+			t.Error("Expected IsSiteAdmin to be false")
+		}
+	})
+
+	t.Run("StudioOwner", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create user
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "owner@example.com",
+				Name:     "Owner User",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio with this user as owner
+			studio := Studio{
+				Id:       vbolt.NextIntId(tx, StudiosBkt),
+				Name:     "Test Studio",
+				MaxRooms: 5,
+				OwnerId:  userId,
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+			studioId = studio.Id
+
+			// Add owner membership
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				StudioId: studioId,
+				UserId:   userId,
+				Role:     StudioRoleOwner,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		ownerUser := User{Id: userId, Email: "owner@example.com", Name: "Owner User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, ownerUser, studioId)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be allowed for studio owner")
+		}
+
+		if result.Role != StudioRoleOwner {
+			t.Errorf("Expected role Owner, got %d", result.Role)
+		}
+
+		if result.IsSiteAdmin {
+			t.Error("Expected IsSiteAdmin to be false")
+		}
+	})
+
+	t.Run("SiteAdminWithNoMembership", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create site admin user
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "admin@example.com",
+				Name:     "Site Admin",
+				Role:     RoleSiteAdmin,
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio (admin is NOT a member)
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+
+			vbolt.TxCommit(tx)
+		})
+
+		siteAdminUser := User{Id: userId, Email: "admin@example.com", Name: "Site Admin", Role: RoleSiteAdmin}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, siteAdminUser, studioId)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be allowed for site admin")
+		}
+
+		if result.Role != StudioRoleOwner {
+			t.Errorf("Expected role Owner for site admin, got %d", result.Role)
+		}
+
+		if !result.IsSiteAdmin {
+			t.Error("Expected IsSiteAdmin to be true")
+		}
+	})
+
+	t.Run("SiteAdminWhoIsAlsoMember", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create site admin user
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "admin@example.com",
+				Name:     "Site Admin",
+				Role:     RoleSiteAdmin,
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+
+			// Add admin as member (not owner)
+			membershipId := vbolt.NextIntId(tx, MembershipBkt)
+			membership := StudioMembership{
+				StudioId: studioId,
+				UserId:   userId,
+				Role:     StudioRoleMember,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studioId)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, userId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		siteAdminUser := User{Id: userId, Email: "admin@example.com", Name: "Site Admin", Role: RoleSiteAdmin}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, siteAdminUser, studioId)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be allowed for site admin who is also member")
+		}
+
+		// Should get their actual membership role, not Owner
+		if result.Role != StudioRoleMember {
+			t.Errorf("Expected role Member (actual membership), got %d", result.Role)
+		}
+
+		if !result.IsSiteAdmin {
+			t.Error("Expected IsSiteAdmin to be true")
+		}
+	})
+
+	t.Run("RegularUserWithNoAccess", func(t *testing.T) {
+		db := setupTestAccessControlDB(t)
+		defer db.Close()
+
+		var userId, studioId int
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create regular user
+			user := User{
+				Id:       vbolt.NextIntId(tx, UsersBkt),
+				Email:    "user@example.com",
+				Name:     "Regular User",
+				Creation: time.Now(),
+			}
+			vbolt.Write(tx, UsersBkt, user.Id, &user)
+			userId = user.Id
+
+			// Create studio (user has no access)
+			studio, _ := createTestStudioAndRoom(tx)
+			studioId = studio.Id
+
+			vbolt.TxCommit(tx)
+		})
+
+		regularUser := User{Id: userId, Email: "user@example.com", Name: "Regular User"}
+
+		var result StudioAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckStudioAccess(tx, regularUser, studioId)
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied for user with no access")
+		}
+
+		if result.DenialReason != "You do not have permission to view this studio" {
+			t.Errorf("Expected permission denied message, got '%s'", result.DenialReason)
+		}
+	})
+}

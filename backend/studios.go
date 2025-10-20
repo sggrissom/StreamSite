@@ -521,33 +521,21 @@ func GetStudio(ctx *vbeam.Context, req GetStudioRequest) (resp GetStudioResponse
 		return
 	}
 
-	// Get studio
+	// Check studio access
+	access := CheckStudioAccess(ctx.Tx, caller, req.StudioId)
+	if !access.Allowed {
+		resp.Success = false
+		resp.Error = access.DenialReason
+		return
+	}
+
+	// Get studio (we know it exists from CheckStudioAccess)
 	studio := GetStudioById(ctx.Tx, req.StudioId)
-	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
-	}
-
-	// Check if user has permission to view this studio
-	role := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
-
-	// Site admins can view all studios
-	if caller.Role != RoleSiteAdmin && role == -1 {
-		resp.Success = false
-		resp.Error = "You do not have permission to view this studio"
-		return
-	}
-
-	// Site admins who aren't members get Owner role for display purposes
-	if caller.Role == RoleSiteAdmin && role == -1 {
-		role = StudioRoleOwner
-	}
 
 	resp.Success = true
 	resp.Studio = studio
-	resp.MyRole = role
-	resp.MyRoleName = GetStudioRoleName(role)
+	resp.MyRole = access.Role
+	resp.MyRoleName = GetStudioRoleName(access.Role)
 	return
 }
 
@@ -560,28 +548,16 @@ func GetStudioDashboard(ctx *vbeam.Context, req GetStudioDashboardRequest) (resp
 		return
 	}
 
-	// Get studio
+	// Check studio access
+	access := CheckStudioAccess(ctx.Tx, caller, req.StudioId)
+	if !access.Allowed {
+		resp.Success = false
+		resp.Error = access.DenialReason
+		return
+	}
+
+	// Get studio (we know it exists from CheckStudioAccess)
 	studio := GetStudioById(ctx.Tx, req.StudioId)
-	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
-	}
-
-	// Check if user has permission to view this studio
-	role := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
-
-	// Site admins can view all studios
-	if caller.Role != RoleSiteAdmin && role == -1 {
-		resp.Success = false
-		resp.Error = "You do not have permission to view this studio"
-		return
-	}
-
-	// Site admins who aren't members get Owner role for display purposes
-	if caller.Role == RoleSiteAdmin && role == -1 {
-		role = StudioRoleOwner
-	}
 
 	// Get all rooms for this studio
 	var roomIds []int
@@ -619,8 +595,8 @@ func GetStudioDashboard(ctx *vbeam.Context, req GetStudioDashboardRequest) (resp
 
 	resp.Success = true
 	resp.Studio = studio
-	resp.MyRole = role
-	resp.MyRoleName = GetStudioRoleName(role)
+	resp.MyRole = access.Role
+	resp.MyRoleName = GetStudioRoleName(access.Role)
 	resp.Rooms = rooms
 	resp.Members = members
 	return
