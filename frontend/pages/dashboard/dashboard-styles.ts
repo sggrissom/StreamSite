@@ -9,7 +9,7 @@ block(`
 
 block(`
 .expiration-banner {
-  background: linear-gradient(135deg, var(--primary-dark), var(--primary));
+  background: linear-gradient(135deg, var(--primary-accent), var(--accent));
   color: white;
   padding: 0.75rem 1rem;
   border-radius: 8px;

@@ -138,16 +138,18 @@ export function view(
       <Header />
       <main className="dashboard-container">
         {/* Expiration banner for code sessions */}
-        {countdown && countdown.timeRemaining > 0 && (
-          <div className="expiration-banner">
-            <div className="expiration-content">
-              <span className="expiration-icon">⏱️</span>
-              <span className="expiration-text">
-                Access expires in {countdown.formattedTime}
-              </span>
+        {countdown &&
+          countdown.timeRemaining > 0 &&
+          countdown.formattedTime !== "Never expires" && (
+            <div className="expiration-banner">
+              <div className="expiration-content">
+                <span className="expiration-icon">⏱️</span>
+                <span className="expiration-text">
+                  Access expires in {countdown.formattedTime}
+                </span>
+              </div>
             </div>
-          </div>
-        )}
+          )}
 
         <div className="dashboard-content">
           <h1 className="dashboard-title">My Streams</h1>
