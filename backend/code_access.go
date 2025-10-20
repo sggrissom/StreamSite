@@ -1294,7 +1294,26 @@ func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp Rev
 	}
 	vbolt.Write(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
+	// For studio codes, fetch room IDs before committing transaction
+	var roomIds []int
+	if accessCode.Type == CodeTypeStudio {
+		vbolt.ReadTermTargets(ctx.Tx, RoomsByStudioIdx, studioId, &roomIds, vbolt.Window{})
+	}
+
 	vbolt.TxCommit(ctx.Tx)
+
+	// Broadcast CODE_REVOKED event to affected viewers only
+	// Only viewers using THIS specific revoked code will receive the event
+	// For room codes: broadcast to that specific room
+	// For studio codes: broadcast to all rooms in the studio
+	if accessCode.Type == CodeTypeRoom {
+		sseManager.BroadcastCodeRevoked(accessCode.TargetId, sessionTokens)
+	} else {
+		// Studio code - broadcast to all rooms in the studio
+		for _, roomId := range roomIds {
+			sseManager.BroadcastCodeRevoked(roomId, sessionTokens)
+		}
+	}
 
 	// Log revocation
 	LogInfo(LogCategorySystem, "Access code revoked", map[string]interface{}{

@@ -123,6 +123,106 @@ func (m *SSEManager) BroadcastRoomStatus(roomID int, isActive bool) {
 	}
 }
 
+// BroadcastCodeRevoked notifies specific clients that their access code has been revoked
+// Only sends to clients whose SessionToken matches one of the revokedSessionTokens
+func (m *SSEManager) BroadcastCodeRevoked(roomID int, revokedSessionTokens []string) {
+	m.mu.RLock()
+	clients := m.clients[roomID]
+	m.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return // No one watching
+	}
+
+	event := map[string]interface{}{
+		"message":   "Access code has been revoked by the stream owner",
+		"timestamp": time.Now().Unix(),
+	}
+
+	data, _ := json.Marshal(event)
+	message := fmt.Sprintf("event: code_revoked\ndata: %s\n\n", data)
+
+	affectedClients := 0
+
+	// Send only to clients whose session token was revoked
+	for _, client := range clients {
+		// Skip JWT-authenticated users (they have empty SessionToken)
+		if client.SessionToken == "" {
+			continue
+		}
+
+		// Check if this client's session was revoked
+		isRevoked := false
+		for _, token := range revokedSessionTokens {
+			if client.SessionToken == token {
+				isRevoked = true
+				break
+			}
+		}
+
+		if !isRevoked {
+			continue // Not affected by this revocation
+		}
+
+		// Send CODE_REVOKED event to this specific client
+		select {
+		case <-client.Done:
+			// Client already disconnected
+			continue
+		default:
+			if _, err := fmt.Fprint(client.Writer, message); err == nil {
+				flushSSE(client.Writer)
+				affectedClients++
+			}
+		}
+	}
+
+	LogInfo(LogCategorySystem, "Broadcasting CODE_REVOKED event", map[string]interface{}{
+		"roomId":          roomID,
+		"totalClients":    len(clients),
+		"affectedClients": affectedClients,
+	})
+}
+
+// BroadcastCodeExpiredGracePeriod notifies clients that their code has expired and they're in grace period
+func (m *SSEManager) BroadcastCodeExpiredGracePeriod(roomID int, gracePeriodMinutes int) {
+	m.mu.RLock()
+	clients := m.clients[roomID]
+	m.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return // No one watching
+	}
+
+	event := map[string]interface{}{
+		"message":            fmt.Sprintf("Access code expired. Grace period: %d minutes remaining", gracePeriodMinutes),
+		"gracePeriodMinutes": gracePeriodMinutes,
+		"timestamp":          time.Now().Unix(),
+	}
+
+	data, _ := json.Marshal(event)
+	message := fmt.Sprintf("event: code_expired_grace\ndata: %s\n\n", data)
+
+	LogInfo(LogCategorySystem, "Broadcasting CODE_EXPIRED_GRACE_PERIOD event", map[string]interface{}{
+		"roomId":             roomID,
+		"gracePeriodMinutes": gracePeriodMinutes,
+		"clients":            len(clients),
+	})
+
+	// Send to all connected clients
+	for _, client := range clients {
+		select {
+		case <-client.Done:
+			// Client already disconnected
+			continue
+		default:
+			if _, err := fmt.Fprint(client.Writer, message); err == nil {
+				flushSSE(client.Writer)
+			}
+		}
+	}
+}
+
 // MakeStreamRoomEventsHandler creates an HTTP handler for SSE connections
 // Note: This is a special handler that doesn't follow the normal vbeam RPC pattern
 // because SSE requires keeping the connection open

@@ -79,11 +79,16 @@ type StreamState = {
   roomId: number;
   eventSource: EventSource | null;
   retryCount: number;
+  showRevokedModal: boolean;
+  inGracePeriod: boolean;
+  gracePeriodUntil: string | null;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
   connectSSE: () => void;
   disconnectSSE: () => void;
+  handleCodeRevoked: () => void;
+  handleCodeExpiredGrace: () => void;
 };
 
 const useStreamPlayer = vlens.declareHook((): StreamState => {
@@ -95,6 +100,9 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     roomId: 0,
     eventSource: null,
     retryCount: 0,
+    showRevokedModal: false,
+    inGracePeriod: false,
+    gracePeriodUntil: null,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
     },
@@ -124,6 +132,19 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
       vlens.scheduleRedraw();
     },
+    handleCodeRevoked: () => {
+      state.showRevokedModal = true;
+      cleanupPlayer(state);
+      state.disconnectSSE();
+      vlens.scheduleRedraw();
+    },
+    handleCodeExpiredGrace: () => {
+      // Set grace period to 15 minutes from now
+      const gracePeriodEnd = new Date(Date.now() + 15 * 60 * 1000);
+      state.inGracePeriod = true;
+      state.gracePeriodUntil = gracePeriodEnd.toISOString();
+      vlens.scheduleRedraw();
+    },
     connectSSE: () => {
       if (state.roomId === 0) return;
       if (state.eventSource) return; // Already connected
@@ -134,6 +155,14 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       state.eventSource.addEventListener("status", (e) => {
         const data = JSON.parse(e.data);
         state.setStreamLive(data.isActive);
+      });
+
+      state.eventSource.addEventListener("code_revoked", (e) => {
+        state.handleCodeRevoked();
+      });
+
+      state.eventSource.addEventListener("code_expired_grace", (e) => {
+        state.handleCodeExpiredGrace();
       });
 
       state.eventSource.onerror = (err) => {
@@ -377,20 +406,65 @@ export function view(
         </div>
 
         {data.isCodeAuth && (
-          <div className="code-session-banner">
-            <span className="banner-icon">🔑</span>
-            <span className="banner-text">Watching via access code</span>
-            {data.codeExpiresAt &&
-              (() => {
-                const countdown = useCountdown(data.codeExpiresAt);
-                return (
-                  <span className="banner-countdown">
-                    {countdown.timeRemaining > 0
-                      ? `Expires in ${countdown.formattedTime}`
-                      : "Code expired"}
-                  </span>
-                );
-              })()}
+          <div
+            className={`code-session-banner ${state.inGracePeriod || (data.codeExpiresAt && new Date(data.codeExpiresAt) < new Date()) ? "grace-period" : ""}`}
+          >
+            <span className="banner-icon">
+              {state.inGracePeriod ||
+              (data.codeExpiresAt && new Date(data.codeExpiresAt) < new Date())
+                ? "⚠️"
+                : "🔑"}
+            </span>
+            {state.inGracePeriod ||
+            (data.codeExpiresAt &&
+              new Date(data.codeExpiresAt) < new Date()) ? (
+              <>
+                <span className="banner-text">
+                  Code expired • Grace period:
+                </span>
+                {state.gracePeriodUntil &&
+                  (() => {
+                    const countdown = useCountdown(state.gracePeriodUntil);
+                    return (
+                      <span className="banner-countdown">
+                        {countdown.timeRemaining > 0
+                          ? countdown.formattedTime
+                          : "Grace period ended"}
+                      </span>
+                    );
+                  })()}
+              </>
+            ) : (
+              <>
+                <span className="banner-text">Watching via access code</span>
+                {data.codeExpiresAt &&
+                  (() => {
+                    const countdown = useCountdown(data.codeExpiresAt);
+                    return (
+                      <span className="banner-countdown">
+                        {countdown.timeRemaining > 0
+                          ? `Expires in ${countdown.formattedTime}`
+                          : "Code expired"}
+                      </span>
+                    );
+                  })()}
+              </>
+            )}
+          </div>
+        )}
+
+        {state.showRevokedModal && (
+          <div className="revoked-modal-overlay">
+            <div className="revoked-modal">
+              <h2>Access Revoked</h2>
+              <p>
+                The access code for this stream has been revoked by the stream
+                owner.
+              </p>
+              <a href="/watch" className="btn btn-primary">
+                Enter New Code
+              </a>
+            </div>
           </div>
         )}
 
