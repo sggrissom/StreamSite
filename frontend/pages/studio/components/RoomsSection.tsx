@@ -25,67 +25,6 @@ type RoomsSectionProps = {
   canManageRooms: boolean;
 };
 
-// ===== Create Room Modal =====
-type CreateRoomModal = {
-  isOpen: boolean;
-  isSubmitting: boolean;
-  error: string;
-  name: string;
-  studioId: number;
-};
-
-const useCreateRoomModal = vlens.declareHook(
-  (): CreateRoomModal => ({
-    isOpen: false,
-    isSubmitting: false,
-    error: "",
-    name: "",
-    studioId: 0,
-  }),
-);
-
-function openRoomModal(modal: CreateRoomModal, studioId: number) {
-  modal.isOpen = true;
-  modal.error = "";
-  modal.name = "";
-  modal.studioId = studioId;
-  vlens.scheduleRedraw();
-}
-
-function closeRoomModal(modal: CreateRoomModal) {
-  modal.isOpen = false;
-  modal.error = "";
-  vlens.scheduleRedraw();
-}
-
-async function submitCreateRoom(modal: CreateRoomModal) {
-  if (!modal.name.trim()) {
-    modal.error = "Room name is required";
-    vlens.scheduleRedraw();
-    return;
-  }
-
-  modal.isSubmitting = true;
-  modal.error = "";
-  vlens.scheduleRedraw();
-
-  const [resp, err] = await server.CreateRoom({
-    studioId: modal.studioId,
-    name: modal.name.trim(),
-  });
-
-  modal.isSubmitting = false;
-
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to create room";
-    vlens.scheduleRedraw();
-    return;
-  }
-
-  closeRoomModal(modal);
-  window.location.reload();
-}
-
 // ===== Stream Key Modal =====
 type StreamKeyModal = {
   isOpen: boolean;
@@ -363,7 +302,6 @@ function closeGenerateCodeModal(modal: GenerateCodeModalState) {
 // ===== Component =====
 export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const { studio, rooms, canManageRooms } = props;
-  const roomModal = useCreateRoomModal();
   const streamKeyModal = useStreamKeyModal();
   const editRoomModal = useEditRoomModal();
   const deleteRoomModal = useDeleteRoomModal();
@@ -374,14 +312,6 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
       <div className="rooms-section">
         <div className="rooms-header">
           <h2 className="section-title">Rooms</h2>
-          {canManageRooms && rooms.length < studio.maxRooms && (
-            <button
-              className="btn btn-primary btn-sm"
-              onClick={() => openRoomModal(roomModal, studio.id)}
-            >
-              Create Room
-            </button>
-          )}
         </div>
 
         {rooms.length === 0 ? (
@@ -390,17 +320,9 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
             <h3>No Rooms Yet</h3>
             <p>
               {canManageRooms
-                ? "Create your first room to start streaming."
+                ? "Create your first room using the Actions dropdown above."
                 : "This studio doesn't have any rooms yet."}
             </p>
-            {canManageRooms && (
-              <button
-                className="btn btn-primary"
-                onClick={() => openRoomModal(roomModal, studio.id)}
-              >
-                Create First Room
-              </button>
-            )}
           </div>
         ) : (
           <div className="rooms-grid">
@@ -498,46 +420,6 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
       </div>
 
       {/* Modals */}
-      <Modal
-        isOpen={roomModal.isOpen}
-        title="Create New Room"
-        onClose={() => closeRoomModal(roomModal)}
-        error={roomModal.error}
-        footer={
-          <>
-            <button
-              className="btn btn-secondary"
-              onClick={() => closeRoomModal(roomModal)}
-              disabled={roomModal.isSubmitting}
-            >
-              Cancel
-            </button>
-            <button
-              className="btn btn-primary"
-              onClick={() => submitCreateRoom(roomModal)}
-              disabled={roomModal.isSubmitting}
-            >
-              {roomModal.isSubmitting ? "Creating..." : "Create Room"}
-            </button>
-          </>
-        }
-      >
-        <div className="form-group">
-          <label htmlFor="room-name">Room Name *</label>
-          <input
-            id="room-name"
-            type="text"
-            className="form-input"
-            placeholder="e.g., Main Stage, Studio A"
-            {...vlens.attrsBindInput(vlens.ref(roomModal, "name"))}
-            disabled={roomModal.isSubmitting}
-          />
-          <small className="form-help">
-            Choose a descriptive name for this streaming room
-          </small>
-        </div>
-      </Modal>
-
       <Modal
         isOpen={streamKeyModal.isOpen}
         title="Stream Key"

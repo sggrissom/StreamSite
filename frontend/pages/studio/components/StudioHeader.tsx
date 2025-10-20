@@ -187,11 +187,73 @@ function closeGenerateCodeModal(modal: GenerateCodeModalState) {
   vlens.scheduleRedraw();
 }
 
+// ===== Create Room Modal =====
+type CreateRoomModal = {
+  isOpen: boolean;
+  isSubmitting: boolean;
+  error: string;
+  name: string;
+  studioId: number;
+};
+
+const useCreateRoomModal = vlens.declareHook(
+  (): CreateRoomModal => ({
+    isOpen: false,
+    isSubmitting: false,
+    error: "",
+    name: "",
+    studioId: 0,
+  }),
+);
+
+function openRoomModal(modal: CreateRoomModal, studioId: number) {
+  modal.isOpen = true;
+  modal.error = "";
+  modal.name = "";
+  modal.studioId = studioId;
+  vlens.scheduleRedraw();
+}
+
+function closeRoomModal(modal: CreateRoomModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  vlens.scheduleRedraw();
+}
+
+async function submitCreateRoom(modal: CreateRoomModal) {
+  if (!modal.name.trim()) {
+    modal.error = "Room name is required";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.isSubmitting = true;
+  modal.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.CreateRoom({
+    studioId: modal.studioId,
+    name: modal.name.trim(),
+  });
+
+  modal.isSubmitting = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to create room";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  closeRoomModal(modal);
+  window.location.reload();
+}
+
 export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
   const { studio, myRole, myRoleName, rooms, members, canManageRooms } = props;
   const editStudioModal = useEditStudioModal();
   const deleteStudioModal = useDeleteStudioModal();
   const generateCodeModal = useGenerateCodeModalState();
+  const createRoomModal = useCreateRoomModal();
 
   const activeRooms = rooms.filter((r) => r.isActive).length;
 
@@ -242,6 +304,13 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
               >
                 Edit Studio
               </DropdownItem>
+              {rooms.length < studio.maxRooms && (
+                <DropdownItem
+                  onClick={() => openRoomModal(createRoomModal, studio.id)}
+                >
+                  Create Room
+                </DropdownItem>
+              )}
               <DropdownItem
                 onClick={() => openGenerateCodeModal(generateCodeModal)}
               >
@@ -399,6 +468,47 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
         targetName={studio.name}
         targetLabel="Studio"
       />
+
+      {/* Create Room Modal */}
+      <Modal
+        isOpen={createRoomModal.isOpen}
+        title="Create New Room"
+        onClose={() => closeRoomModal(createRoomModal)}
+        error={createRoomModal.error}
+        footer={
+          <>
+            <button
+              className="btn btn-secondary"
+              onClick={() => closeRoomModal(createRoomModal)}
+              disabled={createRoomModal.isSubmitting}
+            >
+              Cancel
+            </button>
+            <button
+              className="btn btn-primary"
+              onClick={() => submitCreateRoom(createRoomModal)}
+              disabled={createRoomModal.isSubmitting}
+            >
+              {createRoomModal.isSubmitting ? "Creating..." : "Create Room"}
+            </button>
+          </>
+        }
+      >
+        <div className="form-group">
+          <label htmlFor="room-name">Room Name *</label>
+          <input
+            id="room-name"
+            type="text"
+            className="form-input"
+            placeholder="e.g., Main Stage, Studio A"
+            {...vlens.attrsBindInput(vlens.ref(createRoomModal, "name"))}
+            disabled={createRoomModal.isSubmitting}
+          />
+          <small className="form-help">
+            Choose a descriptive name for this streaming room
+          </small>
+        </div>
+      </Modal>
     </>
   );
 }
