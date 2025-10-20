@@ -447,18 +447,10 @@ func CleanupInactiveSessions(db *vbolt.DB) int {
 		codesWithSessions := make(map[string]bool)
 
 		// Iterate through all access codes and check their sessions
-		// Note: This approach reads from AccessCodesBkt directly
-		// For each access code, check if it has sessions
-		err := tx.Bucket([]byte("access_codes")).ForEach(func(k, v []byte) error {
-			code := string(k)
+		vbolt.IterateAll(tx, AccessCodesBkt, func(code string, accessCode AccessCode) bool {
 			codesWithSessions[code] = true
-			return nil
+			return true
 		})
-
-		if err != nil {
-			LogWarn(LogCategorySystem, "Error iterating access codes for cleanup", "error", err.Error())
-			return
-		}
 
 		// For each code that has sessions, check for inactive ones
 		for code := range codesWithSessions {
@@ -551,22 +543,13 @@ func CleanupOldAccessCodes(db *vbolt.DB, retentionDays int) int {
 		// Iterate through all codes to find ones to delete
 		var codesToDelete []string
 
-		err := tx.Bucket([]byte("access_codes")).ForEach(func(k, v []byte) error {
-			codeStr := string(k)
-			var code AccessCode
-			vbolt.Read(tx, AccessCodesBkt, codeStr, &code)
-
+		vbolt.IterateAll(tx, AccessCodesBkt, func(codeStr string, code AccessCode) bool {
 			// Check if code is expired and beyond retention period
 			if code.ExpiresAt.Before(cutoffTime) {
 				codesToDelete = append(codesToDelete, codeStr)
 			}
-			return nil
+			return true
 		})
-
-		if err != nil {
-			LogWarn(LogCategorySystem, "Error iterating access codes for cleanup", "error", err.Error())
-			return
-		}
 
 		// Delete each old code and its associated data
 		for _, codeStr := range codesToDelete {
@@ -635,6 +618,140 @@ func StartOldCodeCleanup(db *vbolt.DB) {
 
 		for range ticker.C {
 			CleanupOldAccessCodes(db, retentionDays)
+		}
+	}()
+}
+
+// HandleExpiredCodes handles access codes that have expired, setting grace periods
+// for active sessions and disconnecting sessions whose grace period has ended.
+// Returns the number of sessions affected (grace period set + disconnected).
+//
+// This function:
+//  1. Finds codes where ExpiresAt <= now
+//  2. For active sessions without grace period: sets GracePeriodUntil = now + 15min
+//  3. Broadcasts CODE_EXPIRED_GRACE_PERIOD event to affected rooms
+//  4. Finds sessions where GracePeriodUntil <= now (grace period ended)
+//  5. Disconnects those sessions (deletes from DB, decrements viewer count)
+//
+// Note: Grace period is per-session, not per-code, to handle cases where
+// a code expires while multiple people are watching.
+func HandleExpiredCodes(db *vbolt.DB) int {
+	affectedSessions := 0
+	now := time.Now()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Track codes that need SSE broadcasts (map: code -> roomIds)
+		codesToBroadcast := make(map[string][]int)
+
+		// Iterate through all access codes to find expired ones
+		vbolt.IterateAll(tx, AccessCodesBkt, func(codeStr string, code AccessCode) bool {
+			// Skip if code is non-expired or revoked
+			if code.ExpiresAt.After(now) || code.IsRevoked {
+				return true
+			}
+
+			// Find all sessions for this expired code
+			var sessionTokens []string
+			vbolt.ReadTermTargets(tx, SessionsByCodeIdx, code.Code, &sessionTokens, vbolt.Window{})
+
+			for _, token := range sessionTokens {
+				var session CodeSession
+				vbolt.Read(tx, CodeSessionsBkt, token, &session)
+
+				if session.Token == "" {
+					continue
+				}
+
+				// Case 1: Session doesn't have grace period yet - set it now
+				if session.GracePeriodUntil.IsZero() {
+					session.GracePeriodUntil = now.Add(15 * time.Minute)
+					vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+					affectedSessions++
+
+					// Track this code for SSE broadcast
+					if code.Type == CodeTypeRoom {
+						codesToBroadcast[code.Code] = []int{code.TargetId}
+					} else {
+						// Studio code - need to get all rooms
+						var roomIds []int
+						vbolt.ReadTermTargets(tx, RoomsByStudioIdx, code.TargetId, &roomIds, vbolt.Window{})
+						codesToBroadcast[code.Code] = roomIds
+					}
+
+					LogDebug(LogCategorySystem, "Set grace period for expired code session", map[string]interface{}{
+						"sessionToken":       token,
+						"code":               code.Code,
+						"gracePeriodUntil":   session.GracePeriodUntil,
+						"gracePeriodMinutes": 15,
+					})
+				}
+
+				// Case 2: Grace period has ended - disconnect session
+				if !session.GracePeriodUntil.IsZero() && session.GracePeriodUntil.Before(now) {
+					// Decrement viewer count
+					var analytics CodeAnalytics
+					vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &analytics)
+					if analytics.CurrentViewers > 0 {
+						analytics.CurrentViewers--
+						vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &analytics)
+					}
+
+					// Remove session from index
+					vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, "")
+
+					// Delete the session
+					vbolt.Delete(tx, CodeSessionsBkt, session.Token)
+
+					affectedSessions++
+
+					LogDebug(LogCategorySystem, "Disconnected session after grace period ended", map[string]interface{}{
+						"sessionToken":     token,
+						"code":             code.Code,
+						"gracePeriodEnded": session.GracePeriodUntil,
+					})
+				}
+			}
+
+			return true
+		})
+
+		vbolt.TxCommit(tx)
+
+		// Broadcast SSE events after committing transaction
+		for code, roomIds := range codesToBroadcast {
+			for _, roomId := range roomIds {
+				sseManager.BroadcastCodeExpiredGracePeriod(roomId, 15)
+				LogDebug(LogCategorySystem, "Broadcasted grace period event", map[string]interface{}{
+					"code":   code,
+					"roomId": roomId,
+				})
+			}
+		}
+	})
+
+	if affectedSessions > 0 {
+		LogInfo(LogCategorySystem, "Expired code handling completed", map[string]interface{}{
+			"affectedSessions": affectedSessions,
+		})
+	}
+
+	return affectedSessions
+}
+
+// StartExpiredCodeHandler starts a background goroutine that periodically
+// handles expired access codes and grace periods every 1 minute
+func StartExpiredCodeHandler(db *vbolt.DB) {
+	LogInfo(LogCategorySystem, "Starting expired code handler job", map[string]interface{}{
+		"frequency":   "1 minute",
+		"gracePeriod": "15 minutes",
+	})
+
+	go func() {
+		ticker := time.NewTicker(1 * time.Minute)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			HandleExpiredCodes(db)
 		}
 	}()
 }

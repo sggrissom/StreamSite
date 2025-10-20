@@ -4498,3 +4498,504 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		})
 	})
 }
+
+func TestHandleExpiredCodes(t *testing.T) {
+	t.Run("SetsGracePeriodForExpiredCodeSessions", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio and room
+			studio := Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "Test Studio",
+				Description: "Test",
+				MaxRooms:    5,
+				OwnerId:     1,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create an access code that expired 5 minutes ago
+			code := AccessCode{
+				Code:       "12345",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now().Add(-2 * time.Hour),
+				ExpiresAt:  time.Now().Add(-5 * time.Minute), // Expired 5 minutes ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, room.Id)
+
+			// Create an active session for this code (no grace period set)
+			session := CodeSession{
+				Token:            "session-token-1",
+				Code:             code.Code,
+				ConnectedAt:      time.Now().Add(-30 * time.Minute),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Time{}, // No grace period yet
+				ClientIP:         "192.168.1.1",
+				UserAgent:        "Test Browser",
+			}
+			vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, code.Code)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 1,
+				CurrentViewers:   1,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Verify code was actually written
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var testCode AccessCode
+			vbolt.Read(tx, AccessCodesBkt, "12345", &testCode)
+			if testCode.Code == "" {
+				t.Fatal("Code '12345' was not found in database before HandleExpiredCodes")
+			}
+			t.Logf("Found code in DB: %s, Expired: %v", testCode.Code, testCode.ExpiresAt.Before(time.Now()))
+		})
+
+		// Run the expiration handler
+		affectedCount := HandleExpiredCodes(db)
+
+		if affectedCount != 1 {
+			t.Errorf("Expected 1 affected session, got %d", affectedCount)
+		}
+
+		// Verify grace period was set
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, "session-token-1", &session)
+
+			if session.GracePeriodUntil.IsZero() {
+				t.Error("Expected GracePeriodUntil to be set, but it was zero")
+			}
+
+			graceDuration := time.Until(session.GracePeriodUntil)
+			if graceDuration < 14*time.Minute || graceDuration > 16*time.Minute {
+				t.Errorf("Expected grace period ~15 minutes, got %v", graceDuration)
+			}
+		})
+	})
+
+	t.Run("DisconnectsSessionsAfterGracePeriodEnds", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio and room
+			studio := Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "Test Studio",
+				Description: "Test",
+				MaxRooms:    5,
+				OwnerId:     1,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create an expired code
+			code := AccessCode{
+				Code:       "54321",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now().Add(-2 * time.Hour),
+				ExpiresAt:  time.Now().Add(-20 * time.Minute), // Expired 20 minutes ago
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, room.Id)
+
+			// Create a session with expired grace period
+			session := CodeSession{
+				Token:            "session-token-1",
+				Code:             code.Code,
+				ConnectedAt:      time.Now().Add(-30 * time.Minute),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Now().Add(-5 * time.Minute), // Grace period ended 5 min ago
+				ClientIP:         "192.168.1.1",
+				UserAgent:        "Test Browser",
+			}
+			vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, code.Code)
+
+			// Initialize analytics
+			analytics := CodeAnalytics{
+				Code:             code.Code,
+				TotalConnections: 1,
+				CurrentViewers:   1,
+			}
+			vbolt.Write(tx, CodeAnalyticsBkt, code.Code, &analytics)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run the expiration handler
+		affectedCount := HandleExpiredCodes(db)
+
+		if affectedCount != 1 {
+			t.Errorf("Expected 1 affected session, got %d", affectedCount)
+		}
+
+		// Verify session was deleted
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, "session-token-1", &session)
+
+			if session.Token != "" {
+				t.Error("Expected session to be deleted, but it still exists")
+			}
+
+			// Verify viewer count decremented
+			var analytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, "54321", &analytics)
+
+			if analytics.CurrentViewers != 0 {
+				t.Errorf("Expected CurrentViewers=0, got %d", analytics.CurrentViewers)
+			}
+		})
+	})
+
+	t.Run("HandlesCodesWithNoActiveSessions", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio and room
+			studio := Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "Test Studio",
+				Description: "Test",
+				MaxRooms:    5,
+				OwnerId:     1,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create an expired code with no sessions
+			code := AccessCode{
+				Code:       "99999",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now().Add(-2 * time.Hour),
+				ExpiresAt:  time.Now().Add(-10 * time.Minute),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Expired Code No Sessions",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, room.Id)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run the expiration handler - should not crash
+		affectedCount := HandleExpiredCodes(db)
+
+		if affectedCount != 0 {
+			t.Errorf("Expected 0 affected sessions, got %d", affectedCount)
+		}
+	})
+
+	t.Run("DoesNotAffectNonExpiredCodes", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio and room
+			studio := Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "Test Studio",
+				Description: "Test",
+				MaxRooms:    5,
+				OwnerId:     1,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create a valid, non-expired code
+			code := AccessCode{
+				Code:       "11111",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now(),
+				ExpiresAt:  time.Now().Add(1 * time.Hour), // Expires in 1 hour
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Valid Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, room.Id)
+
+			// Create an active session
+			session := CodeSession{
+				Token:            "session-token-valid",
+				Code:             code.Code,
+				ConnectedAt:      time.Now(),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Time{},
+				ClientIP:         "192.168.1.1",
+				UserAgent:        "Test Browser",
+			}
+			vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, code.Code)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run the expiration handler
+		affectedCount := HandleExpiredCodes(db)
+
+		if affectedCount != 0 {
+			t.Errorf("Expected 0 affected sessions for valid code, got %d", affectedCount)
+		}
+
+		// Verify session remains unchanged
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, "session-token-valid", &session)
+
+			if session.Token == "" {
+				t.Error("Expected session to still exist")
+			}
+
+			if !session.GracePeriodUntil.IsZero() {
+				t.Error("Expected GracePeriodUntil to remain zero for non-expired code")
+			}
+		})
+	})
+
+	t.Run("HandlesStudioCodeWithMultipleRooms", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio with multiple rooms
+			studio := Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "Test Studio",
+				Description: "Test",
+				MaxRooms:    5,
+				OwnerId:     1,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room1 := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Room 1",
+				StreamKey:  "test-key-1",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room1.Id, &room1)
+			vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room1.Id, studio.Id)
+
+			room2 := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 2,
+				Name:       "Room 2",
+				StreamKey:  "test-key-2",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room2.Id, &room2)
+			vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room2.Id, studio.Id)
+
+			// Create an expired studio-wide code
+			code := AccessCode{
+				Code:       "88888",
+				Type:       CodeTypeStudio,
+				TargetId:   studio.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now().Add(-2 * time.Hour),
+				ExpiresAt:  time.Now().Add(-5 * time.Minute),
+				MaxViewers: 0,
+				IsRevoked:  false,
+				Label:      "Studio Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByStudioIdx, code.Code, studio.Id)
+
+			// Create sessions in different rooms
+			session1 := CodeSession{
+				Token:            "session-room1",
+				Code:             code.Code,
+				ConnectedAt:      time.Now().Add(-30 * time.Minute),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Time{},
+				ClientIP:         "192.168.1.1",
+				UserAgent:        "Test Browser",
+			}
+			vbolt.Write(tx, CodeSessionsBkt, session1.Token, &session1)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session1.Token, code.Code)
+
+			session2 := CodeSession{
+				Token:            "session-room2",
+				Code:             code.Code,
+				ConnectedAt:      time.Now().Add(-20 * time.Minute),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Time{},
+				ClientIP:         "192.168.1.2",
+				UserAgent:        "Test Browser",
+			}
+			vbolt.Write(tx, CodeSessionsBkt, session2.Token, &session2)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session2.Token, code.Code)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run the expiration handler
+		affectedCount := HandleExpiredCodes(db)
+
+		if affectedCount != 2 {
+			t.Errorf("Expected 2 affected sessions, got %d", affectedCount)
+		}
+
+		// Verify both sessions got grace period
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var session1 CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, "session-room1", &session1)
+
+			if session1.GracePeriodUntil.IsZero() {
+				t.Error("Expected GracePeriodUntil to be set for session1")
+			}
+
+			var session2 CodeSession
+			vbolt.Read(tx, CodeSessionsBkt, "session-room2", &session2)
+
+			if session2.GracePeriodUntil.IsZero() {
+				t.Error("Expected GracePeriodUntil to be set for session2")
+			}
+		})
+	})
+
+	t.Run("SkipsRevokedCodes", func(t *testing.T) {
+		db := setupTestCodeDB(t)
+		defer db.Close()
+
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			// Create studio and room
+			studio := Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "Test Studio",
+				Description: "Test",
+				MaxRooms:    5,
+				OwnerId:     1,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 1,
+				Name:       "Test Room",
+				StreamKey:  "test-key",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+			// Create an expired AND revoked code
+			code := AccessCode{
+				Code:       "77777",
+				Type:       CodeTypeRoom,
+				TargetId:   room.Id,
+				CreatedBy:  1,
+				CreatedAt:  time.Now().Add(-2 * time.Hour),
+				ExpiresAt:  time.Now().Add(-10 * time.Minute),
+				MaxViewers: 0,
+				IsRevoked:  true, // Already revoked
+				Label:      "Revoked Code",
+			}
+			vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+			vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code.Code, room.Id)
+
+			// Create a session (shouldn't exist in practice, but testing edge case)
+			session := CodeSession{
+				Token:            "session-revoked",
+				Code:             code.Code,
+				ConnectedAt:      time.Now().Add(-30 * time.Minute),
+				LastSeen:         time.Now(),
+				GracePeriodUntil: time.Time{},
+				ClientIP:         "192.168.1.1",
+				UserAgent:        "Test Browser",
+			}
+			vbolt.Write(tx, CodeSessionsBkt, session.Token, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, code.Code)
+
+			vbolt.TxCommit(tx)
+		})
+
+		// Run the expiration handler
+		affectedCount := HandleExpiredCodes(db)
+
+		// Should not affect revoked codes
+		if affectedCount != 0 {
+			t.Errorf("Expected 0 affected sessions for revoked code, got %d", affectedCount)
+		}
+	})
+}
