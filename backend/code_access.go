@@ -774,6 +774,31 @@ func validateAccessCodeHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 
+	// Check rate limit (5 attempts per IP per minute with exponential backoff)
+	clientIP := getClientIP(r)
+	rateLimitInfo := globalRateLimiter.CheckCodeValidationWithInfo(clientIP)
+	if rateLimitInfo.Limited {
+		LogWarnWithRequest(r, LogCategorySystem, "Rate limit exceeded for code validation", map[string]interface{}{
+			"clientIP":          clientIP,
+			"violationCount":    rateLimitInfo.ViolationCount,
+			"retryAfterSeconds": rateLimitInfo.RetryAfterSeconds,
+		})
+
+		// Return 429 status code with structured response
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Header().Set("Retry-After", fmt.Sprintf("%d", rateLimitInfo.RetryAfterSeconds))
+
+		// Return JSON response with rate limit information
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success":           false,
+			"error":             rateLimitInfo.Message,
+			"rateLimited":       true,
+			"retryAfterSeconds": rateLimitInfo.RetryAfterSeconds,
+			"violationCount":    rateLimitInfo.ViolationCount,
+		})
+		return
+	}
+
 	// Call validation logic
 	resp, err := validateAccessCodeLogic(appDb, req.Code)
 	if err != nil {
@@ -781,8 +806,10 @@ func validateAccessCodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If validation succeeded, generate JWT and set authToken cookie
+	// If validation succeeded, reset violation count and generate JWT
 	if resp.Success {
+		// Reset violation tracking on successful validation
+		globalRateLimiter.ResetViolations("code_validation", clientIP)
 		// Generate JWT with code session claims
 		expirationTime := resp.ExpiresAt
 		claims := &Claims{
@@ -839,6 +866,17 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 	if authErr != nil {
 		resp.Success = false
 		resp.Error = "Authentication required"
+		return
+	}
+
+	// Check rate limit (10 generations per user per hour)
+	if rateLimitErr := globalRateLimiter.CheckCodeGeneration(caller.Id); rateLimitErr != nil {
+		LogWarn(LogCategorySystem, "Rate limit exceeded for code generation", map[string]interface{}{
+			"userId": caller.Id,
+			"error":  rateLimitErr.Error(),
+		})
+		resp.Success = false
+		resp.Error = rateLimitErr.Error()
 		return
 	}
 

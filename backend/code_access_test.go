@@ -3698,6 +3698,9 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
 
+		// Reset rate limiter to avoid cross-test pollution
+		globalRateLimiter.Reset()
+
 		// Step 1: Set up test data - create user, studio, and room
 		var userId, studioId, roomId int
 		var userEmail string
@@ -3874,6 +3877,9 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
 
+		// Reset rate limiter to avoid cross-test pollution
+		globalRateLimiter.Reset()
+
 		// Set up test data
 		var userId, studioId, room1Id, room2Id int
 		var userEmail string
@@ -3999,6 +4005,9 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 	t.Run("HTTPHandlerWithCookie", func(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
+
+		// Reset rate limiter to avoid cross-test pollution
+		globalRateLimiter.Reset()
 
 		// Save original jwtKey
 		originalKey := jwtKey
@@ -4156,6 +4165,9 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
 
+		// Reset rate limiter to avoid cross-test pollution
+		globalRateLimiter.Reset()
+
 		// Create code that expires immediately
 		var userId, studioId, roomId int
 		var code string
@@ -4240,6 +4252,9 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 	t.Run("RevokedCodeFlow", func(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
+
+		// Reset rate limiter to avoid cross-test pollution
+		globalRateLimiter.Reset()
 
 		var userId, studioId, roomId int
 		var code, sessionToken string
@@ -4358,6 +4373,9 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 	t.Run("ViewerLimitEnforcementEndToEnd", func(t *testing.T) {
 		db := setupTestCodeDB(t)
 		defer db.Close()
+
+		// Reset rate limiter to avoid cross-test pollution
+		globalRateLimiter.Reset()
 
 		var userId, studioId, roomId int
 		var code string

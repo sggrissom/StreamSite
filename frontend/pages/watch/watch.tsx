@@ -13,6 +13,8 @@ type CodeEntryForm = {
   error: string;
   loading: boolean;
   autoValidated: boolean; // Track if we've already auto-validated
+  rateLimitedUntil: Date | null; // When rate limit expires
+  retryCountdown: number; // Seconds until can retry
 };
 
 const useCodeForm = vlens.declareHook(
@@ -21,6 +23,8 @@ const useCodeForm = vlens.declareHook(
     error: "",
     loading: false,
     autoValidated: false,
+    rateLimitedUntil: null,
+    retryCountdown: 0,
   }),
 );
 
@@ -47,6 +51,27 @@ export function view(
     setTimeout(() => autoValidateCode(form, urlCode), 0);
   }
 
+  // Update countdown every second if rate limited
+  if (form.rateLimitedUntil) {
+    const now = Date.now();
+    const targetTime = form.rateLimitedUntil.getTime();
+    const remainingSeconds = Math.ceil((targetTime - now) / 1000);
+
+    if (remainingSeconds > 0) {
+      form.retryCountdown = remainingSeconds;
+      // Schedule next update in 1 second
+      setTimeout(() => vlens.scheduleRedraw(), 1000);
+    } else {
+      // Rate limit expired
+      form.rateLimitedUntil = null;
+      form.retryCountdown = 0;
+      vlens.scheduleRedraw();
+    }
+  }
+
+  const isRateLimited =
+    form.rateLimitedUntil !== null && form.retryCountdown > 0;
+
   return (
     <div>
       <Header />
@@ -67,7 +92,7 @@ export function view(
                 maxLength={5}
                 pattern="[0-9]*"
                 inputMode="numeric"
-                disabled={form.loading}
+                disabled={form.loading || isRateLimited}
                 onInput={(e) => {
                   const target = e.target as HTMLInputElement;
                   // Only allow digits
@@ -81,12 +106,23 @@ export function view(
 
             {form.error && <div className="watch-error">{form.error}</div>}
 
+            {isRateLimited && (
+              <div className="watch-rate-limit">
+                Too many failed attempts. Try again in {form.retryCountdown}{" "}
+                second{form.retryCountdown !== 1 ? "s" : ""}.
+              </div>
+            )}
+
             <button
               type="submit"
               className="watch-submit-btn"
-              disabled={form.loading || form.code.length !== 5}
+              disabled={form.loading || form.code.length !== 5 || isRateLimited}
             >
-              {form.loading ? "Validating..." : "Join Stream"}
+              {form.loading
+                ? "Validating..."
+                : isRateLimited
+                  ? `Locked (${form.retryCountdown}s)`
+                  : "Join Stream"}
             </button>
           </form>
 
@@ -142,9 +178,19 @@ async function validateCode(form: CodeEntryForm, code: string) {
     if (data.success) {
       // Successfully validated - redirect to stream
       core.setRoute(data.redirectTo);
+    } else if (data.rateLimited) {
+      // Rate limited - set lockout timer
+      const retryAfterSeconds = data.retryAfterSeconds || 60;
+      form.rateLimitedUntil = new Date(Date.now() + retryAfterSeconds * 1000);
+      form.retryCountdown = retryAfterSeconds;
+      form.error = ""; // Clear error, show rate limit message instead
+      form.loading = false;
+      vlens.scheduleRedraw();
     } else {
       // Validation failed - show error
       form.error = data.error || "Invalid access code";
+      form.rateLimitedUntil = null;
+      form.retryCountdown = 0;
       form.loading = false;
       vlens.scheduleRedraw();
     }

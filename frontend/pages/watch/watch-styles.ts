@@ -99,6 +99,19 @@ block(`
 `);
 
 block(`
+.watch-rate-limit {
+  padding: 1rem;
+  background: rgba(234, 179, 8, 0.1);
+  border: 1px solid rgba(234, 179, 8, 0.3);
+  border-radius: 8px;
+  color: #ca8a04;
+  text-align: center;
+  font-size: 0.95rem;
+  font-weight: 500;
+}
+`);
+
+block(`
 .watch-submit-btn {
   padding: 1rem 2rem;
   font-size: 1.1rem;
