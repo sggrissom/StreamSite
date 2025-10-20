@@ -448,7 +448,8 @@ func GetAuthFromRequest(r *http.Request, db *vbolt.DB) (authCtx AuthContext, err
 		return authCtx, ErrAuthFailure
 	}
 
-	authCtx.IsCodeAuth = false
+	// Set IsCodeAuth based on whether user has code session access
+	authCtx.IsCodeAuth = (authCtx.UserCodeSession != nil)
 	return authCtx, nil
 }
 

@@ -182,11 +182,12 @@ func CreateAccount(ctx *vbeam.Context, req CreateAccountRequest) (resp CreateAcc
 	// Create user
 	vbeam.UseWriteTx(ctx)
 	user := AddUserTx(ctx.Tx, req, hash)
+
+	resp.Auth = GetAuthResponseFromUser(ctx.Tx, user)
 	vbolt.TxCommit(ctx.Tx)
 
 	// Return success response
 	resp.Success = true
-	resp.Auth = GetAuthResponseFromUser(ctx.Tx, user)
 	return
 }
 

@@ -915,29 +915,9 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 		return
 	}
 
-	// Get room
-	room := GetRoom(ctx.Tx, req.RoomId)
-	if room.Id == 0 {
-		resp.Success = false
-		resp.Error = "Room not found"
-		return
-	}
-
-	// Get studio
-	studio := GetStudioById(ctx.Tx, room.StudioId)
-	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
-	}
-
-	// Check if user has permission to view this studio
-	var role StudioRole
-
-	// Special handling for code session users (Id == -1)
+	// For anonymous users, extract session token from JWT
+	var anonymousSessionToken string
 	if caller.Id == -1 {
-		// This is a code session - validate access via access code
-		// Parse JWT to get session token
 		token, tokenErr := jwt.ParseWithClaims(ctx.Token, &Claims{}, func(token *jwt.Token) (any, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, errors.New("unexpected signing method")
@@ -945,105 +925,34 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 			return jwtKey, nil
 		})
 
-		if tokenErr != nil || !token.Valid {
-			LogErrorSimple(LogCategorySystem, "JWT parsing failed in GetRoomDetails", map[string]interface{}{
-				"error": tokenErr,
-			})
-			resp.Success = false
-			resp.Error = "Invalid session token"
-			return
-		}
-
-		claims, ok := token.Claims.(*Claims)
-		if !ok || claims.UserId != -1 {
-			LogErrorSimple(LogCategorySystem, "Claims validation failed", map[string]interface{}{
-				"claimsOk": ok,
-				"userId":   claims.UserId,
-			})
-			resp.Success = false
-			resp.Error = "Invalid code session"
-			return
-		}
-
-		// Load the code session to check access
-		var session CodeSession
-		vbolt.Read(ctx.Tx, CodeSessionsBkt, claims.SessionToken, &session)
-
-		if session.Token == "" {
-			LogErrorSimple(LogCategorySystem, "Session not found in database", map[string]interface{}{
-				"sessionToken": claims.SessionToken,
-			})
-			resp.Success = false
-			resp.Error = "Session not found"
-			return
-		}
-
-		// Load the access code
-		var accessCode AccessCode
-		vbolt.Read(ctx.Tx, AccessCodesBkt, session.Code, &accessCode)
-
-		if accessCode.Code == "" {
-			LogErrorSimple(LogCategorySystem, "Access code not found", map[string]interface{}{
-				"code": session.Code,
-			})
-			resp.Success = false
-			resp.Error = "Access code not found"
-			return
-		}
-
-		// Check if code grants access to this room
-		if accessCode.Type == CodeTypeRoom {
-			// Room-specific code - must match requested room
-			if accessCode.TargetId != req.RoomId {
-				LogWarn(LogCategorySystem, "Room code does not match requested room", map[string]interface{}{
-					"codeTargetId": accessCode.TargetId,
-					"requestedId":  req.RoomId,
-				})
-				resp.Success = false
-				resp.Error = "You do not have permission to view this room"
-				return
+		if tokenErr == nil && token.Valid {
+			if claims, ok := token.Claims.(*Claims); ok {
+				anonymousSessionToken = claims.SessionToken
 			}
-		} else if accessCode.Type == CodeTypeStudio {
-			// Studio-wide code - must match room's studio
-			if accessCode.TargetId != room.StudioId {
-				LogWarn(LogCategorySystem, "Studio code does not match room's studio", map[string]interface{}{
-					"codeStudioId": accessCode.TargetId,
-					"roomStudioId": room.StudioId,
-				})
-				resp.Success = false
-				resp.Error = "You do not have permission to view this room"
-				return
-			}
-		}
-
-		// Code session has valid access - treat as viewer
-		role = StudioRoleViewer
-
-		// Set code auth fields for frontend
-		resp.IsCodeAuth = true
-		resp.CodeExpiresAt = &accessCode.ExpiresAt
-	} else {
-		// Regular user - check studio membership
-		role = GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
-
-		// Site admins can view all studios/rooms
-		if caller.Role != RoleSiteAdmin && role == -1 {
-			resp.Success = false
-			resp.Error = "You do not have permission to view this room"
-			return
-		}
-
-		// Site admins who aren't members get Owner role for display purposes
-		if caller.Role == RoleSiteAdmin && role == -1 {
-			role = StudioRoleOwner
 		}
 	}
 
+	// Use unified access control to check permissions
+	access := CheckRoomAccess(ctx.Tx, caller, req.RoomId, anonymousSessionToken)
+
+	if !access.Allowed {
+		resp.Success = false
+		resp.Error = access.DenialReason
+		return
+	}
+
+	// Get room and studio for response
+	room := GetRoom(ctx.Tx, req.RoomId)
+	studio := GetStudioById(ctx.Tx, room.StudioId)
+
+	// Return successful response
 	resp.Success = true
 	resp.Room = room
 	resp.StudioName = studio.Name
-	resp.MyRole = role
-	resp.MyRoleName = GetStudioRoleName(role)
+	resp.MyRole = access.Role
+	resp.MyRoleName = GetStudioRoleName(access.Role)
+	resp.IsCodeAuth = access.IsCodeAuth
+	resp.CodeExpiresAt = access.CodeExpiresAt
 	return
 }
 
@@ -1057,10 +966,12 @@ func ListMyAccessibleRooms(ctx *vbeam.Context, req ListMyAccessibleRoomsRequest)
 
 	resp.Rooms = make([]RoomWithStudio, 0)
 
-	// Handle code sessions differently
+	// Get code session if user has one (works for both anonymous and logged-in)
+	var sessionToken string
+	var accessCode AccessCode
+
 	if caller.Id == -1 {
-		// Code session - get rooms based on the access code
-		// Parse JWT to get session token
+		// Anonymous user - extract session token from JWT
 		token, tokenErr := jwt.ParseWithClaims(ctx.Token, &Claims{}, func(token *jwt.Token) (any, error) {
 			if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, errors.New("unexpected signing method")
@@ -1068,79 +979,38 @@ func ListMyAccessibleRooms(ctx *vbeam.Context, req ListMyAccessibleRoomsRequest)
 			return jwtKey, nil
 		})
 
-		if tokenErr != nil || !token.Valid {
-			err = errors.New("invalid session token")
-			return
+		if tokenErr == nil && token.Valid {
+			if claims, ok := token.Claims.(*Claims); ok && claims.UserId == -1 {
+				sessionToken = claims.SessionToken
+			}
 		}
 
-		claims, ok := token.Claims.(*Claims)
-		if !ok || claims.UserId != -1 {
-			err = errors.New("invalid code session")
-			return
+		if sessionToken != "" {
+			_, accessCode = GetCodeSessionFromToken(ctx.Tx, sessionToken)
 		}
+	} else {
+		// Logged-in user - check UserCodeSessionsBkt
+		_, accessCode = GetUserCodeSession(ctx.Tx, caller.Id)
+	}
 
-		// Load the code session
-		var session CodeSession
-		vbolt.Read(ctx.Tx, CodeSessionsBkt, claims.SessionToken, &session)
+	// Add rooms from code access if present
+	if accessCode.Code != "" {
+		codeRooms := GetRoomsAccessibleViaCode(ctx.Tx, accessCode)
+		resp.Rooms = append(resp.Rooms, codeRooms...)
+		resp.CodeExpiresAt = &accessCode.ExpiresAt
+	}
 
-		if session.Token == "" {
-			err = errors.New("session not found")
-			return
-		}
-
-		// Load the access code
-		var accessCode AccessCode
-		vbolt.Read(ctx.Tx, AccessCodesBkt, session.Code, &accessCode)
-
-		if accessCode.Code == "" {
-			err = errors.New("access code not found")
-			return
-		}
-
-		// Get rooms based on code type
-		if accessCode.Type == CodeTypeRoom {
-			// Room-specific code: return just that room
-			room := GetRoom(ctx.Tx, accessCode.TargetId)
-			if room.Id != 0 {
-				studio := GetStudioById(ctx.Tx, room.StudioId)
+	// For logged-in users, also add rooms from studio membership
+	if caller.Id > 0 {
+		studios := ListUserStudios(ctx.Tx, caller.Id)
+		for _, studio := range studios {
+			rooms := ListStudioRooms(ctx.Tx, studio.Id)
+			for _, room := range rooms {
 				resp.Rooms = append(resp.Rooms, RoomWithStudio{
 					Room:       room,
 					StudioName: studio.Name,
 				})
 			}
-		} else {
-			// Studio-wide code: return all rooms in that studio
-			studio := GetStudioById(ctx.Tx, accessCode.TargetId)
-			if studio.Id != 0 {
-				rooms := ListStudioRooms(ctx.Tx, studio.Id)
-				for _, room := range rooms {
-					resp.Rooms = append(resp.Rooms, RoomWithStudio{
-						Room:       room,
-						StudioName: studio.Name,
-					})
-				}
-			}
-		}
-
-		// Set expiration time for code sessions
-		resp.CodeExpiresAt = &accessCode.ExpiresAt
-		return
-	}
-
-	// Regular authenticated user - get all studios user is a member of
-	studios := ListUserStudios(ctx.Tx, caller.Id)
-
-	// Collect all rooms from all studios
-	for _, studio := range studios {
-		// Get all rooms for this studio
-		rooms := ListStudioRooms(ctx.Tx, studio.Id)
-
-		// Add each room with studio information
-		for _, room := range rooms {
-			resp.Rooms = append(resp.Rooms, RoomWithStudio{
-				Room:       room,
-				StudioName: studio.Name,
-			})
 		}
 	}
 

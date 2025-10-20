@@ -234,41 +234,38 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 			return
 		}
 
-		// For code-based auth, verify room access
-		if authCtx.IsCodeAuth {
-			// Verify the code session has access to this specific room
-			var hasAccess bool
-			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-				ctx := &vbeam.Context{Tx: tx}
-				accessResp, _ := GetCodeStreamAccess(ctx, GetCodeStreamAccessRequest{
-					SessionToken: authCtx.CodeSession.Token,
-					RoomId:       roomId,
-				})
-				hasAccess = accessResp.Allowed
-			})
+		// Verify user has access to this room using unified access control
+		var anonymousSessionToken string
+		if authCtx.User.Id == -1 && authCtx.CodeSession != nil {
+			anonymousSessionToken = authCtx.CodeSession.Token
+		}
 
-			if !hasAccess {
-				LogWarnWithRequest(r, LogCategoryAuth, "Code session denied access to room", map[string]interface{}{
-					"roomId":       roomId,
-					"code":         authCtx.AccessCode.Code,
-					"sessionToken": authCtx.CodeSession.Token,
-				})
-				http.Error(w, "Access denied to this room", http.StatusForbidden)
-				return
-			}
+		var hasAccess bool
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			access := CheckRoomAccess(tx, authCtx.User, roomId, anonymousSessionToken)
+			hasAccess = access.Allowed
+		})
 
-			LogInfo(LogCategoryAuth, "Code session accessing stream", map[string]interface{}{
-				"roomId": roomId,
-				"code":   authCtx.AccessCode.Code,
-			})
-		} else {
-			// JWT authentication - user is accessing stream
-			// Additional permission checks could be added here if needed
-			LogInfo(LogCategoryAuth, "User accessing stream", map[string]interface{}{
+		if !hasAccess {
+			LogWarnWithRequest(r, LogCategoryAuth, "Access denied to room", map[string]interface{}{
 				"roomId": roomId,
 				"userId": authCtx.User.Id,
-				"email":  authCtx.User.Email,
 			})
+			http.Error(w, "Access denied to this room", http.StatusForbidden)
+			return
+		}
+
+		// Log successful access
+		logData := map[string]interface{}{
+			"roomId": roomId,
+			"userId": authCtx.User.Id,
+		}
+		if authCtx.IsCodeAuth && authCtx.AccessCode != nil {
+			logData["code"] = authCtx.AccessCode.Code
+			LogInfo(LogCategoryAuth, "Code session accessing stream", logData)
+		} else {
+			logData["email"] = authCtx.User.Email
+			LogInfo(LogCategoryAuth, "User accessing stream", logData)
 		}
 
 		// Authentication successful - proxy the request
