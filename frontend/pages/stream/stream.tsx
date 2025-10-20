@@ -34,6 +34,15 @@ const useCountdown = vlens.declareHook((expiresAt: string): CountdownState => {
     const secondsLeft = Math.max(0, Math.floor((expiryTime - now) / 1000));
     state.timeRemaining = secondsLeft;
 
+    // Check if this is a "never expires" code (>50 years away)
+    const fiftyYearsInSeconds = 50 * 365.25 * 24 * 60 * 60;
+    if (secondsLeft > fiftyYearsInSeconds) {
+      state.formattedTime = "Never expires";
+      state.cleanup(); // No need to keep updating
+      vlens.scheduleRedraw();
+      return;
+    }
+
     // Format based on time remaining
     if (secondsLeft <= 0) {
       state.formattedTime = "Expired";
@@ -440,12 +449,18 @@ export function view(
                 {data.codeExpiresAt &&
                   (() => {
                     const countdown = useCountdown(data.codeExpiresAt);
+
+                    let displayText = "Code expired";
+                    if (countdown.timeRemaining > 0) {
+                      if (countdown.formattedTime === "Never expires") {
+                        displayText = "Never expires";
+                      } else {
+                        displayText = `Expires in ${countdown.formattedTime}`;
+                      }
+                    }
+
                     return (
-                      <span className="banner-countdown">
-                        {countdown.timeRemaining > 0
-                          ? `Expires in ${countdown.formattedTime}`
-                          : "Code expired"}
-                      </span>
+                      <span className="banner-countdown">{displayText}</span>
                     );
                   })()}
               </>

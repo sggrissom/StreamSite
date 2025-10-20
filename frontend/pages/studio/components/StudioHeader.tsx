@@ -3,6 +3,7 @@ import * as vlens from "vlens";
 import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
 import { Dropdown, DropdownItem } from "../../../components/Dropdown";
+import { GenerateAccessCodeModal } from "./GenerateAccessCodeModal";
 
 type Studio = {
   id: number;
@@ -165,10 +166,32 @@ async function confirmDeleteStudio(modal: DeleteStudioModal) {
   window.location.href = "/studios";
 }
 
+// ===== Generate Studio Access Code Modal State =====
+type GenerateCodeModalState = {
+  isOpen: boolean;
+};
+
+const useGenerateCodeModalState = vlens.declareHook(
+  (): GenerateCodeModalState => ({
+    isOpen: false,
+  }),
+);
+
+function openGenerateCodeModal(modal: GenerateCodeModalState) {
+  modal.isOpen = true;
+  vlens.scheduleRedraw();
+}
+
+function closeGenerateCodeModal(modal: GenerateCodeModalState) {
+  modal.isOpen = false;
+  vlens.scheduleRedraw();
+}
+
 export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
   const { studio, myRole, myRoleName, rooms, members, canManageRooms } = props;
   const editStudioModal = useEditStudioModal();
   const deleteStudioModal = useDeleteStudioModal();
+  const generateCodeModal = useGenerateCodeModalState();
 
   const activeRooms = rooms.filter((r) => r.isActive).length;
 
@@ -218,6 +241,11 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
                 }
               >
                 Edit Studio
+              </DropdownItem>
+              <DropdownItem
+                onClick={() => openGenerateCodeModal(generateCodeModal)}
+              >
+                Generate Studio Access Code
               </DropdownItem>
               <DropdownItem
                 onClick={() => {
@@ -361,6 +389,16 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
           </div>
         )}
       </Modal>
+
+      {/* Generate Studio Access Code Modal */}
+      <GenerateAccessCodeModal
+        isOpen={generateCodeModal.isOpen}
+        onClose={() => closeGenerateCodeModal(generateCodeModal)}
+        codeType={1}
+        targetId={studio.id}
+        targetName={studio.name}
+        targetLabel="Studio"
+      />
     </>
   );
 }

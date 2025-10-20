@@ -181,6 +181,10 @@ function formatTimeRemaining(expiresAt: string): string {
 
   if (diff <= 0) return "Expired";
 
+  // Check if expiration is more than 50 years away (never expires)
+  const fiftyYearsInMs = 50 * 365.25 * 24 * 60 * 60 * 1000;
+  if (diff > fiftyYearsInMs) return "Never expires";
+
   const days = Math.floor(diff / (1000 * 60 * 60 * 24));
   const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
   const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));

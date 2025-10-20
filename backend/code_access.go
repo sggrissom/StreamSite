@@ -887,10 +887,10 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 		return
 	}
 
-	// Validate duration
-	if req.DurationMinutes <= 0 {
+	// Validate duration (-1 is special value for "never expires")
+	if req.DurationMinutes <= 0 && req.DurationMinutes != -1 {
 		resp.Success = false
-		resp.Error = "Duration must be greater than 0"
+		resp.Error = "Duration value invalid"
 		return
 	}
 
@@ -957,7 +957,13 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 
 	// Calculate expiration time
 	now := time.Now()
-	expiresAt := now.Add(time.Duration(req.DurationMinutes) * time.Minute)
+	var expiresAt time.Time
+	if req.DurationMinutes == -1 {
+		// "Never expires" - set to 100 years in the future
+		expiresAt = now.AddDate(100, 0, 0)
+	} else {
+		expiresAt = now.Add(time.Duration(req.DurationMinutes) * time.Minute)
+	}
 
 	// Create access code
 	accessCode := AccessCode{
