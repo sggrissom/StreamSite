@@ -554,7 +554,7 @@ func TestGenerateAccessCode(t *testing.T) {
 		if resp.Success {
 			t.Error("Expected failure for invalid duration")
 		}
-		if resp.Error != "Duration must be greater than 0" {
+		if resp.Error != "Duration value invalid" {
 			t.Errorf("Expected duration error, got: %s", resp.Error)
 		}
 	})
