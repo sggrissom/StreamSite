@@ -4,11 +4,14 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"stream/cfg"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
+	"golang.org/x/crypto/bcrypt"
 )
 
 // Test database setup helper
@@ -762,5 +765,334 @@ func TestUnifiedJWT_LogoutClearsCodeSession(t *testing.T) {
 	})
 	if storedAfter != "" {
 		t.Errorf("Expected UserCodeSessionsBkt entry to be cleared after logout, got %s", storedAfter)
+	}
+}
+
+// TestMigrateCodeSession_AnonymousLogin tests that anonymous code session users
+// can login and have their session migrated to their user account
+func TestMigrateCodeSession_AnonymousLogin(t *testing.T) {
+	db := setupTestAuthDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create a test user with password
+	var testUser User
+	testPassword := "password123"
+	var passHash []byte
+	var err error
+	passHash, err = bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("Failed to hash password: %v", err)
+	}
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		testUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Email:    "test@example.com",
+			Name:     "Test User",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
+		vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
+		vbolt.Write(tx, PasswdBkt, testUser.Id, &passHash)
+		vbolt.TxCommit(tx)
+	})
+
+	// Create an access code and code session
+	var code AccessCode
+	var sessionToken string
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		code = AccessCode{
+			Code:       "12345",
+			Type:       CodeTypeRoom,
+			TargetId:   1,
+			CreatedBy:  testUser.Id,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(24 * time.Hour),
+			MaxViewers: 0,
+			IsRevoked:  false,
+		}
+		vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+
+		sessionToken = "test-session-uuid"
+		session := CodeSession{
+			Token:       sessionToken,
+			Code:        code.Code,
+			ConnectedAt: time.Now(),
+			LastSeen:    time.Now(),
+		}
+		vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+		vbolt.TxCommit(tx)
+	})
+
+	// Create anonymous JWT with code session
+	anonClaims := &Claims{
+		UserId:       -1,
+		SessionToken: sessionToken,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		},
+	}
+	anonToken := jwt.NewWithClaims(jwt.SigningMethodHS256, anonClaims)
+	anonTokenString, err := anonToken.SignedString(jwtKey)
+	if err != nil {
+		t.Fatalf("Failed to create anonymous JWT: %v", err)
+	}
+
+	// Create login request with anonymous JWT cookie
+	loginReq := `{"email":"test@example.com","password":"password123"}`
+	req := httptest.NewRequest("POST", "/api/login", strings.NewReader(loginReq))
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{
+		Name:  "authToken",
+		Value: anonTokenString,
+	})
+
+	// Create response recorder
+	w := httptest.NewRecorder()
+
+	// Call login handler
+	loginHandler(w, req)
+
+	// Verify response is successful
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	// Verify UserCodeSessionsBkt has the migrated session
+	var migratedSession string
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, UserCodeSessionsBkt, testUser.Id, &migratedSession)
+	})
+
+	if migratedSession != sessionToken {
+		t.Errorf("Expected migrated session %s, got %s", sessionToken, migratedSession)
+	}
+
+	// Verify new JWT does NOT have sessionToken claim
+	cookies := w.Result().Cookies()
+	var newAuthToken string
+	for _, cookie := range cookies {
+		if cookie.Name == "authToken" {
+			newAuthToken = cookie.Value
+			break
+		}
+	}
+
+	if newAuthToken == "" {
+		t.Fatal("Expected new authToken cookie")
+	}
+
+	// Parse new token and verify claims
+	newToken, err := jwt.ParseWithClaims(newAuthToken, &Claims{}, func(token *jwt.Token) (any, error) {
+		return jwtKey, nil
+	})
+	if err != nil {
+		t.Fatalf("Failed to parse new JWT: %v", err)
+	}
+
+	newClaims, ok := newToken.Claims.(*Claims)
+	if !ok {
+		t.Fatal("Failed to extract claims from new JWT")
+	}
+
+	if newClaims.UserId != testUser.Id {
+		t.Errorf("Expected userId %d, got %d", testUser.Id, newClaims.UserId)
+	}
+
+	if newClaims.SessionToken != "" {
+		t.Errorf("Expected no sessionToken in new JWT, got %s", newClaims.SessionToken)
+	}
+}
+
+// TestMigrateCodeSession_AnonymousRegister tests that anonymous code session users
+// can create an account and have their session migrated
+func TestMigrateCodeSession_AnonymousRegister(t *testing.T) {
+	db := setupTestAuthDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create an access code and code session
+	var code AccessCode
+	var sessionToken string
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		code = AccessCode{
+			Code:       "12345",
+			Type:       CodeTypeRoom,
+			TargetId:   1,
+			CreatedBy:  1,
+			CreatedAt:  time.Now(),
+			ExpiresAt:  time.Now().Add(24 * time.Hour),
+			MaxViewers: 0,
+			IsRevoked:  false,
+		}
+		vbolt.Write(tx, AccessCodesBkt, code.Code, &code)
+
+		sessionToken = "test-session-uuid"
+		session := CodeSession{
+			Token:       sessionToken,
+			Code:        code.Code,
+			ConnectedAt: time.Now(),
+			LastSeen:    time.Now(),
+		}
+		vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
+		vbolt.TxCommit(tx)
+	})
+
+	// Create anonymous JWT with code session
+	anonClaims := &Claims{
+		UserId:       -1,
+		SessionToken: sessionToken,
+		RegisteredClaims: jwt.RegisteredClaims{
+			ExpiresAt: jwt.NewNumericDate(time.Now().Add(24 * time.Hour)),
+		},
+	}
+	anonToken := jwt.NewWithClaims(jwt.SigningMethodHS256, anonClaims)
+	anonTokenString, err := anonToken.SignedString(jwtKey)
+	if err != nil {
+		t.Fatalf("Failed to create anonymous JWT: %v", err)
+	}
+
+	// Call CreateAccount procedure with anonymous JWT token
+	var resp CreateAccountResponse
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{
+			Tx:    tx,
+			Token: anonTokenString,
+		}
+		resp, err = CreateAccount(ctx, CreateAccountRequest{
+			Name:            "New User",
+			Email:           "newuser@example.com",
+			Password:        "password123",
+			ConfirmPassword: "password123",
+		})
+	})
+
+	if err != nil {
+		t.Fatalf("CreateAccount returned error: %v", err)
+	}
+
+	if !resp.Success {
+		t.Fatalf("Expected success, got error: %s", resp.Error)
+	}
+
+	// Get new user ID from database
+	var newUserId int
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		newUserId = GetUserId(tx, "newuser@example.com")
+	})
+
+	if newUserId == 0 {
+		t.Fatal("Expected new user to be created")
+	}
+
+	// Verify UserCodeSessionsBkt has the migrated session
+	var migratedSession string
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, UserCodeSessionsBkt, newUserId, &migratedSession)
+	})
+
+	if migratedSession != sessionToken {
+		t.Errorf("Expected migrated session %s, got %s", sessionToken, migratedSession)
+	}
+}
+
+// TestMigrateCodeSession_NoMigrationNeeded tests that users without code sessions
+// can login/register normally without migration
+func TestMigrateCodeSession_NoMigrationNeeded(t *testing.T) {
+	db := setupTestAuthDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create a test user with password
+	var testUser User
+	testPassword := "password123"
+	var passHash []byte
+	var err error
+	passHash, err = bcrypt.GenerateFromPassword([]byte(testPassword), bcrypt.DefaultCost)
+	if err != nil {
+		t.Fatalf("Failed to hash password: %v", err)
+	}
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		testUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Email:    "test@example.com",
+			Name:     "Test User",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
+		vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
+		vbolt.Write(tx, PasswdBkt, testUser.Id, &passHash)
+		vbolt.TxCommit(tx)
+	})
+
+	// Create login request WITHOUT any JWT cookie
+	loginReq := `{"email":"test@example.com","password":"password123"}`
+	req := httptest.NewRequest("POST", "/api/login", strings.NewReader(loginReq))
+	req.Header.Set("Content-Type", "application/json")
+
+	// Create response recorder
+	w := httptest.NewRecorder()
+
+	// Call login handler
+	loginHandler(w, req)
+
+	// Verify response is successful
+	if w.Code != http.StatusOK {
+		t.Errorf("Expected status 200, got %d", w.Code)
+	}
+
+	// Verify UserCodeSessionsBkt does NOT have any entry (no migration occurred)
+	var storedSession string
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, UserCodeSessionsBkt, testUser.Id, &storedSession)
+	})
+
+	if storedSession != "" {
+		t.Errorf("Expected no UserCodeSessionsBkt entry, got %s", storedSession)
+	}
+
+	// Verify JWT was issued correctly
+	cookies := w.Result().Cookies()
+	var newAuthToken string
+	for _, cookie := range cookies {
+		if cookie.Name == "authToken" {
+			newAuthToken = cookie.Value
+			break
+		}
+	}
+
+	if newAuthToken == "" {
+		t.Fatal("Expected new authToken cookie")
 	}
 }

@@ -5,6 +5,7 @@ import (
 	"stream/cfg"
 	"time"
 
+	"github.com/golang-jwt/jwt/v5"
 	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 	"go.hasen.dev/vpack"
@@ -182,6 +183,26 @@ func CreateAccount(ctx *vbeam.Context, req CreateAccountRequest) (resp CreateAcc
 	// Create user
 	vbeam.UseWriteTx(ctx)
 	user := AddUserTx(ctx.Tx, req, hash)
+
+	// Check if request has anonymous code session (userId=-1) and migrate it
+	if len(ctx.Token) > 0 {
+		// Parse JWT to check for anonymous session
+		token, parseErr := jwt.ParseWithClaims(ctx.Token, &Claims{}, func(token *jwt.Token) (any, error) {
+			return jwtKey, nil
+		})
+
+		if parseErr == nil && token.Valid {
+			if claims, ok := token.Claims.(*Claims); ok && claims.UserId == -1 && claims.SessionToken != "" {
+				// Migrate anonymous code session to new user account
+				vbolt.Write(ctx.Tx, UserCodeSessionsBkt, user.Id, &claims.SessionToken)
+
+				LogInfo(LogCategoryAuth, "Migrated anonymous code session to new account", map[string]interface{}{
+					"userId":       user.Id,
+					"sessionToken": claims.SessionToken,
+				})
+			}
+		}
+	}
 
 	resp.Auth = GetAuthResponseFromUser(ctx.Tx, user)
 	vbolt.TxCommit(ctx.Tx)

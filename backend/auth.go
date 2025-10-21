@@ -115,6 +115,15 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Migrate anonymous code session if user had one before logging in
+	migratedSession, _ := migrateAnonymousCodeSession(r, user.Id)
+	if migratedSession != "" {
+		LogInfoWithRequest(r, LogCategoryAuth, "Migrated code session during login", map[string]interface{}{
+			"userId":       user.Id,
+			"sessionToken": migratedSession,
+		})
+	}
+
 	token, err := generateAuthJwt(user, w)
 	if err != nil {
 		LogErrorWithRequest(r, LogCategoryAuth, "Failed to generate JWT token", map[string]interface{}{
@@ -248,6 +257,51 @@ func generateAuthJwt(user User, w http.ResponseWriter) (tokenString string, err 
 	})
 
 	return
+}
+
+// migrateAnonymousCodeSession checks if the request has an anonymous code session (userId=-1)
+// and migrates it to the newly authenticated user by storing the session in UserCodeSessionsBkt.
+// Returns the sessionToken if migration occurred, or empty string if no migration needed.
+func migrateAnonymousCodeSession(r *http.Request, newUserId int) (sessionToken string, err error) {
+	// Try to get existing authToken cookie
+	authCookie, cookieErr := r.Cookie("authToken")
+	if cookieErr != nil || authCookie.Value == "" {
+		// No existing JWT, nothing to migrate
+		return "", nil
+	}
+
+	// Parse the existing JWT
+	token, parseErr := jwt.ParseWithClaims(authCookie.Value, &Claims{}, func(token *jwt.Token) (any, error) {
+		if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
+			return nil, errors.New("unexpected signing method")
+		}
+		return jwtKey, nil
+	})
+
+	// If parsing failed or token is invalid, nothing to migrate
+	if parseErr != nil || !token.Valid {
+		return "", nil
+	}
+
+	// Check if this is an anonymous code session (userId=-1)
+	claims, ok := token.Claims.(*Claims)
+	if !ok || claims.UserId != -1 || claims.SessionToken == "" {
+		// Not an anonymous code session, nothing to migrate
+		return "", nil
+	}
+
+	// Migrate: store session token in UserCodeSessionsBkt
+	vbolt.WithWriteTx(appDb, func(tx *vbolt.Tx) {
+		vbolt.Write(tx, UserCodeSessionsBkt, newUserId, &claims.SessionToken)
+		vbolt.TxCommit(tx)
+	})
+
+	LogInfo(LogCategoryAuth, "Migrated anonymous code session to user account", map[string]interface{}{
+		"newUserId":    newUserId,
+		"sessionToken": claims.SessionToken,
+	})
+
+	return claims.SessionToken, nil
 }
 
 func GetAuthUser(ctx *vbeam.Context) (user User, err error) {
