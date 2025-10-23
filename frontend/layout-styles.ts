@@ -100,6 +100,35 @@ block(`
 `);
 
 block(`
+.auth-links {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  font-size: 0.9rem;
+}
+`);
+
+block(`
+.auth-link {
+  color: var(--text-secondary);
+  text-decoration: none;
+  transition: color 0.2s;
+}
+`);
+
+block(`
+.auth-link:hover {
+  color: var(--primary);
+}
+`);
+
+block(`
+.auth-separator {
+  color: var(--text-tertiary);
+}
+`);
+
+block(`
 @media (max-width: 768px) {
   .nav-links {
     gap: 0.5rem;

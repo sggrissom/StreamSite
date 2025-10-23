@@ -3,18 +3,27 @@ import * as vlens from "vlens";
 import * as server from "./server";
 import "./layout-styles";
 
-const useAuthCheck = vlens.declareHook(() => {
-  const state = {
-    auth: null as server.AuthResponse | null,
+type AuthState = {
+  auth: server.AuthResponse | null;
+  isAuthenticated: boolean;
+  isLoading: boolean;
+};
+
+const useAuthCheck = vlens.declareHook((): AuthState => {
+  const state: AuthState = {
+    auth: null,
     isAuthenticated: false,
     isLoading: true,
   };
 
   // Check auth on mount
   server.GetAuthContext({}).then(([authResp, authErr]) => {
-    if (authResp && authResp.id > 0) {
+    if (authResp) {
       state.auth = authResp;
-      state.isAuthenticated = true;
+      // Only set isAuthenticated for real users (id > 0)
+      if (authResp.id > 0) {
+        state.isAuthenticated = true;
+      }
     }
     state.isLoading = false;
     vlens.scheduleRedraw();
@@ -47,8 +56,81 @@ async function handleLogout(event: Event) {
   }
 }
 
+// Helper function to determine which header type to render
+function getHeaderType(authState: AuthState): string {
+  if (authState.isLoading) return "guest";
+  if (!authState.auth) return "guest";
+  if (authState.auth.id === -1) return "anonymous-code";
+  if (authState.auth.isSiteAdmin) return "site-admin";
+  if (authState.auth.canManageStudios) return "studio-manager";
+  return "viewer";
+}
+
+// Header navigation components for each auth type
+
+const GuestHeaderNav = (): preact.ComponentChild => null;
+
+const AnonymousCodeHeaderNav = (): preact.ComponentChild => (
+  <div className="auth-links">
+    <a href="/login" className="auth-link">
+      Sign in
+    </a>
+    <span className="auth-separator">|</span>
+    <a href="/create-account" className="auth-link">
+      Create account
+    </a>
+  </div>
+);
+
+const ViewerHeaderNav = (): preact.ComponentChild => (
+  <div className="nav-links">
+    <a href="/dashboard" className="nav-link">
+      Streams
+    </a>
+    <button onClick={handleLogout} className="logout-button">
+      Logout
+    </button>
+  </div>
+);
+
+const StudioManagerHeaderNav = (): preact.ComponentChild => (
+  <div className="nav-links">
+    <a href="/studios" className="nav-link">
+      Studios
+    </a>
+    <button onClick={handleLogout} className="logout-button">
+      Logout
+    </button>
+  </div>
+);
+
+const SiteAdminHeaderNav = (): preact.ComponentChild => (
+  <div className="nav-links">
+    <a href="/studios" className="nav-link">
+      Studios
+    </a>
+    <a href="/site-admin" className="nav-link">
+      Admin
+    </a>
+    <button onClick={handleLogout} className="logout-button">
+      Logout
+    </button>
+  </div>
+);
+
+// Component map for dynamic header rendering
+const HEADER_COMPONENTS: Record<string, () => preact.ComponentChild> = {
+  guest: GuestHeaderNav,
+  "anonymous-code": AnonymousCodeHeaderNav,
+  viewer: ViewerHeaderNav,
+  "studio-manager": StudioManagerHeaderNav,
+  "site-admin": SiteAdminHeaderNav,
+};
+
 export const Header = () => {
   const authState = useAuthCheck();
+  const headerType = getHeaderType(authState);
+  const HeaderNavComponent = HEADER_COMPONENTS[headerType];
 
   return (
     <header className="site-header">
@@ -56,28 +138,7 @@ export const Header = () => {
         <a href="/" className="site-logo">
           Stream
         </a>
-        {authState.isAuthenticated && authState.auth && (
-          <div className="nav-links">
-            {!authState.auth.canManageStudios && (
-              <a href="/dashboard" className="nav-link">
-                My Streams
-              </a>
-            )}
-            {authState.auth.canManageStudios && (
-              <a href="/studios" className="nav-link">
-                My Studios
-              </a>
-            )}
-            {authState.auth.isSiteAdmin && (
-              <a href="/site-admin" className="nav-link">
-                Site Admin
-              </a>
-            )}
-            <button onClick={handleLogout} className="logout-button">
-              Logout
-            </button>
-          </div>
-        )}
+        <HeaderNavComponent />
       </nav>
     </header>
   );
