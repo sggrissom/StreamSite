@@ -299,6 +299,60 @@ function closeGenerateCodeModal(modal: GenerateCodeModalState) {
   vlens.scheduleRedraw();
 }
 
+// ===== View Analytics Modal =====
+type ViewAnalyticsModal = {
+  isOpen: boolean;
+  isLoading: boolean;
+  error: string;
+  roomId: number;
+  roomName: string;
+  analytics: server.GetRoomAnalyticsResponse | null;
+};
+
+const useViewAnalyticsModal = vlens.declareHook(
+  (): ViewAnalyticsModal => ({
+    isOpen: false,
+    isLoading: false,
+    error: "",
+    roomId: 0,
+    roomName: "",
+    analytics: null,
+  }),
+);
+
+async function openAnalyticsModal(
+  modal: ViewAnalyticsModal,
+  roomId: number,
+  roomName: string,
+) {
+  modal.isOpen = true;
+  modal.isLoading = true;
+  modal.error = "";
+  modal.roomId = roomId;
+  modal.roomName = roomName;
+  modal.analytics = null;
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.GetRoomAnalytics({ roomId });
+  modal.isLoading = false;
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to load analytics";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.analytics = resp;
+  vlens.scheduleRedraw();
+}
+
+function closeAnalyticsModal(modal: ViewAnalyticsModal) {
+  modal.isOpen = false;
+  modal.error = "";
+  modal.analytics = null;
+  vlens.scheduleRedraw();
+}
+
 // ===== Component =====
 export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const { studio, rooms, canManageRooms } = props;
@@ -306,6 +360,7 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const editRoomModal = useEditRoomModal();
   const deleteRoomModal = useDeleteRoomModal();
   const generateCodeModal = useGenerateCodeModalState();
+  const analyticsModal = useViewAnalyticsModal();
 
   return (
     <>
@@ -369,6 +424,13 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                         }
                       >
                         View Stream Key
+                      </DropdownItem>
+                      <DropdownItem
+                        onClick={() =>
+                          openAnalyticsModal(analyticsModal, room.id, room.name)
+                        }
+                      >
+                        View Analytics
                       </DropdownItem>
                       <DropdownItem
                         onClick={() =>
@@ -620,6 +682,103 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
         targetName={generateCodeModal.roomName}
         targetLabel="Room"
       />
+
+      <Modal
+        isOpen={analyticsModal.isOpen}
+        title="Room Analytics"
+        onClose={() => closeAnalyticsModal(analyticsModal)}
+        error={analyticsModal.error}
+        footer={
+          <button
+            className="btn btn-secondary"
+            onClick={() => closeAnalyticsModal(analyticsModal)}
+          >
+            Close
+          </button>
+        }
+      >
+        <div className="form-group">
+          <label>Room</label>
+          <div style="font-weight: 500;">{analyticsModal.roomName}</div>
+        </div>
+
+        {analyticsModal.isLoading ? (
+          <div style="padding: 1rem; text-align: center;">Loading...</div>
+        ) : (
+          analyticsModal.analytics &&
+          analyticsModal.analytics.analytics && (
+            <>
+              <div className="form-group">
+                <label>Current Viewers</label>
+                <div style="font-size: 1.5rem; font-weight: bold; color: var(--primary);">
+                  {analyticsModal.analytics.analytics.currentViewers}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Peak Viewers</label>
+                <div style="font-size: 1.25rem; font-weight: 600;">
+                  {analyticsModal.analytics.analytics.peakViewers}
+                  {analyticsModal.analytics.analytics.peakViewersAt && (
+                    <small style="display: block; font-size: 0.875rem; font-weight: normal; color: var(--text-secondary); margin-top: 0.25rem;">
+                      {new Date(
+                        analyticsModal.analytics.analytics.peakViewersAt,
+                      ).toLocaleString()}
+                    </small>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Total Views</label>
+                <div style="font-size: 1.125rem; font-weight: 600;">
+                  All-time:{" "}
+                  {analyticsModal.analytics.analytics.totalViewsAllTime}
+                  <br />
+                  This month:{" "}
+                  {analyticsModal.analytics.analytics.totalViewsThisMonth}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Streaming Status</label>
+                <div>
+                  {analyticsModal.analytics.isStreaming ? (
+                    <span style="color: var(--success); font-weight: 600;">
+                      🔴 Live Now
+                    </span>
+                  ) : (
+                    <span style="color: var(--text-secondary);">Offline</span>
+                  )}
+                </div>
+              </div>
+
+              <div className="form-group">
+                <label>Total Stream Time</label>
+                <div style="font-weight: 500;">
+                  {Math.floor(
+                    analyticsModal.analytics.analytics.totalStreamMinutes / 60,
+                  )}{" "}
+                  hours{" "}
+                  {analyticsModal.analytics.analytics.totalStreamMinutes % 60}{" "}
+                  minutes
+                </div>
+              </div>
+
+              {analyticsModal.analytics.analytics.lastStreamAt && (
+                <div className="form-group">
+                  <label>Last Streamed</label>
+                  <div style="font-weight: 500;">
+                    {new Date(
+                      analyticsModal.analytics.analytics.lastStreamAt,
+                    ).toLocaleString()}
+                  </div>
+                </div>
+              )}
+            </>
+          )
+        )}
+      </Modal>
     </>
   );
 }

@@ -376,6 +376,29 @@ export interface GetCodeAnalyticsResponse {
     sessions: SessionInfo[]
 }
 
+export interface GetRoomAnalyticsRequest {
+    roomId: number
+}
+
+export interface GetRoomAnalyticsResponse {
+    success: boolean
+    error: string
+    analytics: RoomAnalytics | null
+    isStreaming: boolean
+    roomName: string
+}
+
+export interface GetStudioAnalyticsRequest {
+    studioId: number
+}
+
+export interface GetStudioAnalyticsResponse {
+    success: boolean
+    error: string
+    analytics: StudioAnalytics | null
+    studioName: string
+}
+
 export interface SRSAuthCallback {
     server_id: string
     action: string
@@ -512,6 +535,28 @@ export interface SessionInfo {
     isActive: boolean
 }
 
+export interface RoomAnalytics {
+    roomId: number
+    totalViewsAllTime: number
+    totalViewsThisMonth: number
+    currentViewers: number
+    peakViewers: number
+    peakViewersAt: string
+    lastStreamAt: string
+    streamStartedAt: string
+    totalStreamMinutes: number
+}
+
+export interface StudioAnalytics {
+    studioId: number
+    totalViewsAllTime: number
+    totalViewsThisMonth: number
+    currentViewers: number
+    totalRooms: number
+    activeRooms: number
+    totalStreamMinutes: number
+}
+
 export async function CreateAccount(data: CreateAccountRequest): Promise<rpc.Response<CreateAccountResponse>> {
     return await rpc.call<CreateAccountResponse>('CreateAccount', JSON.stringify(data));
 }
@@ -638,6 +683,14 @@ export async function ListAccessCodes(data: ListAccessCodesRequest): Promise<rpc
 
 export async function GetCodeAnalytics(data: GetCodeAnalyticsRequest): Promise<rpc.Response<GetCodeAnalyticsResponse>> {
     return await rpc.call<GetCodeAnalyticsResponse>('GetCodeAnalytics', JSON.stringify(data));
+}
+
+export async function GetRoomAnalytics(data: GetRoomAnalyticsRequest): Promise<rpc.Response<GetRoomAnalyticsResponse>> {
+    return await rpc.call<GetRoomAnalyticsResponse>('GetRoomAnalytics', JSON.stringify(data));
+}
+
+export async function GetStudioAnalytics(data: GetStudioAnalyticsRequest): Promise<rpc.Response<GetStudioAnalyticsResponse>> {
+    return await rpc.call<GetStudioAnalyticsResponse>('GetStudioAnalytics', JSON.stringify(data));
 }
 
 export async function ValidateStreamKey(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {
