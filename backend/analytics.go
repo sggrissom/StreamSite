@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"strconv"
 	"stream/cfg"
 	"time"
 
@@ -110,13 +111,24 @@ var SessionsByRoomIndex = vbolt.Index(&cfg.Info, "sessions_by_room", vpack.FInt,
 
 // Helper functions for analytics tracking
 
-func IncrementRoomViewerCount(db *vbolt.DB, roomId int) {
+func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string) {
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		// Get room to find studioId
 		room := GetRoom(tx, roomId)
 		if room.Id == 0 {
 			return
 		}
+
+		// Build session key
+		sessionKey := viewerId + ":" + strconv.Itoa(roomId)
+
+		// Look up existing session
+		var session ViewerSession
+		vbolt.Read(tx, ViewerSessionsBkt, sessionKey, &session)
+
+		now := time.Now()
+		isNewSession := session.SessionKey == ""
+		isExpiredSession := !isNewSession && now.Sub(session.LastSeenAt) > SESSION_TIMEOUT
 
 		// Load or create room analytics
 		var analytics RoomAnalytics
@@ -125,21 +137,42 @@ func IncrementRoomViewerCount(db *vbolt.DB, roomId int) {
 			analytics.RoomId = roomId
 		}
 
-		// Increment counters
+		// Always increment current viewers (live count)
 		analytics.CurrentViewers++
-		analytics.TotalViewsAllTime++
-		analytics.TotalViewsThisMonth++
+
+		// Only increment view totals if new or expired session
+		if isNewSession || isExpiredSession {
+			analytics.TotalViewsAllTime++
+			analytics.TotalViewsThisMonth++
+
+			// Track unique viewers
+			if isNewSession {
+				analytics.UniqueViewersAllTime++
+				analytics.UniqueViewersThisMonth++
+			}
+		}
 
 		// Update peak if necessary
 		if analytics.CurrentViewers > analytics.PeakViewers {
 			analytics.PeakViewers = analytics.CurrentViewers
-			analytics.PeakViewersAt = time.Now()
+			analytics.PeakViewersAt = now
 		}
 
-		// Save
+		// Update or create session
+		if isNewSession {
+			session.SessionKey = sessionKey
+			session.ViewerId = viewerId
+			session.RoomId = roomId
+			session.FirstSeenAt = now
+		}
+		session.LastSeenAt = now
+
+		// Save session and analytics
+		vbolt.Write(tx, ViewerSessionsBkt, sessionKey, &session)
+		vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, roomId)
 		vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
 
-		incrementStudioViewerCount(tx, room.StudioId)
+		incrementStudioViewerCount(tx, room.StudioId, viewerId, isNewSession, isExpiredSession)
 
 		vbolt.TxCommit(tx)
 	})
@@ -189,6 +222,8 @@ func UpdateStudioAnalyticsFromRoom(tx *vbolt.Tx, studioId int) {
 		// Aggregate
 		studioAnalytics.TotalViewsAllTime += roomAnalytics.TotalViewsAllTime
 		studioAnalytics.TotalViewsThisMonth += roomAnalytics.TotalViewsThisMonth
+		studioAnalytics.UniqueViewersAllTime += roomAnalytics.UniqueViewersAllTime
+		studioAnalytics.UniqueViewersThisMonth += roomAnalytics.UniqueViewersThisMonth
 		studioAnalytics.CurrentViewers += roomAnalytics.CurrentViewers
 		studioAnalytics.TotalStreamMinutes += roomAnalytics.TotalStreamMinutes
 
@@ -202,7 +237,7 @@ func UpdateStudioAnalyticsFromRoom(tx *vbolt.Tx, studioId int) {
 	vbolt.Write(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
 }
 
-func incrementStudioViewerCount(tx *vbolt.Tx, studioId int) {
+func incrementStudioViewerCount(tx *vbolt.Tx, studioId int, viewerId string, isNewSession bool, isExpiredSession bool) {
 	var studioAnalytics StudioAnalytics
 	vbolt.Read(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
 
@@ -211,10 +246,20 @@ func incrementStudioViewerCount(tx *vbolt.Tx, studioId int) {
 		studioAnalytics.StudioId = studioId
 	}
 
-	// Increment viewer counts
+	// Always increment current viewers
 	studioAnalytics.CurrentViewers++
-	studioAnalytics.TotalViewsAllTime++
-	studioAnalytics.TotalViewsThisMonth++
+
+	// Only increment totals if new or expired session
+	if isNewSession || isExpiredSession {
+		studioAnalytics.TotalViewsAllTime++
+		studioAnalytics.TotalViewsThisMonth++
+
+		// Track unique viewers at studio level
+		if isNewSession {
+			studioAnalytics.UniqueViewersAllTime++
+			studioAnalytics.UniqueViewersThisMonth++
+		}
+	}
 
 	vbolt.Write(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
 }

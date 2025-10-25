@@ -327,15 +327,19 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 			Done:   make(chan bool),
 		}
 
-		// If this is a code session, store the session token for cleanup
+		// Extract viewer ID for session tracking
+		var viewerId string
 		if authCtx.IsCodeAuth {
 			client.SessionToken = authCtx.CodeSession.Token
+			viewerId = "code:" + authCtx.CodeSession.Token
+		} else {
+			viewerId = "user:" + fmt.Sprintf("%d", authCtx.User.Id)
 		}
 
 		// Register client
 		sseManager.AddClient(roomID, client)
 
-		IncrementRoomViewerCount(db, roomID)
+		IncrementRoomViewerCount(db, roomID, viewerId)
 
 		defer func() {
 			// Decrement viewer count for code sessions on disconnect
