@@ -181,14 +181,13 @@ func TestStudioAnalyticsZeroValues(t *testing.T) {
 	})
 }
 
-// TestIncrementRoomViewerCount verifies viewer count increments and peak tracking
+// TestIncrementRoomViewerCount verifies session-based view counting
 func TestIncrementRoomViewerCount(t *testing.T) {
 	db := setupTestAnalyticsDB(t)
 	defer db.Close()
 
-	// Do all setup and testing in a single write transaction
+	// Setup: Create test studio and room
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-		// Create test studio and room
 		studio := Studio{
 			Id:       1,
 			Name:     "Test Studio",
@@ -206,60 +205,166 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 		}
 		vbolt.Write(tx, RoomsBkt, room.Id, &room)
 		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+		vbolt.TxCommit(tx)
+	})
 
-		// Manually increment (inline instead of calling helper)
+	t.Run("NewViewer", func(t *testing.T) {
+		// First connection from a new viewer
+		IncrementRoomViewerCount(db, 10, "user:1")
+
+		// Verify all counters incremented including unique viewers
 		var analytics RoomAnalytics
-		vbolt.Read(tx, RoomAnalyticsBkt, 10, &analytics)
-		if analytics.RoomId == 0 {
-			analytics.RoomId = 10
-		}
-		analytics.CurrentViewers++
-		analytics.TotalViewsAllTime++
-		analytics.TotalViewsThisMonth++
-		if analytics.CurrentViewers > analytics.PeakViewers {
-			analytics.PeakViewers = analytics.CurrentViewers
-			analytics.PeakViewersAt = time.Now()
-		}
-		vbolt.Write(tx, RoomAnalyticsBkt, 10, &analytics)
-		UpdateStudioAnalyticsFromRoom(tx, studio.Id)
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, RoomAnalyticsBkt, 10, &analytics)
+		})
 
-		// Verify first increment
-		vbolt.Read(tx, RoomAnalyticsBkt, 10, &analytics)
 		if analytics.CurrentViewers != 1 {
 			t.Errorf("CurrentViewers should be 1, got %d", analytics.CurrentViewers)
 		}
 		if analytics.TotalViewsAllTime != 1 {
 			t.Errorf("TotalViewsAllTime should be 1, got %d", analytics.TotalViewsAllTime)
 		}
+		if analytics.TotalViewsThisMonth != 1 {
+			t.Errorf("TotalViewsThisMonth should be 1, got %d", analytics.TotalViewsThisMonth)
+		}
+		if analytics.UniqueViewersAllTime != 1 {
+			t.Errorf("UniqueViewersAllTime should be 1, got %d", analytics.UniqueViewersAllTime)
+		}
+		if analytics.UniqueViewersThisMonth != 1 {
+			t.Errorf("UniqueViewersThisMonth should be 1, got %d", analytics.UniqueViewersThisMonth)
+		}
 		if analytics.PeakViewers != 1 {
 			t.Errorf("PeakViewers should be 1, got %d", analytics.PeakViewers)
 		}
 
-		// Second increment
-		analytics.CurrentViewers++
-		analytics.TotalViewsAllTime++
-		analytics.TotalViewsThisMonth++
-		if analytics.CurrentViewers > analytics.PeakViewers {
-			analytics.PeakViewers = analytics.CurrentViewers
-			analytics.PeakViewersAt = time.Now()
+		// Verify session was created
+		var session ViewerSession
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, ViewerSessionsBkt, "user:1:10", &session)
+		})
+		if session.SessionKey != "user:1:10" {
+			t.Errorf("Session should exist with key 'user:1:10', got '%s'", session.SessionKey)
 		}
-		vbolt.Write(tx, RoomAnalyticsBkt, 10, &analytics)
-		UpdateStudioAnalyticsFromRoom(tx, studio.Id)
+		if session.ViewerId != "user:1" {
+			t.Errorf("Session viewerId should be 'user:1', got '%s'", session.ViewerId)
+		}
+		if session.RoomId != 10 {
+			t.Errorf("Session roomId should be 10, got %d", session.RoomId)
+		}
+	})
 
-		// Verify second increment
-		vbolt.Read(tx, RoomAnalyticsBkt, 10, &analytics)
-		if analytics.CurrentViewers != 2 {
-			t.Errorf("CurrentViewers should be 2, got %d", analytics.CurrentViewers)
+	t.Run("ReconnectWithinTimeout", func(t *testing.T) {
+		// Same viewer reconnects within 5 minutes (simulated by immediate reconnect)
+		// Decrement first to simulate disconnect
+		DecrementRoomViewerCount(db, 10)
+
+		// Get current totals before reconnection
+		var beforeAnalytics RoomAnalytics
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, RoomAnalyticsBkt, 10, &beforeAnalytics)
+		})
+
+		// Reconnect same viewer
+		IncrementRoomViewerCount(db, 10, "user:1")
+
+		// Verify totals did NOT increase (session still valid)
+		var afterAnalytics RoomAnalytics
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, RoomAnalyticsBkt, 10, &afterAnalytics)
+		})
+
+		if afterAnalytics.TotalViewsAllTime != beforeAnalytics.TotalViewsAllTime {
+			t.Errorf("TotalViewsAllTime should not change on reconnect within timeout, was %d, now %d",
+				beforeAnalytics.TotalViewsAllTime, afterAnalytics.TotalViewsAllTime)
 		}
-		if analytics.PeakViewers != 2 {
-			t.Errorf("PeakViewers should be 2, got %d", analytics.PeakViewers)
+		if afterAnalytics.UniqueViewersAllTime != beforeAnalytics.UniqueViewersAllTime {
+			t.Errorf("UniqueViewersAllTime should not change on reconnect, was %d, now %d",
+				beforeAnalytics.UniqueViewersAllTime, afterAnalytics.UniqueViewersAllTime)
+		}
+		if afterAnalytics.CurrentViewers != 1 {
+			t.Errorf("CurrentViewers should be 1, got %d", afterAnalytics.CurrentViewers)
+		}
+	})
+
+	t.Run("ReconnectAfterTimeout", func(t *testing.T) {
+		// Simulate session timeout by manually updating LastSeenAt
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			var session ViewerSession
+			vbolt.Read(tx, ViewerSessionsBkt, "user:1:10", &session)
+			session.LastSeenAt = time.Now().Add(-10 * time.Minute) // 10 minutes ago
+			vbolt.Write(tx, ViewerSessionsBkt, "user:1:10", &session)
+			vbolt.TxCommit(tx)
+		})
+
+		// Get totals before expired reconnection
+		var beforeAnalytics RoomAnalytics
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, RoomAnalyticsBkt, 10, &beforeAnalytics)
+		})
+
+		// Decrement and reconnect after timeout
+		DecrementRoomViewerCount(db, 10)
+		IncrementRoomViewerCount(db, 10, "user:1")
+
+		// Verify TotalViews increased but UniqueViewers did NOT
+		var afterAnalytics RoomAnalytics
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, RoomAnalyticsBkt, 10, &afterAnalytics)
+		})
+
+		if afterAnalytics.TotalViewsAllTime != beforeAnalytics.TotalViewsAllTime+1 {
+			t.Errorf("TotalViewsAllTime should increase by 1 after timeout, was %d, now %d",
+				beforeAnalytics.TotalViewsAllTime, afterAnalytics.TotalViewsAllTime)
+		}
+		if afterAnalytics.UniqueViewersAllTime != beforeAnalytics.UniqueViewersAllTime {
+			t.Errorf("UniqueViewersAllTime should NOT change (already counted), was %d, now %d",
+				beforeAnalytics.UniqueViewersAllTime, afterAnalytics.UniqueViewersAllTime)
+		}
+	})
+
+	t.Run("MultipleUniqueViewers", func(t *testing.T) {
+		// Add second viewer
+		IncrementRoomViewerCount(db, 10, "user:2")
+
+		// Add third viewer
+		IncrementRoomViewerCount(db, 10, "code:abc123")
+
+		// Verify analytics
+		var analytics RoomAnalytics
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, RoomAnalyticsBkt, 10, &analytics)
+		})
+
+		if analytics.CurrentViewers != 3 {
+			t.Errorf("CurrentViewers should be 3, got %d", analytics.CurrentViewers)
+		}
+		if analytics.UniqueViewersAllTime != 3 {
+			t.Errorf("UniqueViewersAllTime should be 3 (user:1, user:2, code:abc123), got %d",
+				analytics.UniqueViewersAllTime)
 		}
 
-		// Verify studio analytics
+		// Verify sessions exist
+		var session2, session3 ViewerSession
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, ViewerSessionsBkt, "user:2:10", &session2)
+			vbolt.Read(tx, ViewerSessionsBkt, "code:abc123:10", &session3)
+		})
+
+		if session2.ViewerId != "user:2" {
+			t.Errorf("Session2 viewerId should be 'user:2', got '%s'", session2.ViewerId)
+		}
+		if session3.ViewerId != "code:abc123" {
+			t.Errorf("Session3 viewerId should be 'code:abc123', got '%s'", session3.ViewerId)
+		}
+
+		// Verify studio analytics aggregation
 		var studioAnalytics StudioAnalytics
-		vbolt.Read(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
-		if studioAnalytics.CurrentViewers != 2 {
-			t.Errorf("Studio CurrentViewers should be 2, got %d", studioAnalytics.CurrentViewers)
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			vbolt.Read(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+		})
+
+		if studioAnalytics.UniqueViewersAllTime != 3 {
+			t.Errorf("Studio UniqueViewersAllTime should be 3, got %d", studioAnalytics.UniqueViewersAllTime)
 		}
 	})
 }
