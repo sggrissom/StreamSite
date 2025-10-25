@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 )
 
@@ -476,6 +477,597 @@ func TestUpdateStudioAnalytics(t *testing.T) {
 		}
 		if studioAnalytics.TotalStreamMinutes != 270 {
 			t.Errorf("TotalStreamMinutes should be 270, got %d", studioAnalytics.TotalStreamMinutes)
+		}
+	})
+}
+
+// TestGetRoomAnalytics tests the GetRoomAnalytics API procedure
+func TestGetRoomAnalytics(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	// Setup test data
+	var ownerUser, viewerUser, nonMemberUser User
+	var studio Studio
+	var room Room
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create owner user
+		ownerUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Owner User",
+			Email:    "owner@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, ownerUser.Id, &ownerUser)
+		vbolt.Write(tx, EmailBkt, ownerUser.Email, &ownerUser.Id)
+
+		// Create viewer user
+		viewerUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Viewer User",
+			Email:    "viewer@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, viewerUser.Id, &viewerUser)
+		vbolt.Write(tx, EmailBkt, viewerUser.Email, &viewerUser.Id)
+
+		// Create non-member user
+		nonMemberUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Non-Member User",
+			Email:    "nonmember@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, nonMemberUser.Id, &nonMemberUser)
+		vbolt.Write(tx, EmailBkt, nonMemberUser.Email, &nonMemberUser.Id)
+
+		// Create studio
+		studio = Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "A test studio",
+			MaxRooms:    5,
+			OwnerId:     ownerUser.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership for owner
+		ownerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		ownerMembership := StudioMembership{
+			UserId:   ownerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, ownerMembershipId, &ownerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, ownerMembershipId, ownerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, ownerMembershipId, studio.Id)
+
+		// Create studio membership for viewer
+		viewerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		viewerMembership := StudioMembership{
+			UserId:   viewerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleViewer,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, viewerMembershipId, &viewerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, viewerMembershipId, viewerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, viewerMembershipId, studio.Id)
+
+		// Create room
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key",
+			IsActive:   true,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		// Create room analytics
+		analytics := RoomAnalytics{
+			RoomId:              room.Id,
+			TotalViewsAllTime:   150,
+			TotalViewsThisMonth: 45,
+			CurrentViewers:      7,
+			PeakViewers:         12,
+			PeakViewersAt:       time.Now().Add(-24 * time.Hour),
+			LastStreamAt:        time.Now().Add(-1 * time.Hour),
+			TotalStreamMinutes:  300,
+		}
+		vbolt.Write(tx, RoomAnalyticsBkt, room.Id, &analytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Unauthenticated request
+	t.Run("Unauthenticated", func(t *testing.T) {
+		var resp GetRoomAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: ""}
+			req := GetRoomAnalyticsRequest{RoomId: room.Id}
+			resp, _ = GetRoomAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for unauthenticated request")
+		}
+		if resp.Error != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 2: Invalid room ID
+	t.Run("InvalidRoomId", func(t *testing.T) {
+		token, err := createTestToken(ownerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetRoomAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetRoomAnalyticsRequest{RoomId: -1}
+			resp, _ = GetRoomAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for invalid room ID")
+		}
+		if resp.Error != "Invalid room ID" {
+			t.Errorf("Expected 'Invalid room ID' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 3: Room not found
+	t.Run("RoomNotFound", func(t *testing.T) {
+		token, err := createTestToken(ownerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetRoomAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetRoomAnalyticsRequest{RoomId: 99999}
+			resp, _ = GetRoomAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure when room not found")
+		}
+		if resp.Error != "Room not found" {
+			t.Errorf("Expected 'Room not found' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 4: Access denied (non-member)
+	t.Run("AccessDenied", func(t *testing.T) {
+		token, err := createTestToken(nonMemberUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetRoomAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetRoomAnalyticsRequest{RoomId: room.Id}
+			resp, _ = GetRoomAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for non-member access")
+		}
+		if resp.Error != "Access denied" {
+			t.Errorf("Expected 'Access denied' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 5: Success - studio owner
+	t.Run("SuccessOwner", func(t *testing.T) {
+		token, err := createTestToken(ownerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetRoomAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetRoomAnalyticsRequest{RoomId: room.Id}
+			resp, _ = GetRoomAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.Analytics == nil {
+			t.Fatal("Expected analytics to be returned")
+		}
+		if resp.Analytics.RoomId != room.Id {
+			t.Errorf("Expected RoomId %d, got %d", room.Id, resp.Analytics.RoomId)
+		}
+		if resp.Analytics.CurrentViewers != 7 {
+			t.Errorf("Expected CurrentViewers 7, got %d", resp.Analytics.CurrentViewers)
+		}
+		if resp.Analytics.TotalViewsAllTime != 150 {
+			t.Errorf("Expected TotalViewsAllTime 150, got %d", resp.Analytics.TotalViewsAllTime)
+		}
+		if resp.Analytics.PeakViewers != 12 {
+			t.Errorf("Expected PeakViewers 12, got %d", resp.Analytics.PeakViewers)
+		}
+		if !resp.IsStreaming {
+			t.Errorf("Expected IsStreaming to be true")
+		}
+		if resp.RoomName != "Test Room" {
+			t.Errorf("Expected RoomName 'Test Room', got %s", resp.RoomName)
+		}
+	})
+
+	// Test 6: Success - viewer role
+	t.Run("SuccessViewer", func(t *testing.T) {
+		token, err := createTestToken(viewerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetRoomAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetRoomAnalyticsRequest{RoomId: room.Id}
+			resp, _ = GetRoomAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success for viewer role, got error: %s", resp.Error)
+		}
+		if resp.Analytics == nil {
+			t.Fatal("Expected analytics to be returned")
+		}
+	})
+
+	// Test 7: New room with no analytics
+	t.Run("NoAnalytics", func(t *testing.T) {
+		token, err := createTestToken(ownerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		// Create a new room without analytics
+		var newRoom Room
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			newRoom = Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: 2,
+				Name:       "New Room",
+				StreamKey:  "new-stream-key",
+				IsActive:   false,
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, newRoom.Id, &newRoom)
+			vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, newRoom.Id, studio.Id)
+			vbolt.TxCommit(tx)
+		})
+
+		var resp GetRoomAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetRoomAnalyticsRequest{RoomId: newRoom.Id}
+			resp, _ = GetRoomAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.Analytics == nil {
+			t.Fatal("Expected analytics to be returned")
+		}
+		if resp.Analytics.RoomId != newRoom.Id {
+			t.Errorf("Expected RoomId %d, got %d", newRoom.Id, resp.Analytics.RoomId)
+		}
+		if resp.Analytics.CurrentViewers != 0 {
+			t.Errorf("Expected CurrentViewers 0 for new room, got %d", resp.Analytics.CurrentViewers)
+		}
+	})
+}
+
+// TestGetStudioAnalytics tests the GetStudioAnalytics API procedure
+func TestGetStudioAnalytics(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	// Setup test data
+	var ownerUser, viewerUser, nonMemberUser User
+	var studio Studio
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create owner user
+		ownerUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Owner User",
+			Email:    "owner@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, ownerUser.Id, &ownerUser)
+		vbolt.Write(tx, EmailBkt, ownerUser.Email, &ownerUser.Id)
+
+		// Create viewer user
+		viewerUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Viewer User",
+			Email:    "viewer@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, viewerUser.Id, &viewerUser)
+		vbolt.Write(tx, EmailBkt, viewerUser.Email, &viewerUser.Id)
+
+		// Create non-member user
+		nonMemberUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Name:     "Non-Member User",
+			Email:    "nonmember@test.com",
+			Role:     RoleUser,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, nonMemberUser.Id, &nonMemberUser)
+		vbolt.Write(tx, EmailBkt, nonMemberUser.Email, &nonMemberUser.Id)
+
+		// Create studio
+		studio = Studio{
+			Id:          vbolt.NextIntId(tx, StudiosBkt),
+			Name:        "Test Studio",
+			Description: "A test studio",
+			MaxRooms:    5,
+			OwnerId:     ownerUser.Id,
+			Creation:    time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership for owner
+		ownerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		ownerMembership := StudioMembership{
+			UserId:   ownerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, ownerMembershipId, &ownerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, ownerMembershipId, ownerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, ownerMembershipId, studio.Id)
+
+		// Create studio membership for viewer
+		viewerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		viewerMembership := StudioMembership{
+			UserId:   viewerUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleViewer,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, viewerMembershipId, &viewerMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, viewerMembershipId, viewerUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, viewerMembershipId, studio.Id)
+
+		// Create multiple rooms with analytics
+		for i := 1; i <= 3; i++ {
+			room := Room{
+				Id:         vbolt.NextIntId(tx, RoomsBkt),
+				StudioId:   studio.Id,
+				RoomNumber: i,
+				Name:       "Room " + string(rune('0'+i)),
+				StreamKey:  "stream-key-" + string(rune('0'+i)),
+				IsActive:   i <= 2, // First 2 rooms are active
+				Creation:   time.Now(),
+			}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+			vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+			analytics := RoomAnalytics{
+				RoomId:              room.Id,
+				TotalViewsAllTime:   100 * i,
+				TotalViewsThisMonth: 30 * i,
+				CurrentViewers:      i * 2,
+				PeakViewers:         i * 5,
+				TotalStreamMinutes:  60 * i,
+			}
+			vbolt.Write(tx, RoomAnalyticsBkt, room.Id, &analytics)
+		}
+
+		// Create pre-aggregated studio analytics
+		studioAnalytics := StudioAnalytics{
+			StudioId:            studio.Id,
+			TotalViewsAllTime:   600,
+			TotalViewsThisMonth: 180,
+			CurrentViewers:      12,
+			TotalRooms:          3,
+			ActiveRooms:         2,
+			TotalStreamMinutes:  360,
+		}
+		vbolt.Write(tx, StudioAnalyticsBkt, studio.Id, &studioAnalytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Unauthenticated request
+	t.Run("Unauthenticated", func(t *testing.T) {
+		var resp GetStudioAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: ""}
+			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
+			resp, _ = GetStudioAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for unauthenticated request")
+		}
+		if resp.Error != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 2: Invalid studio ID
+	t.Run("InvalidStudioId", func(t *testing.T) {
+		token, err := createTestToken(ownerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetStudioAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetStudioAnalyticsRequest{StudioId: -1}
+			resp, _ = GetStudioAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for invalid studio ID")
+		}
+		if resp.Error != "Invalid studio ID" {
+			t.Errorf("Expected 'Invalid studio ID' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 3: Access denied (non-member)
+	t.Run("AccessDenied", func(t *testing.T) {
+		token, err := createTestToken(nonMemberUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetStudioAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
+			resp, _ = GetStudioAnalytics(ctx, req)
+		})
+
+		if resp.Success {
+			t.Errorf("Expected failure for non-member access")
+		}
+		if resp.Error != "Access denied" {
+			t.Errorf("Expected 'Access denied' error, got: %s", resp.Error)
+		}
+	})
+
+	// Test 4: Success - studio owner
+	t.Run("SuccessOwner", func(t *testing.T) {
+		token, err := createTestToken(ownerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetStudioAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
+			resp, _ = GetStudioAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.Analytics == nil {
+			t.Fatal("Expected analytics to be returned")
+		}
+		if resp.Analytics.StudioId != studio.Id {
+			t.Errorf("Expected StudioId %d, got %d", studio.Id, resp.Analytics.StudioId)
+		}
+		if resp.Analytics.TotalRooms != 3 {
+			t.Errorf("Expected TotalRooms 3, got %d", resp.Analytics.TotalRooms)
+		}
+		if resp.Analytics.ActiveRooms != 2 {
+			t.Errorf("Expected ActiveRooms 2, got %d", resp.Analytics.ActiveRooms)
+		}
+		if resp.StudioName != "Test Studio" {
+			t.Errorf("Expected StudioName 'Test Studio', got %s", resp.StudioName)
+		}
+	})
+
+	// Test 5: Success - viewer role
+	t.Run("SuccessViewer", func(t *testing.T) {
+		token, err := createTestToken(viewerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		var resp GetStudioAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
+			resp, _ = GetStudioAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success for viewer role, got error: %s", resp.Error)
+		}
+		if resp.Analytics == nil {
+			t.Fatal("Expected analytics to be returned")
+		}
+	})
+
+	// Test 6: New studio with no analytics (auto-aggregation)
+	t.Run("NoAnalyticsAutoAggregate", func(t *testing.T) {
+		token, err := createTestToken(ownerUser.Id)
+		if err != nil {
+			t.Fatalf("Failed to create test token: %v", err)
+		}
+
+		// Create a new studio
+		var newStudio Studio
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			newStudio = Studio{
+				Id:          vbolt.NextIntId(tx, StudiosBkt),
+				Name:        "New Studio",
+				Description: "A new studio",
+				MaxRooms:    5,
+				OwnerId:     ownerUser.Id,
+				Creation:    time.Now(),
+			}
+			vbolt.Write(tx, StudiosBkt, newStudio.Id, &newStudio)
+
+			// Create studio membership for owner
+			newOwnerMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+			newOwnerMembership := StudioMembership{
+				UserId:   ownerUser.Id,
+				StudioId: newStudio.Id,
+				Role:     StudioRoleOwner,
+				JoinedAt: time.Now(),
+			}
+			vbolt.Write(tx, MembershipBkt, newOwnerMembershipId, &newOwnerMembership)
+			vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, newOwnerMembershipId, ownerUser.Id)
+			vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, newOwnerMembershipId, newStudio.Id)
+
+			vbolt.TxCommit(tx)
+		})
+
+		var resp GetStudioAnalyticsResponse
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			ctx := &vbeam.Context{Tx: tx, Token: token}
+			req := GetStudioAnalyticsRequest{StudioId: newStudio.Id}
+			resp, _ = GetStudioAnalytics(ctx, req)
+		})
+
+		if !resp.Success {
+			t.Errorf("Expected success, got error: %s", resp.Error)
+		}
+		if resp.Analytics == nil {
+			t.Fatal("Expected analytics to be returned")
+		}
+		if resp.Analytics.StudioId != newStudio.Id {
+			t.Errorf("Expected StudioId %d, got %d", newStudio.Id, resp.Analytics.StudioId)
+		}
+		if resp.Analytics.TotalRooms != 0 {
+			t.Errorf("Expected TotalRooms 0 for new studio, got %d", resp.Analytics.TotalRooms)
 		}
 	})
 }

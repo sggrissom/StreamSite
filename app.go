@@ -50,6 +50,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.RegisterStudioMethods(app)
 	backend.RegisterStudioMembershipMethods(app)
 	backend.RegisterCodeAccessMethods(app)
+	backend.RegisterAnalyticsMethods(app)
 	backend.RegisterStreamProxy(app)
 	backend.RegisterRoomStreamProxy(app)
 

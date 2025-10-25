@@ -4,6 +4,7 @@ import (
 	"stream/cfg"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 	"go.hasen.dev/vpack"
 )
@@ -230,4 +231,130 @@ func RecordStreamStop(db *vbolt.DB, roomId int, studioId int) {
 
 		vbolt.TxCommit(tx)
 	})
+}
+
+// API Procedures
+
+type GetRoomAnalyticsRequest struct {
+	RoomId int `json:"roomId"`
+}
+
+type GetRoomAnalyticsResponse struct {
+	Success     bool           `json:"success"`
+	Error       string         `json:"error,omitempty"`
+	Analytics   *RoomAnalytics `json:"analytics,omitempty"`
+	IsStreaming bool           `json:"isStreaming"`
+	RoomName    string         `json:"roomName"`
+}
+
+func GetRoomAnalytics(ctx *vbeam.Context, req GetRoomAnalyticsRequest) (resp GetRoomAnalyticsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Validate room ID
+	if req.RoomId <= 0 {
+		resp.Success = false
+		resp.Error = "Invalid room ID"
+		return
+	}
+
+	// Get room
+	room := GetRoom(ctx.Tx, req.RoomId)
+	if room.Id == 0 {
+		resp.Success = false
+		resp.Error = "Room not found"
+		return
+	}
+
+	// Check studio access (requires at least viewer role)
+	access := CheckStudioAccess(ctx.Tx, caller, room.StudioId)
+	if !access.Allowed {
+		resp.Success = false
+		resp.Error = "Access denied"
+		return
+	}
+
+	// Load analytics
+	var analytics RoomAnalytics
+	vbolt.Read(ctx.Tx, RoomAnalyticsBkt, req.RoomId, &analytics)
+
+	// Initialize if not found
+	if analytics.RoomId == 0 {
+		analytics.RoomId = req.RoomId
+	}
+
+	resp.Success = true
+	resp.Analytics = &analytics
+	resp.IsStreaming = room.IsActive
+	resp.RoomName = room.Name
+	return
+}
+
+type GetStudioAnalyticsRequest struct {
+	StudioId int `json:"studioId"`
+}
+
+type GetStudioAnalyticsResponse struct {
+	Success    bool             `json:"success"`
+	Error      string           `json:"error,omitempty"`
+	Analytics  *StudioAnalytics `json:"analytics,omitempty"`
+	StudioName string           `json:"studioName"`
+}
+
+func GetStudioAnalytics(ctx *vbeam.Context, req GetStudioAnalyticsRequest) (resp GetStudioAnalyticsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		resp.Success = false
+		resp.Error = "Authentication required"
+		return
+	}
+
+	// Validate studio ID
+	if req.StudioId <= 0 {
+		resp.Success = false
+		resp.Error = "Invalid studio ID"
+		return
+	}
+
+	// Check studio access (requires at least viewer role)
+	access := CheckStudioAccess(ctx.Tx, caller, req.StudioId)
+	if !access.Allowed {
+		resp.Success = false
+		resp.Error = "Access denied"
+		return
+	}
+
+	// Get studio
+	studio := GetStudioById(ctx.Tx, req.StudioId)
+	if studio.Id == 0 {
+		resp.Success = false
+		resp.Error = "Studio not found"
+		return
+	}
+
+	// Load studio analytics
+	var analytics StudioAnalytics
+	vbolt.Read(ctx.Tx, StudioAnalyticsBkt, req.StudioId, &analytics)
+
+	// Initialize if not found
+	if analytics.StudioId == 0 {
+		analytics.StudioId = req.StudioId
+	}
+
+	resp.Success = true
+	resp.Analytics = &analytics
+	resp.StudioName = studio.Name
+	return
+}
+
+// RegisterAnalyticsMethods registers all analytics-related API procedures
+func RegisterAnalyticsMethods(app *vbeam.Application) {
+	vbeam.RegisterProc(app, GetRoomAnalytics)
+	vbeam.RegisterProc(app, GetStudioAnalytics)
 }
