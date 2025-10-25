@@ -307,6 +307,7 @@ type ViewAnalyticsModal = {
   roomId: number;
   roomName: string;
   analytics: server.GetRoomAnalyticsResponse | null;
+  refreshInterval: number | null;
 };
 
 const useViewAnalyticsModal = vlens.declareHook(
@@ -317,8 +318,24 @@ const useViewAnalyticsModal = vlens.declareHook(
     roomId: 0,
     roomName: "",
     analytics: null,
+    refreshInterval: null,
   }),
 );
+
+async function refreshAnalytics(modal: ViewAnalyticsModal) {
+  if (!modal.roomId) return;
+
+  const [resp, err] = await server.GetRoomAnalytics({ roomId: modal.roomId });
+
+  if (err || !resp || !resp.success) {
+    modal.error = resp?.error || err || "Failed to refresh analytics";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  modal.analytics = resp;
+  vlens.scheduleRedraw();
+}
 
 async function openAnalyticsModal(
   modal: ViewAnalyticsModal,
@@ -344,12 +361,24 @@ async function openAnalyticsModal(
 
   modal.analytics = resp;
   vlens.scheduleRedraw();
+
+  // Start auto-refresh every 30 seconds
+  modal.refreshInterval = window.setInterval(() => {
+    refreshAnalytics(modal);
+  }, 30000);
 }
 
 function closeAnalyticsModal(modal: ViewAnalyticsModal) {
   modal.isOpen = false;
   modal.error = "";
   modal.analytics = null;
+
+  // Clear auto-refresh interval
+  if (modal.refreshInterval !== null) {
+    clearInterval(modal.refreshInterval);
+    modal.refreshInterval = null;
+  }
+
   vlens.scheduleRedraw();
 }
 
