@@ -204,6 +204,9 @@ func RecordStreamStart(db *vbolt.DB, roomId int, studioId int) {
 		analytics.StreamStartedAt = time.Now()
 
 		vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
+
+		UpdateStudioAnalyticsFromRoom(tx, studioId)
+
 		vbolt.TxCommit(tx)
 	})
 }
