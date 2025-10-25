@@ -65,3 +65,169 @@ var RoomAnalyticsBkt = vbolt.Bucket(&cfg.Info, "room_analytics", vpack.FInt, Pac
 
 // StudioAnalyticsBkt: studioId (int) -> StudioAnalytics
 var StudioAnalyticsBkt = vbolt.Bucket(&cfg.Info, "studio_analytics", vpack.FInt, PackStudioAnalytics)
+
+// Helper functions for analytics tracking
+
+func IncrementRoomViewerCount(db *vbolt.DB, roomId int) {
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Get room to find studioId
+		room := GetRoom(tx, roomId)
+		if room.Id == 0 {
+			return
+		}
+
+		// Load or create room analytics
+		var analytics RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, roomId, &analytics)
+		if analytics.RoomId == 0 {
+			analytics.RoomId = roomId
+		}
+
+		// Increment counters
+		analytics.CurrentViewers++
+		analytics.TotalViewsAllTime++
+		analytics.TotalViewsThisMonth++
+
+		// Update peak if necessary
+		if analytics.CurrentViewers > analytics.PeakViewers {
+			analytics.PeakViewers = analytics.CurrentViewers
+			analytics.PeakViewersAt = time.Now()
+		}
+
+		// Save
+		vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
+
+		incrementStudioViewerCount(tx, room.StudioId)
+
+		vbolt.TxCommit(tx)
+	})
+}
+
+func DecrementRoomViewerCount(db *vbolt.DB, roomId int) {
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		room := GetRoom(tx, roomId)
+		if room.Id == 0 {
+			return
+		}
+
+		// Load room analytics
+		var analytics RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, roomId, &analytics)
+		if analytics.RoomId == 0 {
+			return
+		}
+
+		if analytics.CurrentViewers > 0 {
+			analytics.CurrentViewers--
+		}
+
+		// Save
+		vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
+
+		decrementStudioViewerCount(tx, room.StudioId)
+
+		vbolt.TxCommit(tx)
+	})
+}
+
+func UpdateStudioAnalyticsFromRoom(tx *vbolt.Tx, studioId int) {
+	// Get all rooms in studio
+	rooms := ListStudioRooms(tx, studioId)
+
+	// Aggregate stats
+	var studioAnalytics StudioAnalytics
+	studioAnalytics.StudioId = studioId
+	studioAnalytics.TotalRooms = len(rooms)
+
+	for _, room := range rooms {
+		// Load room analytics
+		var roomAnalytics RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, room.Id, &roomAnalytics)
+
+		// Aggregate
+		studioAnalytics.TotalViewsAllTime += roomAnalytics.TotalViewsAllTime
+		studioAnalytics.TotalViewsThisMonth += roomAnalytics.TotalViewsThisMonth
+		studioAnalytics.CurrentViewers += roomAnalytics.CurrentViewers
+		studioAnalytics.TotalStreamMinutes += roomAnalytics.TotalStreamMinutes
+
+		// Count active rooms
+		if room.IsActive {
+			studioAnalytics.ActiveRooms++
+		}
+	}
+
+	// Save
+	vbolt.Write(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
+}
+
+func incrementStudioViewerCount(tx *vbolt.Tx, studioId int) {
+	var studioAnalytics StudioAnalytics
+	vbolt.Read(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
+
+	// Initialize if first viewer
+	if studioAnalytics.StudioId == 0 {
+		studioAnalytics.StudioId = studioId
+	}
+
+	// Increment viewer counts
+	studioAnalytics.CurrentViewers++
+	studioAnalytics.TotalViewsAllTime++
+	studioAnalytics.TotalViewsThisMonth++
+
+	vbolt.Write(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
+}
+
+func decrementStudioViewerCount(tx *vbolt.Tx, studioId int) {
+	var studioAnalytics StudioAnalytics
+	vbolt.Read(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
+
+	if studioAnalytics.StudioId == 0 {
+		return
+	}
+
+	if studioAnalytics.CurrentViewers > 0 {
+		studioAnalytics.CurrentViewers--
+	}
+
+	vbolt.Write(tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
+}
+
+func RecordStreamStart(db *vbolt.DB, roomId int, studioId int) {
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		var analytics RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, roomId, &analytics)
+		if analytics.RoomId == 0 {
+			analytics.RoomId = roomId
+		}
+
+		analytics.StreamStartedAt = time.Now()
+
+		vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
+		vbolt.TxCommit(tx)
+	})
+}
+
+func RecordStreamStop(db *vbolt.DB, roomId int, studioId int) {
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		var analytics RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, roomId, &analytics)
+		if analytics.RoomId == 0 {
+			return
+		}
+
+		// Calculate duration if stream was started
+		if !analytics.StreamStartedAt.IsZero() {
+			duration := time.Since(analytics.StreamStartedAt)
+			analytics.TotalStreamMinutes += int(duration.Minutes())
+		}
+
+		analytics.LastStreamAt = time.Now()
+		analytics.StreamStartedAt = time.Time{} // Reset to zero
+
+		vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
+
+		UpdateStudioAnalyticsFromRoom(tx, studioId)
+
+		vbolt.TxCommit(tx)
+	})
+}
