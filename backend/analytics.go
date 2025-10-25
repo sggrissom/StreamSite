@@ -358,3 +358,83 @@ func RegisterAnalyticsMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, GetRoomAnalytics)
 	vbeam.RegisterProc(app, GetStudioAnalytics)
 }
+
+// Background Jobs
+
+var lastResetMonth = time.Now().Month()
+var lastResetYear = time.Now().Year()
+
+// ResetMonthlyAnalytics resets the TotalViewsThisMonth counter for all rooms and studios
+// Should be called on the first day of each month
+func ResetMonthlyAnalytics(db *vbolt.DB) int {
+	resetCount := 0
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Reset room analytics
+		vbolt.IterateAll(tx, RoomAnalyticsBkt, func(roomId int, analytics RoomAnalytics) bool {
+			if analytics.TotalViewsThisMonth > 0 {
+				analytics.TotalViewsThisMonth = 0
+				vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
+				resetCount++
+			}
+			return true // continue iteration
+		})
+
+		// Reset studio analytics
+		vbolt.IterateAll(tx, StudioAnalyticsBkt, func(studioId int, analytics StudioAnalytics) bool {
+			if analytics.TotalViewsThisMonth > 0 {
+				analytics.TotalViewsThisMonth = 0
+				vbolt.Write(tx, StudioAnalyticsBkt, studioId, &analytics)
+				resetCount++
+			}
+			return true // continue iteration
+		})
+
+		vbolt.TxCommit(tx)
+	})
+
+	LogInfo(LogCategorySystem, "Monthly analytics reset completed", map[string]interface{}{
+		"resetCount": resetCount,
+	})
+
+	return resetCount
+}
+
+// StartMonthlyAnalyticsReset starts a background goroutine that checks daily
+// and resets monthly analytics counters on the first day of each month
+func StartMonthlyAnalyticsReset(db *vbolt.DB) {
+	LogInfo(LogCategorySystem, "Starting monthly analytics reset job", map[string]interface{}{
+		"frequency": "daily check",
+	})
+
+	go func() {
+		// Check immediately on startup
+		now := time.Now()
+		currentMonth := now.Month()
+		currentYear := now.Year()
+
+		// Reset if we're in a new month
+		if currentMonth != lastResetMonth || currentYear != lastResetYear {
+			ResetMonthlyAnalytics(db)
+			lastResetMonth = currentMonth
+			lastResetYear = currentYear
+		}
+
+		// Then check daily
+		ticker := time.NewTicker(24 * time.Hour)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			now = time.Now()
+			currentMonth = now.Month()
+			currentYear = now.Year()
+
+			// Reset on month change
+			if currentMonth != lastResetMonth || currentYear != lastResetYear {
+				ResetMonthlyAnalytics(db)
+				lastResetMonth = currentMonth
+				lastResetYear = currentYear
+			}
+		}
+	}()
+}

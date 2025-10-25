@@ -41,6 +41,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.StartCodeSessionCleanup(db)
 	backend.StartOldCodeCleanup(db)
 	backend.StartExpiredCodeHandler(db)
+	backend.StartMonthlyAnalyticsReset(db)
 
 	var app = vbeam.NewApplication("Stream", db)
 

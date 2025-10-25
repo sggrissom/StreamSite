@@ -1071,3 +1071,218 @@ func TestGetStudioAnalytics(t *testing.T) {
 		}
 	})
 }
+
+// TestResetMonthlyAnalytics tests the monthly reset functionality
+func TestResetMonthlyAnalytics(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create studio with rooms
+		studio := Studio{Id: 1, Name: "Test Studio", OwnerId: 100, Creation: time.Now()}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create 3 rooms with analytics
+		for i := 1; i <= 3; i++ {
+			room := Room{Id: i, StudioId: 1, Name: "Room", Creation: time.Now()}
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+			vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+			analytics := RoomAnalytics{
+				RoomId:              i,
+				TotalViewsAllTime:   1000 + i*100,
+				TotalViewsThisMonth: 100 + i*10,
+				CurrentViewers:      i,
+				PeakViewers:         i * 5,
+				TotalStreamMinutes:  i * 60,
+			}
+			vbolt.Write(tx, RoomAnalyticsBkt, i, &analytics)
+		}
+
+		// Create studio analytics
+		studioAnalytics := StudioAnalytics{
+			StudioId:            1,
+			TotalViewsAllTime:   3600,
+			TotalViewsThisMonth: 360,
+			CurrentViewers:      6,
+			TotalRooms:          3,
+			TotalStreamMinutes:  360,
+		}
+		vbolt.Write(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Run the monthly reset
+	resetCount := ResetMonthlyAnalytics(db)
+
+	// Verify reset count (3 rooms + 1 studio)
+	if resetCount != 4 {
+		t.Errorf("Expected resetCount 4, got %d", resetCount)
+	}
+
+	// Verify room analytics were reset
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		for i := 1; i <= 3; i++ {
+			var analytics RoomAnalytics
+			vbolt.Read(tx, RoomAnalyticsBkt, i, &analytics)
+
+			if analytics.TotalViewsThisMonth != 0 {
+				t.Errorf("Room %d: Expected TotalViewsThisMonth 0, got %d", i, analytics.TotalViewsThisMonth)
+			}
+
+			// Verify other fields were not reset
+			expectedAllTime := 1000 + i*100
+			if analytics.TotalViewsAllTime != expectedAllTime {
+				t.Errorf("Room %d: TotalViewsAllTime should remain %d, got %d", i, expectedAllTime, analytics.TotalViewsAllTime)
+			}
+			if analytics.CurrentViewers != i {
+				t.Errorf("Room %d: CurrentViewers should remain %d, got %d", i, i, analytics.CurrentViewers)
+			}
+		}
+
+		// Verify studio analytics were reset
+		var studioAnalytics StudioAnalytics
+		vbolt.Read(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+
+		if studioAnalytics.TotalViewsThisMonth != 0 {
+			t.Errorf("Studio: Expected TotalViewsThisMonth 0, got %d", studioAnalytics.TotalViewsThisMonth)
+		}
+
+		// Verify other fields were not reset
+		if studioAnalytics.TotalViewsAllTime != 3600 {
+			t.Errorf("Studio: TotalViewsAllTime should remain 3600, got %d", studioAnalytics.TotalViewsAllTime)
+		}
+		if studioAnalytics.CurrentViewers != 6 {
+			t.Errorf("Studio: CurrentViewers should remain 6, got %d", studioAnalytics.CurrentViewers)
+		}
+	})
+}
+
+// TestResetMonthlyAnalyticsEmptyDB tests reset with no data
+func TestResetMonthlyAnalyticsEmptyDB(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	// Run reset on empty database
+	resetCount := ResetMonthlyAnalytics(db)
+
+	if resetCount != 0 {
+		t.Errorf("Expected resetCount 0 for empty DB, got %d", resetCount)
+	}
+}
+
+// TestResetMonthlyAnalyticsAlreadyZero tests reset when counters are already zero
+func TestResetMonthlyAnalyticsAlreadyZero(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create studio
+		studio := Studio{Id: 1, Name: "Test Studio", OwnerId: 100, Creation: time.Now()}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create room with TotalViewsThisMonth already at 0
+		room := Room{Id: 1, StudioId: 1, Name: "Room", Creation: time.Now()}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+
+		analytics := RoomAnalytics{
+			RoomId:              1,
+			TotalViewsAllTime:   500,
+			TotalViewsThisMonth: 0, // Already zero
+			CurrentViewers:      3,
+		}
+		vbolt.Write(tx, RoomAnalyticsBkt, 1, &analytics)
+
+		// Studio analytics also at zero
+		studioAnalytics := StudioAnalytics{
+			StudioId:            1,
+			TotalViewsAllTime:   500,
+			TotalViewsThisMonth: 0, // Already zero
+			CurrentViewers:      3,
+		}
+		vbolt.Write(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Run reset - should skip already-zero entries
+	resetCount := ResetMonthlyAnalytics(db)
+
+	if resetCount != 0 {
+		t.Errorf("Expected resetCount 0 when counters already zero, got %d", resetCount)
+	}
+}
+
+// TestResetMonthlyAnalyticsPartialData tests reset with mixed data
+func TestResetMonthlyAnalyticsPartialData(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create studio
+		studio := Studio{Id: 1, Name: "Test Studio", OwnerId: 100, Creation: time.Now()}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Room 1: Has monthly views
+		room1 := Room{Id: 1, StudioId: 1, Name: "Room 1", Creation: time.Now()}
+		vbolt.Write(tx, RoomsBkt, room1.Id, &room1)
+		analytics1 := RoomAnalytics{
+			RoomId:              1,
+			TotalViewsAllTime:   500,
+			TotalViewsThisMonth: 50,
+			CurrentViewers:      2,
+		}
+		vbolt.Write(tx, RoomAnalyticsBkt, 1, &analytics1)
+
+		// Room 2: Already zero
+		room2 := Room{Id: 2, StudioId: 1, Name: "Room 2", Creation: time.Now()}
+		vbolt.Write(tx, RoomsBkt, room2.Id, &room2)
+		analytics2 := RoomAnalytics{
+			RoomId:              2,
+			TotalViewsAllTime:   300,
+			TotalViewsThisMonth: 0,
+			CurrentViewers:      1,
+		}
+		vbolt.Write(tx, RoomAnalyticsBkt, 2, &analytics2)
+
+		// Studio: Has monthly views
+		studioAnalytics := StudioAnalytics{
+			StudioId:            1,
+			TotalViewsAllTime:   800,
+			TotalViewsThisMonth: 50,
+			CurrentViewers:      3,
+		}
+		vbolt.Write(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Run reset - should only reset room1 and studio (2 resets)
+	resetCount := ResetMonthlyAnalytics(db)
+
+	if resetCount != 2 {
+		t.Errorf("Expected resetCount 2 (room1 + studio), got %d", resetCount)
+	}
+
+	// Verify
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		var analytics1 RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, 1, &analytics1)
+		if analytics1.TotalViewsThisMonth != 0 {
+			t.Errorf("Room 1: Expected TotalViewsThisMonth 0, got %d", analytics1.TotalViewsThisMonth)
+		}
+
+		var analytics2 RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, 2, &analytics2)
+		if analytics2.TotalViewsThisMonth != 0 {
+			t.Errorf("Room 2: Expected TotalViewsThisMonth 0, got %d", analytics2.TotalViewsThisMonth)
+		}
+
+		var studioAnalytics StudioAnalytics
+		vbolt.Read(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+		if studioAnalytics.TotalViewsThisMonth != 0 {
+			t.Errorf("Studio: Expected TotalViewsThisMonth 0, got %d", studioAnalytics.TotalViewsThisMonth)
+		}
+	})
+}
