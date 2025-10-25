@@ -4,6 +4,7 @@ import { Header, Footer } from "../../layout";
 import { StudioHeader } from "./components/StudioHeader";
 import { RoomsSection } from "./components/RoomsSection";
 import { ActiveCodesList } from "./components/ActiveCodesList";
+import { StudioAnalyticsSection } from "./components/StudioAnalyticsSection";
 import { MembersSection } from "./components/MembersSection";
 import "../../styles/global";
 import "./studio-styles";
@@ -98,6 +99,12 @@ export function view(
               rooms={rooms}
             />
           )}
+
+          {/* Studio Analytics Section - visible to all members */}
+          <StudioAnalyticsSection
+            studioId={studio.id}
+            studioName={studio.name}
+          />
 
           {/* Members Section with all member management */}
           <MembersSection
