@@ -2,6 +2,7 @@ package backend
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"stream/cfg"
@@ -1019,4 +1020,317 @@ func TestViewerCountTracking(t *testing.T) {
 			t.Errorf("Expected 0 viewers for code (JWT users shouldn't count), got %d", viewers)
 		}
 	})
+}
+
+// TestSSEConnectionIncrementsAnalytics verifies that SSE connections increment room analytics
+func TestSSEConnectionIncrementsAnalytics(t *testing.T) {
+	db := setupTestSSEDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create user, studio, membership, and room
+	var testUser User
+	var testRoom Room
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create user
+		testUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Email:    "test@example.com",
+			Name:     "Test User",
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
+		vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  testUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership
+		membershipId := vbolt.NextIntId(tx, MembershipBkt)
+		membership := StudioMembership{
+			UserId:   testUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, testUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studio.Id)
+
+		// Create room
+		testRoom = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-key",
+			IsActive:   true,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, testRoom.Id, &testRoom)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, testRoom.Id, studio.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Generate JWT token
+	testToken, err := createTestToken(testUser.Id)
+	if err != nil {
+		t.Fatalf("Failed to generate JWT: %v", err)
+	}
+
+	// Create SSE handler
+	handler := MakeStreamRoomEventsHandler(db)
+
+	// Create SSE request
+	req := httptest.NewRequest("GET", "/sse/room?roomId="+fmt.Sprint(testRoom.Id), nil)
+	req.AddCookie(&http.Cookie{
+		Name:  "authToken",
+		Value: testToken,
+	})
+
+	// Create a context that we can cancel
+	ctx, cancel := context.WithCancel(context.Background())
+	req = req.WithContext(ctx)
+
+	// Verify analytics before connection
+	var analyticsBefore RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, testRoom.Id, &analyticsBefore)
+	})
+
+	if analyticsBefore.CurrentViewers != 0 {
+		t.Errorf("Expected 0 viewers before connection, got %d", analyticsBefore.CurrentViewers)
+	}
+
+	// Start SSE connection in a goroutine
+	done := make(chan bool)
+	go func() {
+		w := httptest.NewRecorder()
+		handler(w, req)
+		done <- true
+	}()
+
+	// Give it a moment to connect
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify analytics after connection
+	var analyticsAfter RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, testRoom.Id, &analyticsAfter)
+	})
+
+	if analyticsAfter.CurrentViewers != 1 {
+		t.Errorf("Expected 1 viewer after connection, got %d", analyticsAfter.CurrentViewers)
+	}
+	if analyticsAfter.TotalViewsAllTime != 1 {
+		t.Errorf("Expected 1 total view, got %d", analyticsAfter.TotalViewsAllTime)
+	}
+	if analyticsAfter.PeakViewers != 1 {
+		t.Errorf("Expected peak of 1, got %d", analyticsAfter.PeakViewers)
+	}
+
+	// Cancel the context to disconnect
+	cancel()
+
+	// Wait for handler to finish
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE handler did not finish in time")
+	}
+
+	// Give it a moment to clean up
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify analytics after disconnection
+	var analyticsDisconnected RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, testRoom.Id, &analyticsDisconnected)
+	})
+
+	if analyticsDisconnected.CurrentViewers != 0 {
+		t.Errorf("Expected 0 viewers after disconnect, got %d", analyticsDisconnected.CurrentViewers)
+	}
+	if analyticsDisconnected.TotalViewsAllTime != 1 {
+		t.Errorf("Total views should stay at 1, got %d", analyticsDisconnected.TotalViewsAllTime)
+	}
+	if analyticsDisconnected.PeakViewers != 1 {
+		t.Errorf("Peak should stay at 1, got %d", analyticsDisconnected.PeakViewers)
+	}
+}
+
+// TestSSEPeakViewersTracking verifies that peak viewer count is tracked correctly
+func TestSSEPeakViewersTracking(t *testing.T) {
+	db := setupTestSSEDB(t)
+	defer db.Close()
+
+	// Save original appDb and jwtKey
+	originalDb := appDb
+	originalKey := jwtKey
+	appDb = db
+	jwtKey = []byte("test-secret-key-for-jwt-testing")
+	defer func() {
+		appDb = originalDb
+		jwtKey = originalKey
+	}()
+
+	// Create user, studio, membership, and room
+	var testUser User
+	var testRoom Room
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create user
+		testUser = User{
+			Id:       vbolt.NextIntId(tx, UsersBkt),
+			Email:    "test@example.com",
+			Name:     "Test User",
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, UsersBkt, testUser.Id, &testUser)
+		vbolt.Write(tx, EmailBkt, testUser.Email, &testUser.Id)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  testUser.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Create studio membership
+		membershipId := vbolt.NextIntId(tx, MembershipBkt)
+		membership := StudioMembership{
+			UserId:   testUser.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleOwner,
+			JoinedAt: time.Now(),
+		}
+		vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, testUser.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studio.Id)
+
+		// Create room
+		testRoom = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-key",
+			IsActive:   true,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, testRoom.Id, &testRoom)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, testRoom.Id, studio.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Generate JWT token
+	testToken, err := createTestToken(testUser.Id)
+	if err != nil {
+		t.Fatalf("Failed to generate JWT: %v", err)
+	}
+
+	// Create SSE handler
+	handler := MakeStreamRoomEventsHandler(db)
+
+	// Connect 3 viewers
+	contexts := make([]context.CancelFunc, 3)
+	dones := make([]chan bool, 3)
+
+	for i := 0; i < 3; i++ {
+		// Create SSE request
+		req := httptest.NewRequest("GET", "/sse/room?roomId="+fmt.Sprint(testRoom.Id), nil)
+		req.AddCookie(&http.Cookie{
+			Name:  "authToken",
+			Value: testToken,
+		})
+
+		// Create a context that we can cancel
+		ctx, cancel := context.WithCancel(context.Background())
+		contexts[i] = cancel
+		req = req.WithContext(ctx)
+
+		// Start SSE connection in a goroutine
+		done := make(chan bool)
+		dones[i] = done
+		go func(d chan bool) {
+			w := httptest.NewRecorder()
+			handler(w, req)
+			d <- true
+		}(done)
+
+		// Give it a moment to connect
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	// Verify peak is 3
+	var analytics RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, testRoom.Id, &analytics)
+	})
+
+	if analytics.CurrentViewers != 3 {
+		t.Errorf("Expected 3 current viewers, got %d", analytics.CurrentViewers)
+	}
+	if analytics.PeakViewers != 3 {
+		t.Errorf("Expected peak of 3, got %d", analytics.PeakViewers)
+	}
+
+	// Disconnect 2 viewers
+	for i := 0; i < 2; i++ {
+		contexts[i]()
+	}
+
+	// Wait for handlers to finish
+	for i := 0; i < 2; i++ {
+		select {
+		case <-dones[i]:
+		case <-time.After(2 * time.Second):
+			t.Fatal("SSE handler did not finish in time")
+		}
+	}
+
+	// Give it a moment to clean up
+	time.Sleep(100 * time.Millisecond)
+
+	// Verify current is 1 but peak stays at 3
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, testRoom.Id, &analytics)
+	})
+
+	if analytics.CurrentViewers != 1 {
+		t.Errorf("Expected 1 current viewer, got %d", analytics.CurrentViewers)
+	}
+	if analytics.PeakViewers != 3 {
+		t.Errorf("Peak should stay at 3, got %d", analytics.PeakViewers)
+	}
+
+	// Disconnect last viewer
+	contexts[2]()
+	select {
+	case <-dones[2]:
+	case <-time.After(2 * time.Second):
+		t.Fatal("SSE handler did not finish in time")
+	}
 }

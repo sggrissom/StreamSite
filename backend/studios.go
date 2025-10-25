@@ -1427,6 +1427,8 @@ func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthRes
 	vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
 	vbolt.TxCommit(ctx.Tx)
 
+	RecordStreamStart(appDb, room.Id, room.StudioId)
+
 	// Broadcast SSE update to all connected viewers
 	sseManager.BroadcastRoomStatus(room.Id, true)
 
@@ -1457,6 +1459,8 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 		room.IsActive = false
 		vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
 		vbolt.TxCommit(ctx.Tx)
+
+		RecordStreamStop(appDb, room.Id, room.StudioId)
 
 		// Broadcast SSE update to all connected viewers
 		sseManager.BroadcastRoomStatus(room.Id, false)

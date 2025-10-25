@@ -334,11 +334,15 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 
 		// Register client
 		sseManager.AddClient(roomID, client)
+
+		IncrementRoomViewerCount(db, roomID)
+
 		defer func() {
 			// Decrement viewer count for code sessions on disconnect
 			if client.SessionToken != "" {
 				DecrementCodeViewerCount(db, client.SessionToken)
 			}
+			DecrementRoomViewerCount(db, roomID)
 			sseManager.RemoveClient(roomID, client)
 		}()
 

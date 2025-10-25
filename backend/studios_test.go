@@ -1,10 +1,12 @@
 package backend
 
 import (
+	"fmt"
 	"stream/cfg"
 	"testing"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 )
 
@@ -2371,4 +2373,272 @@ func TestGetStudioDashboardIncludesMembers(t *testing.T) {
 			}
 		}
 	})
+}
+
+// TestValidateStreamKeyRecordsStreamStart verifies that ValidateStreamKey records stream start in analytics
+func TestValidateStreamKeyRecordsStreamStart(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Save original appDb
+	originalDb := appDb
+	appDb = db
+	defer func() {
+		appDb = originalDb
+	}()
+
+	// Create studio and room
+	var room Room
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  1,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key-12345",
+			IsActive:   false,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, room.StreamKey, &room.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Verify analytics before stream starts
+	var analyticsBefore RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, room.Id, &analyticsBefore)
+	})
+
+	if !analyticsBefore.StreamStartedAt.IsZero() {
+		t.Error("StreamStartedAt should be zero before stream starts")
+	}
+
+	// Call ValidateStreamKey (simulates SRS callback)
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx}
+		req := SRSAuthCallback{
+			Action:   "on_publish",
+			Stream:   "test-stream-key-12345",
+			IP:       "127.0.0.1",
+			ClientId: "test-client",
+		}
+
+		resp, err := ValidateStreamKey(ctx, req)
+		if err != nil {
+			t.Fatalf("ValidateStreamKey failed: %v", err)
+		}
+		if resp.Code != 0 {
+			t.Fatalf("Expected code 0 (success), got %d", resp.Code)
+		}
+	})
+
+	// Verify analytics after stream starts
+	var analyticsAfter RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, room.Id, &analyticsAfter)
+	})
+
+	if analyticsAfter.StreamStartedAt.IsZero() {
+		t.Error("StreamStartedAt should be set after stream starts")
+	}
+
+	// Verify the timestamp is recent (within last 5 seconds)
+	timeSinceStart := time.Since(analyticsAfter.StreamStartedAt)
+	if timeSinceStart > 5*time.Second {
+		t.Errorf("StreamStartedAt timestamp seems wrong: %v ago", timeSinceStart)
+	}
+}
+
+// TestHandleStreamUnpublishRecordsStreamStop verifies that HandleStreamUnpublish records stream stop and duration
+func TestHandleStreamUnpublishRecordsStreamStop(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Save original appDb
+	originalDb := appDb
+	appDb = db
+	defer func() {
+		appDb = originalDb
+	}()
+
+	// Create studio and room
+	var room Room
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  1,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key-67890",
+			IsActive:   true, // Already streaming
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+		vbolt.Write(tx, RoomStreamKeyBkt, room.StreamKey, &room.Id)
+
+		// Set up initial analytics (stream started 5 minutes ago)
+		analytics := RoomAnalytics{
+			RoomId:          room.Id,
+			StreamStartedAt: time.Now().Add(-5 * time.Minute),
+		}
+		vbolt.Write(tx, RoomAnalyticsBkt, room.Id, &analytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Verify analytics before stream stops
+	var analyticsBefore RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, room.Id, &analyticsBefore)
+	})
+
+	if analyticsBefore.StreamStartedAt.IsZero() {
+		t.Error("StreamStartedAt should be set before calling stop")
+	}
+	if analyticsBefore.TotalStreamMinutes != 0 {
+		t.Errorf("TotalStreamMinutes should be 0 before stop, got %d", analyticsBefore.TotalStreamMinutes)
+	}
+
+	// Call HandleStreamUnpublish (simulates SRS callback)
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		ctx := &vbeam.Context{Tx: tx}
+		req := SRSAuthCallback{
+			Action:   "on_unpublish",
+			Stream:   "test-stream-key-67890",
+			IP:       "127.0.0.1",
+			ClientId: "test-client",
+		}
+
+		resp, err := HandleStreamUnpublish(ctx, req)
+		if err != nil {
+			t.Fatalf("HandleStreamUnpublish failed: %v", err)
+		}
+		if resp.Code != 0 {
+			t.Fatalf("Expected code 0 (success), got %d", resp.Code)
+		}
+	})
+
+	// Verify analytics after stream stops
+	var analyticsAfter RoomAnalytics
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		vbolt.Read(tx, RoomAnalyticsBkt, room.Id, &analyticsAfter)
+	})
+
+	// StreamStartedAt should be reset
+	if !analyticsAfter.StreamStartedAt.IsZero() {
+		t.Error("StreamStartedAt should be reset to zero after stop")
+	}
+
+	// LastStreamAt should be set
+	if analyticsAfter.LastStreamAt.IsZero() {
+		t.Error("LastStreamAt should be set after stream stops")
+	}
+
+	// TotalStreamMinutes should be updated (approximately 5 minutes)
+	if analyticsAfter.TotalStreamMinutes < 4 || analyticsAfter.TotalStreamMinutes > 6 {
+		t.Errorf("Expected TotalStreamMinutes around 5, got %d", analyticsAfter.TotalStreamMinutes)
+	}
+}
+
+// TestStreamDurationAccuracy verifies accurate minute calculation for stream duration
+func TestStreamDurationAccuracy(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Save original appDb
+	originalDb := appDb
+	appDb = db
+	defer func() {
+		appDb = originalDb
+	}()
+
+	// Create studio and room
+	var room Room
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  1,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		room = Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Test Room",
+			StreamKey:  "test-stream-key-duration",
+			IsActive:   true,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test multiple durations
+	testCases := []struct {
+		duration time.Duration
+		expected int // expected minutes
+	}{
+		{30 * time.Second, 0},    // Less than 1 minute
+		{90 * time.Second, 1},    // 1.5 minutes -> 1
+		{5 * time.Minute, 5},     // Exactly 5 minutes
+		{37 * time.Minute, 37},   // 37 minutes
+		{125 * time.Minute, 125}, // Over 2 hours
+	}
+
+	for _, tc := range testCases {
+		t.Run(fmt.Sprintf("Duration%v", tc.duration), func(t *testing.T) {
+			// Set stream start time
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				analytics := RoomAnalytics{
+					RoomId:             room.Id,
+					StreamStartedAt:    time.Now().Add(-tc.duration),
+					TotalStreamMinutes: 0,
+				}
+				vbolt.Write(tx, RoomAnalyticsBkt, room.Id, &analytics)
+				vbolt.TxCommit(tx)
+			})
+
+			// Record stream stop
+			RecordStreamStop(db, room.Id, room.StudioId)
+
+			// Verify duration
+			var analytics RoomAnalytics
+			vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+				vbolt.Read(tx, RoomAnalyticsBkt, room.Id, &analytics)
+			})
+
+			if analytics.TotalStreamMinutes != tc.expected {
+				t.Errorf("Expected %d minutes for duration %v, got %d",
+					tc.expected, tc.duration, analytics.TotalStreamMinutes)
+			}
+		})
+	}
 }
