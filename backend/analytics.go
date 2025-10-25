@@ -9,6 +9,13 @@ import (
 	"go.hasen.dev/vpack"
 )
 
+// Session timeout constants for smart view counting
+const (
+	SESSION_TIMEOUT          = 5 * time.Minute  // Window for same session (reconnects don't count as new views)
+	SESSION_CLEANUP_INTERVAL = 5 * time.Minute  // How often to run cleanup job
+	SESSION_CLEANUP_AGE      = 10 * time.Minute // Age at which to delete sessions
+)
+
 // RoomAnalytics tracks viewing statistics and streaming metrics for a room
 type RoomAnalytics struct {
 	RoomId              int       `json:"roomId"`
@@ -31,6 +38,15 @@ type StudioAnalytics struct {
 	TotalRooms          int `json:"totalRooms"`
 	ActiveRooms         int `json:"activeRooms"` // Currently streaming
 	TotalStreamMinutes  int `json:"totalStreamMinutes"`
+}
+
+// ViewerSession tracks individual viewer sessions for smart view counting
+type ViewerSession struct {
+	SessionKey  string    `json:"sessionKey"` // Composite key: "viewerId:roomId"
+	ViewerId    string    `json:"viewerId"`   // userId (JWT) or sessionToken (code auth)
+	RoomId      int       `json:"roomId"`
+	FirstSeenAt time.Time `json:"firstSeenAt"` // When this viewer first connected to this room
+	LastSeenAt  time.Time `json:"lastSeenAt"`  // Most recent activity (updated on reconnect)
 }
 
 // Packing functions for vbolt serialization
@@ -59,6 +75,15 @@ func PackStudioAnalytics(self *StudioAnalytics, buf *vpack.Buffer) {
 	vpack.Int(&self.TotalStreamMinutes, buf)
 }
 
+func PackViewerSession(self *ViewerSession, buf *vpack.Buffer) {
+	vpack.Version(1, buf)
+	vpack.String(&self.SessionKey, buf)
+	vpack.String(&self.ViewerId, buf)
+	vpack.Int(&self.RoomId, buf)
+	vpack.Time(&self.FirstSeenAt, buf)
+	vpack.Time(&self.LastSeenAt, buf)
+}
+
 // Buckets for entity storage
 
 // RoomAnalyticsBkt: roomId (int) -> RoomAnalytics
@@ -66,6 +91,14 @@ var RoomAnalyticsBkt = vbolt.Bucket(&cfg.Info, "room_analytics", vpack.FInt, Pac
 
 // StudioAnalyticsBkt: studioId (int) -> StudioAnalytics
 var StudioAnalyticsBkt = vbolt.Bucket(&cfg.Info, "studio_analytics", vpack.FInt, PackStudioAnalytics)
+
+// ViewerSessionsBkt: sessionKey (string) -> ViewerSession
+var ViewerSessionsBkt = vbolt.Bucket(&cfg.Info, "viewer_sessions", vpack.StringZ, PackViewerSession)
+
+// Indexes for querying
+
+// SessionsByRoomIndex: Term=roomId, Target=sessionKey
+var SessionsByRoomIndex = vbolt.Index(&cfg.Info, "sessions_by_room", vpack.FInt, vpack.StringZ)
 
 // Helper functions for analytics tracking
 
