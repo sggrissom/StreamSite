@@ -453,7 +453,7 @@ func RegisterAnalyticsMethods(app *vbeam.Application) {
 var lastResetMonth = time.Now().Month()
 var lastResetYear = time.Now().Year()
 
-// ResetMonthlyAnalytics resets the TotalViewsThisMonth counter for all rooms and studios
+// ResetMonthlyAnalytics resets the TotalViewsThisMonth and UniqueViewersThisMonth counters for all rooms and studios
 // Should be called on the first day of each month
 func ResetMonthlyAnalytics(db *vbolt.DB) int {
 	resetCount := 0
@@ -461,8 +461,9 @@ func ResetMonthlyAnalytics(db *vbolt.DB) int {
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		// Reset room analytics
 		vbolt.IterateAll(tx, RoomAnalyticsBkt, func(roomId int, analytics RoomAnalytics) bool {
-			if analytics.TotalViewsThisMonth > 0 {
+			if analytics.TotalViewsThisMonth > 0 || analytics.UniqueViewersThisMonth > 0 {
 				analytics.TotalViewsThisMonth = 0
+				analytics.UniqueViewersThisMonth = 0
 				vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
 				resetCount++
 			}
@@ -471,8 +472,9 @@ func ResetMonthlyAnalytics(db *vbolt.DB) int {
 
 		// Reset studio analytics
 		vbolt.IterateAll(tx, StudioAnalyticsBkt, func(studioId int, analytics StudioAnalytics) bool {
-			if analytics.TotalViewsThisMonth > 0 {
+			if analytics.TotalViewsThisMonth > 0 || analytics.UniqueViewersThisMonth > 0 {
 				analytics.TotalViewsThisMonth = 0
+				analytics.UniqueViewersThisMonth = 0
 				vbolt.Write(tx, StudioAnalyticsBkt, studioId, &analytics)
 				resetCount++
 			}
@@ -523,6 +525,46 @@ func StartMonthlyAnalyticsReset(db *vbolt.DB) {
 				ResetMonthlyAnalytics(db)
 				lastResetMonth = currentMonth
 				lastResetYear = currentYear
+			}
+		}
+	}()
+}
+
+// StartViewerSessionCleanup starts a background goroutine that periodically
+// removes stale viewer sessions to prevent database bloat
+func StartViewerSessionCleanup(db *vbolt.DB) {
+	LogInfo(LogCategorySystem, "Starting viewer session cleanup job", map[string]interface{}{
+		"interval":   SESSION_CLEANUP_INTERVAL.String(),
+		"cleanupAge": SESSION_CLEANUP_AGE.String(),
+	})
+
+	go func() {
+		ticker := time.NewTicker(SESSION_CLEANUP_INTERVAL)
+		defer ticker.Stop()
+
+		for range ticker.C {
+			cleanupCount := 0
+			cutoffTime := time.Now().Add(-SESSION_CLEANUP_AGE)
+
+			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+				// Iterate all viewer sessions
+				vbolt.IterateAll(tx, ViewerSessionsBkt, func(sessionKey string, session ViewerSession) bool {
+					// Delete sessions older than cleanup age
+					if session.LastSeenAt.Before(cutoffTime) {
+						vbolt.Delete(tx, ViewerSessionsBkt, sessionKey)
+						vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, -1)
+						cleanupCount++
+					}
+					return true // continue iteration
+				})
+
+				vbolt.TxCommit(tx)
+			})
+
+			if cleanupCount > 0 {
+				LogInfo(LogCategorySystem, "Viewer session cleanup completed", map[string]interface{}{
+					"cleanedSessions": cleanupCount,
+				})
 			}
 		}
 	}()

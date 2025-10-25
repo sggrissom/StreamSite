@@ -1391,3 +1391,202 @@ func TestResetMonthlyAnalyticsPartialData(t *testing.T) {
 		}
 	})
 }
+
+// TestResetMonthlyAnalyticsWithUniqueViewers tests that UniqueViewersThisMonth is also reset
+func TestResetMonthlyAnalyticsWithUniqueViewers(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create studio and room with unique viewer counts
+		studio := Studio{Id: 1, Name: "Test Studio", OwnerId: 100, Creation: time.Now()}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		room := Room{Id: 1, StudioId: 1, Name: "Room", Creation: time.Now()}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		analytics := RoomAnalytics{
+			RoomId:                 1,
+			TotalViewsAllTime:      1000,
+			TotalViewsThisMonth:    100,
+			UniqueViewersAllTime:   50,
+			UniqueViewersThisMonth: 20,
+			CurrentViewers:         5,
+		}
+		vbolt.Write(tx, RoomAnalyticsBkt, 1, &analytics)
+
+		studioAnalytics := StudioAnalytics{
+			StudioId:               1,
+			TotalViewsAllTime:      1000,
+			TotalViewsThisMonth:    100,
+			UniqueViewersAllTime:   50,
+			UniqueViewersThisMonth: 20,
+			CurrentViewers:         5,
+		}
+		vbolt.Write(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Run reset
+	resetCount := ResetMonthlyAnalytics(db)
+
+	if resetCount != 2 {
+		t.Errorf("Expected resetCount 2 (room + studio), got %d", resetCount)
+	}
+
+	// Verify both TotalViewsThisMonth and UniqueViewersThisMonth were reset
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		var analytics RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, 1, &analytics)
+
+		if analytics.TotalViewsThisMonth != 0 {
+			t.Errorf("Expected TotalViewsThisMonth 0, got %d", analytics.TotalViewsThisMonth)
+		}
+		if analytics.UniqueViewersThisMonth != 0 {
+			t.Errorf("Expected UniqueViewersThisMonth 0, got %d", analytics.UniqueViewersThisMonth)
+		}
+		// All-time counters should remain
+		if analytics.TotalViewsAllTime != 1000 {
+			t.Errorf("Expected TotalViewsAllTime 1000, got %d", analytics.TotalViewsAllTime)
+		}
+		if analytics.UniqueViewersAllTime != 50 {
+			t.Errorf("Expected UniqueViewersAllTime 50, got %d", analytics.UniqueViewersAllTime)
+		}
+
+		var studioAnalytics StudioAnalytics
+		vbolt.Read(tx, StudioAnalyticsBkt, 1, &studioAnalytics)
+
+		if studioAnalytics.TotalViewsThisMonth != 0 {
+			t.Errorf("Studio: Expected TotalViewsThisMonth 0, got %d", studioAnalytics.TotalViewsThisMonth)
+		}
+		if studioAnalytics.UniqueViewersThisMonth != 0 {
+			t.Errorf("Studio: Expected UniqueViewersThisMonth 0, got %d", studioAnalytics.UniqueViewersThisMonth)
+		}
+		if studioAnalytics.TotalViewsAllTime != 1000 {
+			t.Errorf("Studio: Expected TotalViewsAllTime 1000, got %d", studioAnalytics.TotalViewsAllTime)
+		}
+		if studioAnalytics.UniqueViewersAllTime != 50 {
+			t.Errorf("Studio: Expected UniqueViewersAllTime 50, got %d", studioAnalytics.UniqueViewersAllTime)
+		}
+	})
+}
+
+// TestViewerSessionCleanup tests the session cleanup functionality
+func TestViewerSessionCleanup(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create 3 sessions with different ages
+		now := time.Now()
+
+		// Session 1: Recent (5 minutes ago) - should NOT be cleaned
+		session1 := ViewerSession{
+			SessionKey:  "user:1:10",
+			ViewerId:    "user:1",
+			RoomId:      10,
+			FirstSeenAt: now.Add(-5 * time.Minute),
+			LastSeenAt:  now.Add(-5 * time.Minute),
+		}
+		vbolt.Write(tx, ViewerSessionsBkt, session1.SessionKey, &session1)
+		vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, session1.SessionKey, session1.RoomId)
+
+		// Session 2: Old (15 minutes ago) - SHOULD be cleaned
+		session2 := ViewerSession{
+			SessionKey:  "user:2:10",
+			ViewerId:    "user:2",
+			RoomId:      10,
+			FirstSeenAt: now.Add(-20 * time.Minute),
+			LastSeenAt:  now.Add(-15 * time.Minute),
+		}
+		vbolt.Write(tx, ViewerSessionsBkt, session2.SessionKey, &session2)
+		vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, session2.SessionKey, session2.RoomId)
+
+		// Session 3: Very old (30 minutes ago) - SHOULD be cleaned
+		session3 := ViewerSession{
+			SessionKey:  "code:abc:20",
+			ViewerId:    "code:abc",
+			RoomId:      20,
+			FirstSeenAt: now.Add(-30 * time.Minute),
+			LastSeenAt:  now.Add(-30 * time.Minute),
+		}
+		vbolt.Write(tx, ViewerSessionsBkt, session3.SessionKey, &session3)
+		vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, session3.SessionKey, session3.RoomId)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Manually run the cleanup logic (same as in StartViewerSessionCleanup)
+	cleanupCount := 0
+	cutoffTime := time.Now().Add(-SESSION_CLEANUP_AGE)
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		vbolt.IterateAll(tx, ViewerSessionsBkt, func(sessionKey string, session ViewerSession) bool {
+			if session.LastSeenAt.Before(cutoffTime) {
+				vbolt.Delete(tx, ViewerSessionsBkt, sessionKey)
+				vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, -1)
+				cleanupCount++
+			}
+			return true
+		})
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Should have cleaned 2 old sessions
+	if cleanupCount != 2 {
+		t.Errorf("Expected cleanupCount 2 (session2 and session3), got %d", cleanupCount)
+	}
+
+	// Verify session1 still exists
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		var session1 ViewerSession
+		vbolt.Read(tx, ViewerSessionsBkt, "user:1:10", &session1)
+		if session1.SessionKey != "user:1:10" {
+			t.Errorf("Session1 should still exist, got empty SessionKey")
+		}
+
+		// Verify session2 was deleted
+		var session2 ViewerSession
+		vbolt.Read(tx, ViewerSessionsBkt, "user:2:10", &session2)
+		if session2.SessionKey != "" {
+			t.Errorf("Session2 should be deleted, but SessionKey is '%s'", session2.SessionKey)
+		}
+
+		// Verify session3 was deleted
+		var session3 ViewerSession
+		vbolt.Read(tx, ViewerSessionsBkt, "code:abc:20", &session3)
+		if session3.SessionKey != "" {
+			t.Errorf("Session3 should be deleted, but SessionKey is '%s'", session3.SessionKey)
+		}
+	})
+}
+
+// TestViewerSessionCleanupEmptyDB tests cleanup with no sessions
+func TestViewerSessionCleanupEmptyDB(t *testing.T) {
+	db := setupTestAnalyticsDB(t)
+	defer db.Close()
+
+	// Run cleanup on empty database
+	cleanupCount := 0
+	cutoffTime := time.Now().Add(-SESSION_CLEANUP_AGE)
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		vbolt.IterateAll(tx, ViewerSessionsBkt, func(sessionKey string, session ViewerSession) bool {
+			if session.LastSeenAt.Before(cutoffTime) {
+				vbolt.Delete(tx, ViewerSessionsBkt, sessionKey)
+				vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, -1)
+				cleanupCount++
+			}
+			return true
+		})
+
+		vbolt.TxCommit(tx)
+	})
+
+	if cleanupCount != 0 {
+		t.Errorf("Expected cleanupCount 0 for empty DB, got %d", cleanupCount)
+	}
+}
