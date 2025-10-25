@@ -551,6 +551,28 @@ func StartViewerSessionCleanup(db *vbolt.DB) {
 				vbolt.IterateAll(tx, ViewerSessionsBkt, func(sessionKey string, session ViewerSession) bool {
 					// Delete sessions older than cleanup age
 					if session.LastSeenAt.Before(cutoffTime) {
+						// Decrement viewer counts before deleting session
+						// Get room to find studioId
+						room := GetRoom(tx, session.RoomId)
+						if room.Id != 0 {
+							// Decrement room analytics
+							var roomAnalytics RoomAnalytics
+							vbolt.Read(tx, RoomAnalyticsBkt, session.RoomId, &roomAnalytics)
+							if roomAnalytics.CurrentViewers > 0 {
+								roomAnalytics.CurrentViewers--
+								vbolt.Write(tx, RoomAnalyticsBkt, session.RoomId, &roomAnalytics)
+							}
+
+							// Decrement studio analytics
+							var studioAnalytics StudioAnalytics
+							vbolt.Read(tx, StudioAnalyticsBkt, room.StudioId, &studioAnalytics)
+							if studioAnalytics.CurrentViewers > 0 {
+								studioAnalytics.CurrentViewers--
+								vbolt.Write(tx, StudioAnalyticsBkt, room.StudioId, &studioAnalytics)
+							}
+						}
+
+						// Now delete the session
 						vbolt.Delete(tx, ViewerSessionsBkt, sessionKey)
 						vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, -1)
 						cleanupCount++
@@ -568,4 +590,53 @@ func StartViewerSessionCleanup(db *vbolt.DB) {
 			}
 		}
 	}()
+}
+
+// ResetAllCurrentViewers resets all CurrentViewers counts to 0 across all analytics buckets
+// This should be called on server startup since SSE connections cannot persist across restarts
+func ResetAllCurrentViewers(db *vbolt.DB) {
+	resetCount := 0
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Reset room analytics
+		vbolt.IterateAll(tx, RoomAnalyticsBkt, func(roomId int, analytics RoomAnalytics) bool {
+			if analytics.CurrentViewers > 0 {
+				analytics.CurrentViewers = 0
+				vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
+				resetCount++
+			}
+			return true // continue iteration
+		})
+
+		// Reset studio analytics
+		vbolt.IterateAll(tx, StudioAnalyticsBkt, func(studioId int, analytics StudioAnalytics) bool {
+			if analytics.CurrentViewers > 0 {
+				analytics.CurrentViewers = 0
+				vbolt.Write(tx, StudioAnalyticsBkt, studioId, &analytics)
+				resetCount++
+			}
+			return true // continue iteration
+		})
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Also reset code analytics (imported from code_access.go)
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		codeResetCount := 0
+		vbolt.IterateAll(tx, CodeAnalyticsBkt, func(code string, analytics CodeAnalytics) bool {
+			if analytics.CurrentViewers > 0 {
+				analytics.CurrentViewers = 0
+				vbolt.Write(tx, CodeAnalyticsBkt, code, &analytics)
+				codeResetCount++
+			}
+			return true // continue iteration
+		})
+		vbolt.TxCommit(tx)
+		resetCount += codeResetCount
+	})
+
+	LogInfo(LogCategorySystem, "Reset all CurrentViewers to 0 on startup", map[string]interface{}{
+		"resetCount": resetCount,
+	})
 }

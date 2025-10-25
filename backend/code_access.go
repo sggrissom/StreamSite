@@ -383,6 +383,61 @@ func ValidateCodeSession(tx *vbolt.Tx, sessionToken string) (bool, CodeSession, 
 	return true, session, code, ""
 }
 
+// IncrementCodeViewerCount increments the CurrentViewers count for a code session
+// This should be called when SSE clients connect to accurately track active viewers
+func IncrementCodeViewerCount(db *vbolt.DB, sessionToken string) error {
+	if sessionToken == "" {
+		return nil // Not a code session, nothing to increment
+	}
+
+	var codeStr string
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Load the session to get the associated code
+		var session CodeSession
+		vbolt.Read(tx, CodeSessionsBkt, sessionToken, &session)
+
+		if session.Token == "" {
+			// Session not found, nothing to increment
+			return
+		}
+
+		codeStr = session.Code
+
+		// Load the analytics for this code
+		var analytics CodeAnalytics
+		vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &analytics)
+
+		// Increment CurrentViewers
+		analytics.CurrentViewers++
+
+		// Update peak viewers if necessary
+		if analytics.CurrentViewers > analytics.PeakViewers {
+			analytics.PeakViewers = analytics.CurrentViewers
+			analytics.PeakViewersAt = time.Now()
+		}
+
+		vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &analytics)
+
+		LogDebug(LogCategorySystem, "Incremented viewer count for code session", map[string]interface{}{
+			"code":           session.Code,
+			"currentViewers": analytics.CurrentViewers,
+			"sessionToken":   sessionToken,
+		})
+
+		vbolt.TxCommit(tx)
+	})
+
+	if codeStr != "" {
+		LogInfo(LogCategorySystem, "Code session connected", map[string]interface{}{
+			"code":         codeStr,
+			"sessionToken": sessionToken,
+		})
+	}
+
+	return nil
+}
+
 // DecrementCodeViewerCount decrements the CurrentViewers count for a code session
 // This should be called when SSE clients disconnect to accurately track active viewers
 func DecrementCodeViewerCount(db *vbolt.DB, sessionToken string) error {
@@ -1144,14 +1199,8 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 		vbolt.Read(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
 		analytics.TotalConnections++
-		analytics.CurrentViewers++
 		analytics.LastConnectionAt = now
-
-		// Update peak viewers if necessary
-		if analytics.CurrentViewers > analytics.PeakViewers {
-			analytics.PeakViewers = analytics.CurrentViewers
-			analytics.PeakViewersAt = now
-		}
+		// Note: CurrentViewers is incremented when SSE actually connects, not during validation
 
 		vbolt.Write(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
@@ -1269,14 +1318,8 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 	vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
 	analytics.TotalConnections++
-	analytics.CurrentViewers++
 	analytics.LastConnectionAt = now
-
-	// Update peak viewers if necessary
-	if analytics.CurrentViewers > analytics.PeakViewers {
-		analytics.PeakViewers = analytics.CurrentViewers
-		analytics.PeakViewersAt = now
-	}
+	// Note: CurrentViewers is incremented when SSE actually connects, not during validation
 
 	vbolt.Write(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
@@ -1293,12 +1336,10 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 
 	// Log validation success
 	LogInfo(LogCategorySystem, "Access code validated", map[string]interface{}{
-		"code":           accessCode.Code,
-		"sessionToken":   sessionToken,
-		"type":           accessCode.Type,
-		"targetId":       accessCode.TargetId,
-		"currentViewers": analytics.CurrentViewers,
-		"peakViewers":    analytics.PeakViewers,
+		"code":         accessCode.Code,
+		"sessionToken": sessionToken,
+		"type":         accessCode.Type,
+		"targetId":     accessCode.TargetId,
 	})
 
 	resp.Success = true

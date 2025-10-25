@@ -399,6 +399,19 @@ export interface GetStudioAnalyticsResponse {
     studioName: string
 }
 
+export interface RecalculateViewerCountsRequest {
+    studioId: number
+}
+
+export interface RecalculateViewerCountsResponse {
+    success: boolean
+    error: string
+    roomsUpdated: number
+    studiosUpdated: number
+    codesUpdated: number
+    message: string
+}
+
 export interface SRSAuthCallback {
     server_id: string
     action: string
@@ -539,6 +552,8 @@ export interface RoomAnalytics {
     roomId: number
     totalViewsAllTime: number
     totalViewsThisMonth: number
+    uniqueViewersAllTime: number
+    uniqueViewersThisMonth: number
     currentViewers: number
     peakViewers: number
     peakViewersAt: string
@@ -551,6 +566,8 @@ export interface StudioAnalytics {
     studioId: number
     totalViewsAllTime: number
     totalViewsThisMonth: number
+    uniqueViewersAllTime: number
+    uniqueViewersThisMonth: number
     currentViewers: number
     totalRooms: number
     activeRooms: number
@@ -691,6 +708,10 @@ export async function GetRoomAnalytics(data: GetRoomAnalyticsRequest): Promise<r
 
 export async function GetStudioAnalytics(data: GetStudioAnalyticsRequest): Promise<rpc.Response<GetStudioAnalyticsResponse>> {
     return await rpc.call<GetStudioAnalyticsResponse>('GetStudioAnalytics', JSON.stringify(data));
+}
+
+export async function RecalculateViewerCounts(data: RecalculateViewerCountsRequest): Promise<rpc.Response<RecalculateViewerCountsResponse>> {
+    return await rpc.call<RecalculateViewerCountsResponse>('RecalculateViewerCounts', JSON.stringify(data));
 }
 
 export async function ValidateStreamKey(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {

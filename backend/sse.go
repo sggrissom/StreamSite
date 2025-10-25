@@ -71,6 +71,43 @@ func (m *SSEManager) RemoveClient(roomID int, client *SSEClient) {
 	})
 }
 
+// GetCurrentViewerCounts returns a map of roomId -> actual viewer count
+// Used for manual recalculation and troubleshooting
+func (m *SSEManager) GetCurrentViewerCounts() map[int]int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	counts := make(map[int]int)
+	for roomID, clients := range m.clients {
+		counts[roomID] = len(clients)
+	}
+	return counts
+}
+
+// GetCodeSessionCounts returns a map of code -> count of active code sessions
+// Used for manual recalculation and troubleshooting
+func (m *SSEManager) GetCodeSessionCounts() map[string]int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	counts := make(map[string]int)
+
+	// Iterate through all rooms and their clients
+	for _, clients := range m.clients {
+		for _, client := range clients {
+			// Only count code sessions (SessionToken is set for code sessions)
+			if client.SessionToken != "" {
+				// We need to lookup the code from the session token
+				// This requires database access, so we'll count sessions by token
+				// and let the admin procedure map tokens to codes
+				counts[client.SessionToken]++
+			}
+		}
+	}
+
+	return counts
+}
+
 // flushSSE flushes an SSE response using the best available method
 func flushSSE(w http.ResponseWriter) {
 	// Try ResponseController first (works with wrapped writers)
@@ -340,6 +377,11 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 		sseManager.AddClient(roomID, client)
 
 		IncrementRoomViewerCount(db, roomID, viewerId)
+
+		// Increment code analytics for code sessions
+		if client.SessionToken != "" {
+			IncrementCodeViewerCount(db, client.SessionToken)
+		}
 
 		defer func() {
 			// Decrement viewer count for code sessions on disconnect

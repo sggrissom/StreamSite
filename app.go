@@ -37,6 +37,9 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 
 	db := OpenDB(cfg.DBPath)
 
+	// Reset viewer counts on startup (SSE connections don't persist across restarts)
+	backend.ResetAllCurrentViewers(db)
+
 	// Start background jobs
 	backend.StartCodeSessionCleanup(db)
 	backend.StartOldCodeCleanup(db)
@@ -53,6 +56,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.RegisterStudioMembershipMethods(app)
 	backend.RegisterCodeAccessMethods(app)
 	backend.RegisterAnalyticsMethods(app)
+	backend.RegisterAdminMethods(app)
 	backend.RegisterStreamProxy(app)
 	backend.RegisterRoomStreamProxy(app)
 
