@@ -101,7 +101,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 		LogWarnWithRequest(r, LogCategoryAuth, "Login attempt with unknown email", map[string]interface{}{
 			"email": credentials.Email,
 		})
-		json.NewEncoder(w).Encode(LoginResponse{Success: false, Error: "Invalid credentials"})
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
@@ -111,7 +111,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			"userId": user.Id,
 			"email":  user.Email,
 		})
-		json.NewEncoder(w).Encode(LoginResponse{Success: false, Error: "Invalid credentials"})
+		http.Error(w, "Invalid credentials", http.StatusUnauthorized)
 		return
 	}
 
@@ -130,7 +130,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 			"userId": user.Id,
 			"error":  err.Error(),
 		})
-		json.NewEncoder(w).Encode(LoginResponse{Success: false, Error: "Failed to generate token"})
+		http.Error(w, "Failed to generate token", http.StatusInternalServerError)
 		return
 	}
 
@@ -144,7 +144,7 @@ func loginHandler(w http.ResponseWriter, r *http.Request) {
 	vbolt.WithReadTx(appDb, func(tx *vbolt.Tx) {
 		resp = GetAuthResponseFromUser(tx, user)
 	})
-	json.NewEncoder(w).Encode(LoginResponse{Success: true, Token: token, Auth: resp})
+	json.NewEncoder(w).Encode(LoginResponse{Token: token, Auth: resp})
 }
 
 func logoutHandler(w http.ResponseWriter, r *http.Request) {

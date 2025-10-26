@@ -696,18 +696,18 @@ func TestGetRoomAnalytics(t *testing.T) {
 
 	// Test 1: Unauthenticated request
 	t.Run("Unauthenticated", func(t *testing.T) {
-		var resp GetRoomAnalyticsResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: ""}
 			req := GetRoomAnalyticsRequest{RoomId: room.Id}
-			resp, _ = GetRoomAnalytics(ctx, req)
+			_, err = GetRoomAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for unauthenticated request")
 		}
-		if resp.Error != "Authentication required" {
-			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", err.Error())
 		}
 	})
 
@@ -718,18 +718,17 @@ func TestGetRoomAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetRoomAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetRoomAnalyticsRequest{RoomId: -1}
-			resp, _ = GetRoomAnalytics(ctx, req)
+			_, err = GetRoomAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for invalid room ID")
 		}
-		if resp.Error != "Invalid room ID" {
-			t.Errorf("Expected 'Invalid room ID' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Invalid room ID" {
+			t.Errorf("Expected 'Invalid room ID' error, got: %s", err.Error())
 		}
 	})
 
@@ -740,18 +739,17 @@ func TestGetRoomAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetRoomAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetRoomAnalyticsRequest{RoomId: 99999}
-			resp, _ = GetRoomAnalytics(ctx, req)
+			_, err = GetRoomAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when room not found")
 		}
-		if resp.Error != "Room not found" {
-			t.Errorf("Expected 'Room not found' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Room not found" {
+			t.Errorf("Expected 'Room not found' error, got: %s", err.Error())
 		}
 	})
 
@@ -762,18 +760,17 @@ func TestGetRoomAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetRoomAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetRoomAnalyticsRequest{RoomId: room.Id}
-			resp, _ = GetRoomAnalytics(ctx, req)
+			_, err = GetRoomAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for non-member access")
 		}
-		if resp.Error != "Access denied" {
-			t.Errorf("Expected 'Access denied' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Access denied" {
+			t.Errorf("Expected 'Access denied' error, got: %s", err.Error())
 		}
 	})
 
@@ -788,11 +785,11 @@ func TestGetRoomAnalytics(t *testing.T) {
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetRoomAnalyticsRequest{RoomId: room.Id}
-			resp, _ = GetRoomAnalytics(ctx, req)
+			resp, err = GetRoomAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Errorf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Errorf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Analytics == nil {
 			t.Fatal("Expected analytics to be returned")
@@ -828,11 +825,11 @@ func TestGetRoomAnalytics(t *testing.T) {
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetRoomAnalyticsRequest{RoomId: room.Id}
-			resp, _ = GetRoomAnalytics(ctx, req)
+			resp, err = GetRoomAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Errorf("Expected success for viewer role, got error: %s", resp.Error)
+		if err != nil {
+			t.Errorf("Expected no error for viewer role, got error: %s", err.Error())
 		}
 		if resp.Analytics == nil {
 			t.Fatal("Expected analytics to be returned")
@@ -867,11 +864,11 @@ func TestGetRoomAnalytics(t *testing.T) {
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetRoomAnalyticsRequest{RoomId: newRoom.Id}
-			resp, _ = GetRoomAnalytics(ctx, req)
+			resp, err = GetRoomAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Errorf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Errorf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Analytics == nil {
 			t.Fatal("Expected analytics to be returned")
@@ -1005,18 +1002,18 @@ func TestGetStudioAnalytics(t *testing.T) {
 
 	// Test 1: Unauthenticated request
 	t.Run("Unauthenticated", func(t *testing.T) {
-		var resp GetStudioAnalyticsResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: ""}
 			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
-			resp, _ = GetStudioAnalytics(ctx, req)
+			_, err = GetStudioAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for unauthenticated request")
 		}
-		if resp.Error != "Authentication required" {
-			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", err.Error())
 		}
 	})
 
@@ -1027,18 +1024,17 @@ func TestGetStudioAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetStudioAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetStudioAnalyticsRequest{StudioId: -1}
-			resp, _ = GetStudioAnalytics(ctx, req)
+			_, err = GetStudioAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for invalid studio ID")
 		}
-		if resp.Error != "Invalid studio ID" {
-			t.Errorf("Expected 'Invalid studio ID' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Invalid studio ID" {
+			t.Errorf("Expected 'Invalid studio ID' error, got: %s", err.Error())
 		}
 	})
 
@@ -1049,18 +1045,17 @@ func TestGetStudioAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetStudioAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
-			resp, _ = GetStudioAnalytics(ctx, req)
+			_, err = GetStudioAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for non-member access")
 		}
-		if resp.Error != "Access denied" {
-			t.Errorf("Expected 'Access denied' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Access denied" {
+			t.Errorf("Expected 'Access denied' error, got: %s", err.Error())
 		}
 	})
 
@@ -1075,11 +1070,11 @@ func TestGetStudioAnalytics(t *testing.T) {
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
-			resp, _ = GetStudioAnalytics(ctx, req)
+			resp, err = GetStudioAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Errorf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Errorf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Analytics == nil {
 			t.Fatal("Expected analytics to be returned")
@@ -1109,11 +1104,11 @@ func TestGetStudioAnalytics(t *testing.T) {
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetStudioAnalyticsRequest{StudioId: studio.Id}
-			resp, _ = GetStudioAnalytics(ctx, req)
+			resp, err = GetStudioAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Errorf("Expected success for viewer role, got error: %s", resp.Error)
+		if err != nil {
+			t.Errorf("Expected no error for viewer role, got error: %s", err.Error())
 		}
 		if resp.Analytics == nil {
 			t.Fatal("Expected analytics to be returned")
@@ -1159,11 +1154,11 @@ func TestGetStudioAnalytics(t *testing.T) {
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx, Token: token}
 			req := GetStudioAnalyticsRequest{StudioId: newStudio.Id}
-			resp, _ = GetStudioAnalytics(ctx, req)
+			resp, err = GetStudioAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Errorf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Errorf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Analytics == nil {
 			t.Fatal("Expected analytics to be returned")

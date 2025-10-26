@@ -71,8 +71,8 @@ async function openStreamKeyModal(
   const [resp, err] = await server.GetRoomStreamKey({ roomId });
   modal.isLoading = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to load stream key";
+  if (err || !resp) {
+    modal.error = err || "Failed to load stream key";
     vlens.scheduleRedraw();
     return;
   }
@@ -133,8 +133,8 @@ async function confirmRegenerateStreamKey(modal: StreamKeyModal) {
   modal.isRegenerating = false;
   modal.showConfirmRegenerate = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to regenerate stream key";
+  if (err || !resp) {
+    modal.error = err || "Failed to regenerate stream key";
     vlens.scheduleRedraw();
     return;
   }
@@ -199,8 +199,8 @@ async function submitEditRoom(modal: EditRoomModal) {
 
   modal.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to update room";
+  if (err || !resp) {
+    modal.error = err || "Failed to update room";
     vlens.scheduleRedraw();
     return;
   }
@@ -258,8 +258,8 @@ async function confirmDeleteRoom(modal: DeleteRoomModal) {
   const [resp, err] = await server.DeleteRoom({ roomId: modal.roomId });
   modal.isDeleting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to delete room";
+  if (err || !resp) {
+    modal.error = err || "Failed to delete room";
     vlens.scheduleRedraw();
     return;
   }
@@ -327,8 +327,8 @@ async function refreshAnalytics(modal: ViewAnalyticsModal) {
 
   const [resp, err] = await server.GetRoomAnalytics({ roomId: modal.roomId });
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to refresh analytics";
+  if (err || !resp) {
+    modal.error = err || "Failed to refresh analytics";
     vlens.scheduleRedraw();
     return;
   }
@@ -353,8 +353,8 @@ async function openAnalyticsModal(
   const [resp, err] = await server.GetRoomAnalytics({ roomId });
   modal.isLoading = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to load analytics";
+  if (err || !resp) {
+    modal.error = err || "Failed to load analytics";
     vlens.scheduleRedraw();
     return;
   }

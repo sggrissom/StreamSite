@@ -72,7 +72,7 @@ async function loadCodes(
       type: 0, // Room codes
       targetId: room.id,
     });
-    if (err || !resp || !resp.success) {
+    if (err || !resp) {
       return { codes: [], roomName: room.name };
     }
     return { codes: resp.codes || [], roomName: room.name };
@@ -158,8 +158,8 @@ async function submitRevoke(
 
   state.revokeModal.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    state.revokeModal.error = resp?.error || err || "Failed to revoke code";
+  if (err || !resp) {
+    state.revokeModal.error = err || "Failed to revoke code";
     vlens.scheduleRedraw();
     return;
   }

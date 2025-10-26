@@ -83,8 +83,8 @@ async function submitAddMember(modal: AddMemberModal) {
 
   modal.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to add member";
+  if (err) {
+    modal.error = err || "Failed to add member";
     vlens.scheduleRedraw();
     return;
   }
@@ -160,8 +160,8 @@ async function submitChangeRole(modal: ChangeRoleModal) {
 
   modal.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to update role";
+  if (err) {
+    modal.error = err || "Failed to update role";
     vlens.scheduleRedraw();
     return;
   }
@@ -223,8 +223,8 @@ async function confirmRemoveMember(modal: RemoveMemberModal) {
 
   modal.isRemoving = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to remove member";
+  if (err) {
+    modal.error = err || "Failed to remove member";
     vlens.scheduleRedraw();
     return;
   }

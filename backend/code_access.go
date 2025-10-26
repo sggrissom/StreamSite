@@ -208,8 +208,6 @@ type GenerateAccessCodeRequest struct {
 }
 
 type GenerateAccessCodeResponse struct {
-	Success   bool      `json:"success"`
-	Error     string    `json:"error,omitempty"`
 	Code      string    `json:"code,omitempty"`
 	ExpiresAt time.Time `json:"expiresAt,omitempty"`
 	ShareURL  string    `json:"shareUrl,omitempty"` // e.g., "/watch/42857"
@@ -220,8 +218,6 @@ type ValidateAccessCodeRequest struct {
 }
 
 type ValidateAccessCodeResponse struct {
-	Success      bool      `json:"success"`
-	Error        string    `json:"error,omitempty"`
 	SessionToken string    `json:"sessionToken,omitempty"` // UUID for the session
 	RedirectTo   string    `json:"redirectTo,omitempty"`   // URL to redirect to (e.g., "/stream/123")
 	ExpiresAt    time.Time `json:"expiresAt,omitempty"`    // When code expires
@@ -248,9 +244,7 @@ type RevokeAccessCodeRequest struct {
 }
 
 type RevokeAccessCodeResponse struct {
-	Success        bool   `json:"success"`
-	Error          string `json:"error,omitempty"`
-	SessionsKilled int    `json:"sessionsKilled,omitempty"` // Number of active sessions terminated
+	SessionsKilled int `json:"sessionsKilled,omitempty"` // Number of active sessions terminated
 }
 
 type ListAccessCodesRequest struct {
@@ -271,9 +265,7 @@ type AccessCodeListItem struct {
 }
 
 type ListAccessCodesResponse struct {
-	Success bool                 `json:"success"`
-	Error   string               `json:"error,omitempty"`
-	Codes   []AccessCodeListItem `json:"codes,omitempty"`
+	Codes []AccessCodeListItem `json:"codes,omitempty"`
 }
 
 type GetCodeAnalyticsRequest struct {
@@ -289,8 +281,6 @@ type SessionInfo struct {
 }
 
 type GetCodeAnalyticsResponse struct {
-	Success          bool          `json:"success"`
-	Error            string        `json:"error,omitempty"`
 	Code             string        `json:"code,omitempty"`
 	Type             int           `json:"type,omitempty"`             // 0=room, 1=studio
 	Label            string        `json:"label,omitempty"`            // Description
@@ -865,8 +855,8 @@ func validateAccessCodeHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// If validation succeeded, reset violation count and handle JWT/session
-	if resp.Success {
+	// If validation succeeded (no error), reset violation count and handle JWT/session
+	if err == nil {
 		// Reset violation tracking on successful validation
 		globalRateLimiter.ResetViolations("code_validation", clientIP)
 
@@ -947,9 +937,7 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Check rate limit (10 generations per user per hour)
@@ -958,37 +946,28 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 			"userId": caller.Id,
 			"error":  rateLimitErr.Error(),
 		})
-		resp.Success = false
-		resp.Error = rateLimitErr.Error()
-		return
+		return resp, errors.New(rateLimitErr.Error())
+
 	}
 
 	// Validate code type
 	if req.Type != int(CodeTypeRoom) && req.Type != int(CodeTypeStudio) {
-		resp.Success = false
-		resp.Error = "Invalid code type (must be 0 for room or 1 for studio)"
-		return
+		return resp, errors.New("Invalid code type (must be 0 for room or 1 for studio)")
 	}
 
 	// Validate duration (-1 is special value for "never expires")
 	if req.DurationMinutes <= 0 && req.DurationMinutes != -1 {
-		resp.Success = false
-		resp.Error = "Duration value invalid"
-		return
+		return resp, errors.New("Duration value invalid")
 	}
 
 	// Validate max viewers
 	if req.MaxViewers < 0 {
-		resp.Success = false
-		resp.Error = "Max viewers cannot be negative"
-		return
+		return resp, errors.New("Max viewers cannot be negative")
 	}
 
 	// Validate label length
 	if len(req.Label) > 200 {
-		resp.Success = false
-		resp.Error = "Label is too long (max 200 characters)"
-		return
+		return resp, errors.New("Label is too long (max 200 characters)")
 	}
 
 	var studioId int
@@ -999,9 +978,8 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 		// Room code - validate room exists and check permission
 		room := GetRoom(ctx.Tx, req.TargetId)
 		if room.Id == 0 {
-			resp.Success = false
-			resp.Error = "Room not found"
-			return
+			return resp, errors.New("Room not found")
+
 		}
 
 		studioId = room.StudioId
@@ -1011,9 +989,8 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 		// Studio code - validate studio exists and check permission
 		studio := GetStudioById(ctx.Tx, req.TargetId)
 		if studio.Id == 0 {
-			resp.Success = false
-			resp.Error = "Studio not found"
-			return
+			return resp, errors.New("Studio not found")
+
 		}
 
 		studioId = studio.Id
@@ -1023,9 +1000,7 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 
 	// Check if user has Admin+ permission for the studio
 	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can generate access codes"
-		return
+		return resp, errors.New("Only studio admins can generate access codes")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -1033,9 +1008,7 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 	// Generate unique code
 	code, err := generateUniqueCodeInDB(ctx.Tx)
 	if err != nil {
-		resp.Success = false
-		resp.Error = "Failed to generate unique code"
-		return
+		return resp, errors.New("Failed to generate unique code")
 	}
 
 	// Calculate expiration time
@@ -1104,7 +1077,6 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 	// Build share URL
 	shareURL := fmt.Sprintf("/watch/%s", code)
 
-	resp.Success = true
 	resp.Code = code
 	resp.ExpiresAt = expiresAt
 	resp.ShareURL = shareURL
@@ -1116,9 +1088,7 @@ func GenerateAccessCode(ctx *vbeam.Context, req GenerateAccessCodeRequest) (resp
 func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCodeResponse, err error) {
 	// Validate code format (5 digits)
 	if len(code) != 5 {
-		resp.Success = false
-		resp.Error = "Invalid code format"
-		return
+		return resp, errors.New("Invalid code format")
 	}
 
 	var accessCode AccessCode
@@ -1132,24 +1102,21 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 
 		// Check if code exists
 		if accessCode.Code == "" {
-			resp.Success = false
-			resp.Error = "Invalid code"
+			err = errors.New("Invalid code")
 			validationFailed = true
 			return
 		}
 
 		// Check if code is revoked
 		if accessCode.IsRevoked {
-			resp.Success = false
-			resp.Error = "Code has been revoked"
+			err = errors.New("Code has been revoked")
 			validationFailed = true
 			return
 		}
 
 		// Check if code is expired
 		if now.After(accessCode.ExpiresAt) {
-			resp.Success = false
-			resp.Error = "Code has expired"
+			err = errors.New("Code has expired")
 			validationFailed = true
 			return
 		}
@@ -1161,8 +1128,7 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 			vbolt.Read(tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
 			if analytics.CurrentViewers >= accessCode.MaxViewers {
-				resp.Success = false
-				resp.Error = fmt.Sprintf("Stream is at capacity (%d/%d viewers)", analytics.CurrentViewers, accessCode.MaxViewers)
+				err = fmt.Errorf("Stream is at capacity (%d/%d viewers)", analytics.CurrentViewers, accessCode.MaxViewers)
 				validationFailed = true
 				return
 			}
@@ -1172,9 +1138,7 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 		var tokenErr error
 		sessionToken, tokenErr = generateSessionToken()
 		if tokenErr != nil {
-			resp.Success = false
-			resp.Error = "Failed to generate session token"
-			err = tokenErr
+			err = errors.New("Failed to generate session token")
 			validationFailed = true
 			return
 		}
@@ -1229,7 +1193,6 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 		"targetId":     accessCode.TargetId,
 	})
 
-	resp.Success = true
 	resp.SessionToken = sessionToken
 	resp.RedirectTo = redirectTo
 	resp.ExpiresAt = accessCode.ExpiresAt
@@ -1244,9 +1207,7 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp ValidateAccessCodeResponse, err error) {
 	// Validate code format (5 digits)
 	if len(req.Code) != 5 {
-		resp.Success = false
-		resp.Error = "Invalid code format"
-		return
+		return resp, errors.New("Invalid code format")
 	}
 
 	// Look up code in database
@@ -1255,24 +1216,18 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 
 	// Check if code exists
 	if accessCode.Code == "" {
-		resp.Success = false
-		resp.Error = "Invalid code"
-		return
+		return resp, errors.New("Invalid code")
 	}
 
 	// Check if code is revoked
 	if accessCode.IsRevoked {
-		resp.Success = false
-		resp.Error = "Code has been revoked"
-		return
+		return resp, errors.New("Code has been revoked")
 	}
 
 	// Check if code is expired
 	now := time.Now()
 	if now.After(accessCode.ExpiresAt) {
-		resp.Success = false
-		resp.Error = "Code has expired"
-		return
+		return resp, errors.New("Code has expired")
 	}
 
 	// Check viewer limit (if set)
@@ -1282,9 +1237,7 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 		vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
 		if analytics.CurrentViewers >= accessCode.MaxViewers {
-			resp.Success = false
-			resp.Error = fmt.Sprintf("Stream is at capacity (%d/%d viewers)", analytics.CurrentViewers, accessCode.MaxViewers)
-			return
+			return resp, fmt.Errorf("Stream is at capacity (%d/%d viewers)", analytics.CurrentViewers, accessCode.MaxViewers)
 		}
 	}
 
@@ -1293,9 +1246,7 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 	// Generate session token
 	sessionToken, err := generateSessionToken()
 	if err != nil {
-		resp.Success = false
-		resp.Error = "Failed to generate session token"
-		return
+		return resp, errors.New("Failed to generate session token")
 	}
 
 	// Create code session
@@ -1342,7 +1293,6 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 		"targetId":     accessCode.TargetId,
 	})
 
-	resp.Success = true
 	resp.SessionToken = sessionToken
 	resp.RedirectTo = redirectTo
 	resp.ExpiresAt = accessCode.ExpiresAt
@@ -1450,16 +1400,12 @@ func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp Rev
 	vbolt.Read(ctx.Tx, AccessCodesBkt, req.Code, &accessCode)
 
 	if accessCode.Code == "" {
-		resp.Success = false
-		resp.Error = "Access code not found"
-		return
+		return resp, errors.New("Access code not found")
 	}
 
 	// Check if already revoked
 	if accessCode.IsRevoked {
-		resp.Success = false
-		resp.Error = "Access code is already revoked"
-		return
+		return resp, errors.New("Access code is already revoked")
 	}
 
 	// Determine studio ID for permission check
@@ -1467,9 +1413,8 @@ func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp Rev
 	if accessCode.Type == CodeTypeRoom {
 		room := GetRoom(ctx.Tx, accessCode.TargetId)
 		if room.Id == 0 {
-			resp.Success = false
-			resp.Error = "Room not found"
-			return
+			return resp, errors.New("Room not found")
+
 		}
 		studioId = room.StudioId
 	} else {
@@ -1479,15 +1424,11 @@ func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp Rev
 	// Check admin permission
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Admin permission required"
-		return
+		return resp, errors.New("Admin permission required")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -1556,7 +1497,6 @@ func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp Rev
 		"userEmail":      caller.Email,
 	})
 
-	resp.Success = true
 	resp.SessionsKilled = sessionsKilled
 	return
 }
@@ -1566,16 +1506,12 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Validate code type
 	if req.Type != int(CodeTypeRoom) && req.Type != int(CodeTypeStudio) {
-		resp.Success = false
-		resp.Error = "Invalid code type (must be 0 for room or 1 for studio)"
-		return
+		return resp, errors.New("Invalid code type (must be 0 for room or 1 for studio)")
 	}
 
 	var studioId int
@@ -1586,9 +1522,8 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 		// Room code list - validate room exists and check permission
 		room := GetRoom(ctx.Tx, req.TargetId)
 		if room.Id == 0 {
-			resp.Success = false
-			resp.Error = "Room not found"
-			return
+			return resp, errors.New("Room not found")
+
 		}
 		studioId = room.StudioId
 		targetName = room.Name
@@ -1596,9 +1531,8 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 		// Studio code list - validate studio exists and check permission
 		studio := GetStudioById(ctx.Tx, req.TargetId)
 		if studio.Id == 0 {
-			resp.Success = false
-			resp.Error = "Studio not found"
-			return
+			return resp, errors.New("Studio not found")
+
 		}
 		studioId = studio.Id
 		targetName = studio.Name
@@ -1606,10 +1540,8 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 
 	// Check if user has Viewer+ permission for the studio
 	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleViewer) {
-		resp.Success = false
-		resp.Error = "You do not have permission to view access codes for this " +
-			map[bool]string{true: "room", false: "studio"}[req.Type == int(CodeTypeRoom)]
-		return
+		targetType := map[bool]string{true: "room", false: "studio"}[req.Type == int(CodeTypeRoom)]
+		return resp, fmt.Errorf("You do not have permission to view access codes for this %s", targetType)
 	}
 
 	// Query appropriate index to get code strings
@@ -1667,7 +1599,6 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 		"userEmail": caller.Email,
 	})
 
-	resp.Success = true
 	resp.Codes = items
 	return
 }
@@ -1697,16 +1628,12 @@ func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp Get
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Validate code format
 	if len(req.Code) != 5 {
-		resp.Success = false
-		resp.Error = "Invalid code format"
-		return
+		return resp, errors.New("Invalid code format")
 	}
 
 	// Look up code
@@ -1714,9 +1641,7 @@ func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp Get
 	vbolt.Read(ctx.Tx, AccessCodesBkt, req.Code, &accessCode)
 
 	if accessCode.Code == "" {
-		resp.Success = false
-		resp.Error = "Access code not found"
-		return
+		return resp, errors.New("Access code not found")
 	}
 
 	// Determine studio ID for permission check
@@ -1724,9 +1649,8 @@ func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp Get
 	if accessCode.Type == CodeTypeRoom {
 		room := GetRoom(ctx.Tx, accessCode.TargetId)
 		if room.Id == 0 {
-			resp.Success = false
-			resp.Error = "Room not found"
-			return
+			return resp, errors.New("Room not found")
+
 		}
 		studioId = room.StudioId
 	} else {
@@ -1735,9 +1659,7 @@ func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp Get
 
 	// Check admin permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can view code analytics"
-		return
+		return resp, errors.New("Only studio admins can view code analytics")
 	}
 
 	// Load analytics
@@ -1794,7 +1716,6 @@ func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp Get
 		"userEmail":    caller.Email,
 	})
 
-	resp.Success = true
 	resp.Code = accessCode.Code
 	resp.Type = int(accessCode.Type)
 	resp.Label = accessCode.Label

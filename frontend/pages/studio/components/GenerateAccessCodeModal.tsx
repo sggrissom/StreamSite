@@ -100,8 +100,8 @@ async function submitGenerateCode(
 
   state.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    state.error = resp?.error || err || "Failed to generate access code";
+  if (err || !resp) {
+    state.error = err || "Failed to generate access code";
     vlens.scheduleRedraw();
     return;
   }

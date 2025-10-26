@@ -19,8 +19,6 @@ type SetUserRoleRequest struct {
 }
 
 type SetUserRoleResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
 }
 
 type ListUsersRequest struct {
@@ -58,37 +56,27 @@ func SetUserRole(ctx *vbeam.Context, req SetUserRoleRequest) (resp SetUserRoleRe
 	// Check if caller is site admin
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	if caller.Role != RoleSiteAdmin {
-		resp.Success = false
-		resp.Error = "Only site admins can change user roles"
-		return
+		return resp, errors.New("Only site admins can change user roles")
 	}
 
 	// Validate role value
 	if req.Role < RoleUser || req.Role > RoleSiteAdmin {
-		resp.Success = false
-		resp.Error = "Invalid role specified"
-		return
+		return resp, errors.New("Invalid role specified")
 	}
 
 	// Get target user
 	user := GetUser(ctx.Tx, req.UserId)
 	if user.Id == 0 {
-		resp.Success = false
-		resp.Error = "User not found"
-		return
+		return resp, errors.New("User not found")
 	}
 
 	// Prevent changing your own role (safety check)
 	if caller.Id == req.UserId {
-		resp.Success = false
-		resp.Error = "Cannot change your own role"
-		return
+		return resp, errors.New("Cannot change your own role")
 	}
 
 	// Update user role
@@ -106,7 +94,6 @@ func SetUserRole(ctx *vbeam.Context, req SetUserRoleRequest) (resp SetUserRoleRe
 		"newRole":    GetRoleName(req.Role),
 	})
 
-	resp.Success = true
 	return
 }
 

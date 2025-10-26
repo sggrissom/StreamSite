@@ -39,8 +39,7 @@ func (e AppError) Error() string {
 
 // ErrorResponse represents the JSON response for errors
 type ErrorResponse struct {
-	Error   AppError `json:"error"`
-	Success bool     `json:"success"`
+	Error AppError `json:"error"`
 }
 
 // NewAppError creates a new application error
@@ -92,8 +91,7 @@ func RespondWithError(w http.ResponseWriter, r *http.Request, err *AppError, sta
 
 	// Send JSON response
 	response := ErrorResponse{
-		Error:   *err,
-		Success: false,
+		Error: *err,
 	}
 
 	if encodeErr := json.NewEncoder(w).Encode(response); encodeErr != nil {

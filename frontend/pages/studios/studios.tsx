@@ -84,8 +84,8 @@ async function submitCreateStudio(modal: CreateStudioModal) {
 
   modal.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to create studio";
+  if (err) {
+    modal.error = err || "Failed to create studio";
     vlens.scheduleRedraw();
     return;
   }

@@ -44,8 +44,8 @@ const useState = vlens.declareHook((studioId: number): State => {
 async function fetchAnalytics(state: State, studioId: number) {
   const [resp, err] = await server.GetStudioAnalytics({ studioId });
 
-  if (err || !resp || !resp.success) {
-    state.error = resp?.error || err || "Failed to load analytics";
+  if (err) {
+    state.error = err || "Failed to load analytics";
     state.isLoading = false;
     vlens.scheduleRedraw();
     return;

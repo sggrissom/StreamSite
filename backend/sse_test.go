@@ -857,25 +857,23 @@ func TestViewerCountTracking(t *testing.T) {
 		})
 
 		// Validate code successfully for first viewer
-		var resp1 ValidateAccessCodeResponse
 		var err1 error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
-			resp1, err1 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+			_, err1 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
 		})
-		if err1 != nil || !resp1.Success {
-			t.Fatalf("First validation should succeed: %v, %v", err1, resp1.Error)
+		if err1 != nil {
+			t.Fatalf("First validation should succeed: %v", err1)
 		}
 
 		// Validate code successfully for second viewer
-		var resp2 ValidateAccessCodeResponse
 		var err2 error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
-			resp2, err2 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+			_, err2 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
 		})
-		if err2 != nil || !resp2.Success {
-			t.Fatalf("Second validation should succeed: %v, %v", err2, resp2.Error)
+		if err2 != nil {
+			t.Fatalf("Second validation should succeed: %v", err2)
 		}
 
 		// Verify current viewers is 2
@@ -891,15 +889,12 @@ func TestViewerCountTracking(t *testing.T) {
 		}
 
 		// Third validation should fail due to capacity
-		var resp3 ValidateAccessCodeResponse
+		var err3 error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
-			resp3, _ = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+			_, err3 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
 		})
-		if resp3.Success {
-			t.Error("Third validation should fail (at capacity)")
-		}
-		if resp3.Error == "" {
+		if err3 == nil {
 			t.Error("Expected error message about capacity")
 		}
 	})

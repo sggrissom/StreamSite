@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"strconv"
 	"stream/cfg"
 	"time"
@@ -329,8 +330,6 @@ type GetRoomAnalyticsRequest struct {
 }
 
 type GetRoomAnalyticsResponse struct {
-	Success     bool           `json:"success"`
-	Error       string         `json:"error,omitempty"`
 	Analytics   *RoomAnalytics `json:"analytics,omitempty"`
 	IsStreaming bool           `json:"isStreaming"`
 	RoomName    string         `json:"roomName"`
@@ -340,32 +339,24 @@ func GetRoomAnalytics(ctx *vbeam.Context, req GetRoomAnalyticsRequest) (resp Get
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Validate room ID
 	if req.RoomId <= 0 {
-		resp.Success = false
-		resp.Error = "Invalid room ID"
-		return
+		return resp, errors.New("Invalid room ID")
 	}
 
 	// Get room
 	room := GetRoom(ctx.Tx, req.RoomId)
 	if room.Id == 0 {
-		resp.Success = false
-		resp.Error = "Room not found"
-		return
+		return resp, errors.New("Room not found")
 	}
 
 	// Check studio access (requires at least viewer role)
 	access := CheckStudioAccess(ctx.Tx, caller, room.StudioId)
 	if !access.Allowed {
-		resp.Success = false
-		resp.Error = "Access denied"
-		return
+		return resp, errors.New("Access denied")
 	}
 
 	// Load analytics
@@ -377,7 +368,6 @@ func GetRoomAnalytics(ctx *vbeam.Context, req GetRoomAnalyticsRequest) (resp Get
 		analytics.RoomId = req.RoomId
 	}
 
-	resp.Success = true
 	resp.Analytics = &analytics
 	resp.IsStreaming = room.IsActive
 	resp.RoomName = room.Name
@@ -389,8 +379,6 @@ type GetStudioAnalyticsRequest struct {
 }
 
 type GetStudioAnalyticsResponse struct {
-	Success    bool             `json:"success"`
-	Error      string           `json:"error,omitempty"`
 	Analytics  *StudioAnalytics `json:"analytics,omitempty"`
 	StudioName string           `json:"studioName"`
 }
@@ -399,32 +387,24 @@ func GetStudioAnalytics(ctx *vbeam.Context, req GetStudioAnalyticsRequest) (resp
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Validate studio ID
 	if req.StudioId <= 0 {
-		resp.Success = false
-		resp.Error = "Invalid studio ID"
-		return
+		return resp, errors.New("Invalid studio ID")
 	}
 
 	// Check studio access (requires at least viewer role)
 	access := CheckStudioAccess(ctx.Tx, caller, req.StudioId)
 	if !access.Allowed {
-		resp.Success = false
-		resp.Error = "Access denied"
-		return
+		return resp, errors.New("Access denied")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Load studio analytics
@@ -436,7 +416,6 @@ func GetStudioAnalytics(ctx *vbeam.Context, req GetStudioAnalyticsRequest) (resp
 		analytics.StudioId = req.StudioId
 	}
 
-	resp.Success = true
 	resp.Analytics = &analytics
 	resp.StudioName = studio.Name
 	return

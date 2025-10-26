@@ -95,7 +95,9 @@ async function onCreateAccountClicked(form: CreateAccountForm, event: Event) {
 
   form.loading = false;
 
-  if (resp && resp.success) {
+  if (err) {
+    form.error = err || "Failed to create account";
+  } else {
     // Clear form
     form.name = "";
     form.email = "";
@@ -104,8 +106,6 @@ async function onCreateAccountClicked(form: CreateAccountForm, event: Event) {
     form.error = "";
     // Redirect to dashboard
     window.location.href = "/dashboard";
-  } else {
-    form.error = resp?.error || err || "Failed to create account";
   }
   vlens.scheduleRedraw();
 

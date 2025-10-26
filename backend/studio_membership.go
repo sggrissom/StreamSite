@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"errors"
 	"stream/cfg"
 	"time"
 
@@ -168,8 +169,6 @@ type AddStudioMemberRequest struct {
 }
 
 type AddStudioMemberResponse struct {
-	Success    bool             `json:"success"`
-	Error      string           `json:"error,omitempty"`
 	Membership StudioMembership `json:"membership,omitempty"`
 }
 
@@ -179,8 +178,6 @@ type RemoveStudioMemberRequest struct {
 }
 
 type RemoveStudioMemberResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
 }
 
 type UpdateStudioMemberRoleRequest struct {
@@ -190,8 +187,6 @@ type UpdateStudioMemberRoleRequest struct {
 }
 
 type UpdateStudioMemberRoleResponse struct {
-	Success    bool             `json:"success"`
-	Error      string           `json:"error,omitempty"`
 	Membership StudioMembership `json:"membership,omitempty"`
 }
 
@@ -207,8 +202,6 @@ type ListStudioMembersRequest struct {
 }
 
 type ListStudioMembersResponse struct {
-	Success bool                `json:"success"`
-	Error   string              `json:"error,omitempty"`
 	Members []MemberWithDetails `json:"members,omitempty"`
 }
 
@@ -217,8 +210,6 @@ type LeaveStudioRequest struct {
 }
 
 type LeaveStudioResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
 }
 
 // API Procedures
@@ -227,24 +218,18 @@ func AddStudioMember(ctx *vbeam.Context, req AddStudioMemberRequest) (resp AddSt
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if caller has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can add members"
-		return
+		return resp, errors.New("Only studio admins can add members")
 	}
 
 	// Determine target user ID
@@ -253,40 +238,30 @@ func AddStudioMember(ctx *vbeam.Context, req AddStudioMemberRequest) (resp AddSt
 		// Look up user by email
 		vbolt.Read(ctx.Tx, EmailBkt, req.UserEmail, &targetUserId)
 		if targetUserId == 0 {
-			resp.Success = false
-			resp.Error = "No user found with that email address"
-			return
+			return resp, errors.New("No user found with that email address")
 		}
 	}
 
 	// Validate target user exists
 	targetUser := GetUser(ctx.Tx, targetUserId)
 	if targetUser.Id == 0 {
-		resp.Success = false
-		resp.Error = "User not found"
-		return
+		return resp, errors.New("User not found")
 	}
 
 	// Validate role
 	if req.Role < StudioRoleViewer || req.Role > StudioRoleOwner {
-		resp.Success = false
-		resp.Error = "Invalid role"
-		return
+		return resp, errors.New("Invalid role")
 	}
 
 	// Only owners can add other owners
 	if req.Role == StudioRoleOwner && !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleOwner) {
-		resp.Success = false
-		resp.Error = "Only studio owners can add other owners"
-		return
+		return resp, errors.New("Only studio owners can add other owners")
 	}
 
 	// Check if user is already a member
 	existingRole := GetUserStudioRole(ctx.Tx, targetUserId, studio.Id)
 	if existingRole != -1 {
-		resp.Success = false
-		resp.Error = "User is already a member of this studio"
-		return
+		return resp, errors.New("User is already a member of this studio")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -316,7 +291,6 @@ func AddStudioMember(ctx *vbeam.Context, req AddStudioMemberRequest) (resp AddSt
 		"addedByEmail":  caller.Email,
 	})
 
-	resp.Success = true
 	resp.Membership = membership
 	return
 }
@@ -325,46 +299,34 @@ func RemoveStudioMember(ctx *vbeam.Context, req RemoveStudioMemberRequest) (resp
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if caller has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can remove members"
-		return
+		return resp, errors.New("Only studio admins can remove members")
 	}
 
 	// Check if target user is a member
 	targetRole := GetUserStudioRole(ctx.Tx, req.UserId, studio.Id)
 	if targetRole == -1 {
-		resp.Success = false
-		resp.Error = "User is not a member of this studio"
-		return
+		return resp, errors.New("User is not a member of this studio")
 	}
 
 	// Cannot remove the studio owner
 	if studio.OwnerId == req.UserId {
-		resp.Success = false
-		resp.Error = "Cannot remove the studio owner"
-		return
+		return resp, errors.New("Cannot remove the studio owner")
 	}
 
 	// Only owners can remove admins or other owners
 	if targetRole >= StudioRoleAdmin && !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleOwner) {
-		resp.Success = false
-		resp.Error = "Only studio owners can remove admins or owners"
-		return
+		return resp, errors.New("Only studio owners can remove admins or owners")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -400,7 +362,6 @@ func RemoveStudioMember(ctx *vbeam.Context, req RemoveStudioMemberRequest) (resp
 		"removedByEmail":  caller.Email,
 	})
 
-	resp.Success = true
 	return
 }
 
@@ -408,61 +369,45 @@ func UpdateStudioMemberRole(ctx *vbeam.Context, req UpdateStudioMemberRoleReques
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if caller has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can update member roles"
-		return
+		return resp, errors.New("Only studio admins can update member roles")
 	}
 
 	// Validate new role
 	if req.NewRole < StudioRoleViewer || req.NewRole > StudioRoleOwner {
-		resp.Success = false
-		resp.Error = "Invalid role"
-		return
+		return resp, errors.New("Invalid role")
 	}
 
 	// Only owners can assign owner role
 	if req.NewRole == StudioRoleOwner && !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleOwner) {
-		resp.Success = false
-		resp.Error = "Only studio owners can assign owner role"
-		return
+		return resp, errors.New("Only studio owners can assign owner role")
 	}
 
 	// Check if target user is a member
 	oldRole := GetUserStudioRole(ctx.Tx, req.UserId, studio.Id)
 	if oldRole == -1 {
-		resp.Success = false
-		resp.Error = "User is not a member of this studio"
-		return
+		return resp, errors.New("User is not a member of this studio")
 	}
 
 	// Cannot change the studio owner's role
 	if studio.OwnerId == req.UserId {
-		resp.Success = false
-		resp.Error = "Cannot change the role of the studio owner"
-		return
+		return resp, errors.New("Cannot change the role of the studio owner")
 	}
 
 	// Only owners can modify admin/owner roles
 	if (oldRole >= StudioRoleAdmin || req.NewRole >= StudioRoleAdmin) &&
 		!HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleOwner) {
-		resp.Success = false
-		resp.Error = "Only studio owners can modify admin or owner roles"
-		return
+		return resp, errors.New("Only studio owners can modify admin or owner roles")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -499,7 +444,6 @@ func UpdateStudioMemberRole(ctx *vbeam.Context, req UpdateStudioMemberRoleReques
 		"updatedByEmail": caller.Email,
 	})
 
-	resp.Success = true
 	resp.Membership = updatedMembership
 	return
 }
@@ -508,24 +452,18 @@ func ListStudioMembersAPI(ctx *vbeam.Context, req ListStudioMembersRequest) (res
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if caller has permission to view members (Viewer+)
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleViewer) {
-		resp.Success = false
-		resp.Error = "You do not have permission to view this studio's members"
-		return
+		return resp, errors.New("You do not have permission to view this studio's members")
 	}
 
 	// Get all memberships for the studio
@@ -545,7 +483,6 @@ func ListStudioMembersAPI(ctx *vbeam.Context, req ListStudioMembersRequest) (res
 		}
 	}
 
-	resp.Success = true
 	return
 }
 
@@ -553,32 +490,24 @@ func LeaveStudio(ctx *vbeam.Context, req LeaveStudioRequest) (resp LeaveStudioRe
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if caller is a member
 	callerRole := GetUserStudioRole(ctx.Tx, caller.Id, studio.Id)
 	if callerRole == -1 {
-		resp.Success = false
-		resp.Error = "You are not a member of this studio"
-		return
+		return resp, errors.New("You are not a member of this studio")
 	}
 
 	// Cannot leave if you're the owner
 	if studio.OwnerId == caller.Id {
-		resp.Success = false
-		resp.Error = "Studio owner cannot leave. Transfer ownership or delete the studio."
-		return
+		return resp, errors.New("Studio owner cannot leave. Transfer ownership or delete the studio.")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -610,7 +539,6 @@ func LeaveStudio(ctx *vbeam.Context, req LeaveStudioRequest) (resp LeaveStudioRe
 		"role":       GetStudioRoleName(callerRole),
 	})
 
-	resp.Success = true
 	return
 }
 

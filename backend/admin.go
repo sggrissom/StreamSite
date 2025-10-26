@@ -1,6 +1,8 @@
 package backend
 
 import (
+	"errors"
+
 	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 )
@@ -15,8 +17,6 @@ type RecalculateViewerCountsRequest struct {
 
 // RecalculateViewerCountsResponse is the response for RecalculateViewerCounts
 type RecalculateViewerCountsResponse struct {
-	Success        bool   `json:"success"`
-	Error          string `json:"error,omitempty"`
 	RoomsUpdated   int    `json:"roomsUpdated"`
 	StudiosUpdated int    `json:"studiosUpdated"`
 	CodesUpdated   int    `json:"codesUpdated"`
@@ -38,9 +38,7 @@ func RecalculateViewerCounts(ctx *vbeam.Context, req RecalculateViewerCountsRequ
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get actual viewer counts from SSE manager
@@ -167,7 +165,6 @@ func RecalculateViewerCounts(ctx *vbeam.Context, req RecalculateViewerCountsRequ
 		"studioFilter":   req.StudioId,
 	})
 
-	resp.Success = true
 	resp.RoomsUpdated = roomsUpdated
 	resp.StudiosUpdated = studiosUpdated
 	resp.CodesUpdated = codesUpdated

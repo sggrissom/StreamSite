@@ -61,8 +61,8 @@ async function confirmDeleteStudio(modal: DeleteStudioModal) {
 
   modal.isDeleting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to delete studio";
+  if (err) {
+    modal.error = err || "Failed to delete studio";
     vlens.scheduleRedraw();
     return;
   }
@@ -97,8 +97,8 @@ async function loadUsers(state: UsersState) {
 
   state.loading = false;
 
-  if (err || !resp || !resp.success) {
-    state.error = resp?.error || err || "Failed to load users";
+  if (err || !resp) {
+    state.error = err || "Failed to load users";
     vlens.scheduleRedraw();
     return;
   }
@@ -128,8 +128,8 @@ async function changeUserRole(
 
   state.changingRoleFor = 0;
 
-  if (err || !resp || !resp.success) {
-    state.error = resp?.error || err || "Failed to update user role";
+  if (err) {
+    state.error = err || "Failed to update user role";
     vlens.scheduleRedraw();
     return;
   }

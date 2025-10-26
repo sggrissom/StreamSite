@@ -178,9 +178,7 @@ type CreateStudioRequest struct {
 }
 
 type CreateStudioResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	Studio  Studio `json:"studio,omitempty"`
+	Studio Studio `json:"studio,omitempty"`
 }
 
 type ListMyStudiosRequest struct {
@@ -210,8 +208,6 @@ type StudioWithOwner struct {
 }
 
 type ListAllStudiosResponse struct {
-	Success bool              `json:"success"`
-	Error   string            `json:"error,omitempty"`
 	Studios []StudioWithOwner `json:"studios,omitempty"`
 }
 
@@ -220,8 +216,6 @@ type GetStudioRequest struct {
 }
 
 type GetStudioResponse struct {
-	Success    bool       `json:"success"`
-	Error      string     `json:"error,omitempty"`
 	Studio     Studio     `json:"studio,omitempty"`
 	MyRole     StudioRole `json:"myRole"`
 	MyRoleName string     `json:"myRoleName"`
@@ -232,8 +226,6 @@ type GetStudioDashboardRequest struct {
 }
 
 type GetStudioDashboardResponse struct {
-	Success    bool                `json:"success"`
-	Error      string              `json:"error,omitempty"`
 	Studio     Studio              `json:"studio,omitempty"`
 	MyRole     StudioRole          `json:"myRole"`
 	MyRoleName string              `json:"myRoleName"`
@@ -249,9 +241,7 @@ type UpdateStudioRequest struct {
 }
 
 type UpdateStudioResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	Studio  Studio `json:"studio,omitempty"`
+	Studio Studio `json:"studio,omitempty"`
 }
 
 type DeleteStudioRequest struct {
@@ -259,8 +249,6 @@ type DeleteStudioRequest struct {
 }
 
 type DeleteStudioResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
 }
 
 type CreateRoomRequest struct {
@@ -269,9 +257,7 @@ type CreateRoomRequest struct {
 }
 
 type CreateRoomResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	Room    Room   `json:"room,omitempty"`
+	Room Room `json:"room,omitempty"`
 }
 
 type ListRoomsRequest struct {
@@ -279,9 +265,7 @@ type ListRoomsRequest struct {
 }
 
 type ListRoomsResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	Rooms   []Room `json:"rooms,omitempty"`
+	Rooms []Room `json:"rooms,omitempty"`
 }
 
 type GetRoomStreamKeyRequest struct {
@@ -289,8 +273,6 @@ type GetRoomStreamKeyRequest struct {
 }
 
 type GetRoomStreamKeyResponse struct {
-	Success   bool   `json:"success"`
-	Error     string `json:"error,omitempty"`
 	StreamKey string `json:"streamKey,omitempty"`
 }
 
@@ -300,9 +282,7 @@ type UpdateRoomRequest struct {
 }
 
 type UpdateRoomResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	Room    Room   `json:"room,omitempty"`
+	Room Room `json:"room,omitempty"`
 }
 
 type RegenerateStreamKeyRequest struct {
@@ -310,8 +290,6 @@ type RegenerateStreamKeyRequest struct {
 }
 
 type RegenerateStreamKeyResponse struct {
-	Success   bool   `json:"success"`
-	Error     string `json:"error,omitempty"`
 	StreamKey string `json:"streamKey,omitempty"`
 }
 
@@ -320,8 +298,6 @@ type DeleteRoomRequest struct {
 }
 
 type DeleteRoomResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
 }
 
 type GetRoomDetailsRequest struct {
@@ -329,8 +305,6 @@ type GetRoomDetailsRequest struct {
 }
 
 type GetRoomDetailsResponse struct {
-	Success       bool       `json:"success"`
-	Error         string     `json:"error,omitempty"`
 	Room          Room       `json:"room,omitempty"`
 	StudioName    string     `json:"studioName,omitempty"`
 	MyRole        StudioRole `json:"myRole"`
@@ -344,8 +318,6 @@ type GetStudioRoomsForCodeSessionRequest struct {
 }
 
 type GetStudioRoomsForCodeSessionResponse struct {
-	Success       bool       `json:"success"`
-	Error         string     `json:"error,omitempty"`
 	StudioName    string     `json:"studioName,omitempty"`
 	Rooms         []Room     `json:"rooms,omitempty"`
 	CodeExpiresAt *time.Time `json:"codeExpiresAt,omitempty"` // When the access code expires
@@ -371,23 +343,17 @@ func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudi
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Only Site Admins can create studios
 	if caller.Role != RoleSiteAdmin {
-		resp.Success = false
-		resp.Error = "Only site admins can create studios"
-		return
+		return resp, errors.New("Only site admins can create studios")
 	}
 
 	// Validate input
 	if req.Name == "" {
-		resp.Success = false
-		resp.Error = "Studio name is required"
-		return
+		return resp, errors.New("Studio name is required")
 	}
 
 	// Use default max rooms if not specified
@@ -397,9 +363,7 @@ func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudi
 	}
 
 	if maxRooms > 50 {
-		resp.Success = false
-		resp.Error = "Maximum rooms cannot exceed 50"
-		return
+		return resp, errors.New("Maximum rooms cannot exceed 50")
 	}
 
 	// Create studio
@@ -439,7 +403,6 @@ func CreateStudio(ctx *vbeam.Context, req CreateStudioRequest) (resp CreateStudi
 		"maxRooms":   maxRooms,
 	})
 
-	resp.Success = true
 	resp.Studio = studio
 	return
 }
@@ -473,16 +436,12 @@ func ListAllStudios(ctx *vbeam.Context, req ListAllStudiosRequest) (resp ListAll
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Only site admins can list all studios
 	if caller.Role != RoleSiteAdmin {
-		resp.Success = false
-		resp.Error = "Only site admins can access this feature"
-		return
+		return resp, errors.New("Only site admins can access this feature")
 	}
 
 	// Get all studios from the bucket
@@ -508,7 +467,6 @@ func ListAllStudios(ctx *vbeam.Context, req ListAllStudiosRequest) (resp ListAll
 		})
 	}
 
-	resp.Success = true
 	return
 }
 
@@ -516,23 +474,18 @@ func GetStudio(ctx *vbeam.Context, req GetStudioRequest) (resp GetStudioResponse
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Check studio access
 	access := CheckStudioAccess(ctx.Tx, caller, req.StudioId)
 	if !access.Allowed {
-		resp.Success = false
-		resp.Error = access.DenialReason
-		return
+		return resp, errors.New(access.DenialReason)
 	}
 
 	// Get studio (we know it exists from CheckStudioAccess)
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 
-	resp.Success = true
 	resp.Studio = studio
 	resp.MyRole = access.Role
 	resp.MyRoleName = GetStudioRoleName(access.Role)
@@ -543,17 +496,13 @@ func GetStudioDashboard(ctx *vbeam.Context, req GetStudioDashboardRequest) (resp
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Check studio access
 	access := CheckStudioAccess(ctx.Tx, caller, req.StudioId)
 	if !access.Allowed {
-		resp.Success = false
-		resp.Error = access.DenialReason
-		return
+		return resp, errors.New(access.DenialReason)
 	}
 
 	// Get studio (we know it exists from CheckStudioAccess)
@@ -593,7 +542,6 @@ func GetStudioDashboard(ctx *vbeam.Context, req GetStudioDashboardRequest) (resp
 		}
 	}
 
-	resp.Success = true
 	resp.Studio = studio
 	resp.MyRole = access.Role
 	resp.MyRoleName = GetStudioRoleName(access.Role)
@@ -606,43 +554,31 @@ func UpdateStudio(ctx *vbeam.Context, req UpdateStudioRequest) (resp UpdateStudi
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can update studios"
-		return
+		return resp, errors.New("Only studio admins can update studios")
 	}
 
 	// Validate input
 	if req.Name == "" {
-		resp.Success = false
-		resp.Error = "Studio name is required"
-		return
+		return resp, errors.New("Studio name is required")
 	}
 
 	if req.MaxRooms <= 0 {
-		resp.Success = false
-		resp.Error = "Maximum rooms must be at least 1"
-		return
+		return resp, errors.New("Maximum rooms must be at least 1")
 	}
 
 	if req.MaxRooms > 50 {
-		resp.Success = false
-		resp.Error = "Maximum rooms cannot exceed 50"
-		return
+		return resp, errors.New("Maximum rooms cannot exceed 50")
 	}
 
 	// Update studio fields
@@ -665,7 +601,6 @@ func UpdateStudio(ctx *vbeam.Context, req UpdateStudioRequest) (resp UpdateStudi
 		"maxRooms":   req.MaxRooms,
 	})
 
-	resp.Success = true
 	resp.Studio = studio
 	return
 }
@@ -674,24 +609,18 @@ func DeleteStudio(ctx *vbeam.Context, req DeleteStudioRequest) (resp DeleteStudi
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has Owner permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleOwner) {
-		resp.Success = false
-		resp.Error = "Only studio owners can delete studios"
-		return
+		return resp, errors.New("Only studio owners can delete studios")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -757,7 +686,6 @@ func DeleteStudio(ctx *vbeam.Context, req DeleteStudioRequest) (resp DeleteStudi
 		"membershipsDeleted": len(memberships),
 	})
 
-	resp.Success = true
 	return
 }
 
@@ -765,47 +693,35 @@ func CreateRoom(ctx *vbeam.Context, req CreateRoomRequest) (resp CreateRoomRespo
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can create rooms"
-		return
+		return resp, errors.New("Only studio admins can create rooms")
 	}
 
 	// Validate input
 	if req.Name == "" {
-		resp.Success = false
-		resp.Error = "Room name is required"
-		return
+		return resp, errors.New("Room name is required")
 	}
 
 	// Check current room count
 	existingRooms := ListStudioRooms(ctx.Tx, studio.Id)
 	if len(existingRooms) >= studio.MaxRooms {
-		resp.Success = false
-		resp.Error = "Studio has reached maximum room limit"
-		return
+		return resp, errors.New("Studio has reached maximum room limit")
 	}
 
 	// Generate stream key
 	streamKey, err := GenerateStreamKey()
 	if err != nil {
-		resp.Success = false
-		resp.Error = "Failed to generate stream key"
-		return
+		return resp, errors.New("Failed to generate stream key")
 	}
 
 	// Calculate next room number
@@ -845,7 +761,6 @@ func CreateRoom(ctx *vbeam.Context, req CreateRoomRequest) (resp CreateRoomRespo
 		"userEmail":  caller.Email,
 	})
 
-	resp.Success = true
 	resp.Room = room
 	return
 }
@@ -854,30 +769,23 @@ func ListRooms(ctx *vbeam.Context, req ListRoomsRequest) (resp ListRoomsResponse
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has permission to view this studio (Viewer+)
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleViewer) {
-		resp.Success = false
-		resp.Error = "You do not have permission to view this studio's rooms"
-		return
+		return resp, errors.New("You do not have permission to view this studio's rooms")
 	}
 
 	// Get all rooms for the studio
 	rooms := ListStudioRooms(ctx.Tx, studio.Id)
 
-	resp.Success = true
 	resp.Rooms = rooms
 	return
 }
@@ -886,9 +794,7 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// For anonymous users, extract session token from JWT
@@ -912,9 +818,7 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 	access := CheckRoomAccess(ctx.Tx, caller, req.RoomId, anonymousSessionToken)
 
 	if !access.Allowed {
-		resp.Success = false
-		resp.Error = access.DenialReason
-		return
+		return resp, errors.New(access.DenialReason)
 	}
 
 	// Get room and studio for response
@@ -922,7 +826,6 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 	studio := GetStudioById(ctx.Tx, room.StudioId)
 
 	// Return successful response
-	resp.Success = true
 	resp.Room = room
 	resp.StudioName = studio.Name
 	resp.MyRole = access.Role
@@ -997,16 +900,12 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// This endpoint is specifically for code sessions
 	if caller.Id != -1 {
-		resp.Success = false
-		resp.Error = "This endpoint is for code session access only"
-		return
+		return resp, errors.New("This endpoint is for code session access only")
 	}
 
 	// Parse JWT to get session token
@@ -1021,9 +920,7 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 		LogErrorSimple(LogCategorySystem, "JWT parsing failed in GetStudioRoomsForCodeSession", map[string]interface{}{
 			"error": tokenErr,
 		})
-		resp.Success = false
-		resp.Error = "Invalid session token"
-		return
+		return resp, errors.New("Invalid session token")
 	}
 
 	claims, ok := token.Claims.(*Claims)
@@ -1032,9 +929,7 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 			"claimsOk": ok,
 			"userId":   claims.UserId,
 		})
-		resp.Success = false
-		resp.Error = "Invalid code session"
-		return
+		return resp, errors.New("Invalid code session")
 	}
 
 	// Load the code session
@@ -1045,9 +940,7 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 		LogErrorSimple(LogCategorySystem, "Session not found in database", map[string]interface{}{
 			"sessionToken": claims.SessionToken,
 		})
-		resp.Success = false
-		resp.Error = "Session not found"
-		return
+		return resp, errors.New("Session not found")
 	}
 
 	// Load the access code
@@ -1058,16 +951,12 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 		LogErrorSimple(LogCategorySystem, "Access code not found", map[string]interface{}{
 			"code": session.Code,
 		})
-		resp.Success = false
-		resp.Error = "Access code not found"
-		return
+		return resp, errors.New("Access code not found")
 	}
 
 	// Verify this is a studio-level code and matches requested studio
 	if accessCode.Type != CodeTypeStudio {
-		resp.Success = false
-		resp.Error = "This code is not for studio access"
-		return
+		return resp, errors.New("This code is not for studio access")
 	}
 
 	if accessCode.TargetId != req.StudioId {
@@ -1075,17 +964,13 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 			"codeStudioId":      accessCode.TargetId,
 			"requestedStudioId": req.StudioId,
 		})
-		resp.Success = false
-		resp.Error = "You do not have permission to view this studio"
-		return
+		return resp, errors.New("You do not have permission to view this studio")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Get all rooms for this studio
@@ -1105,7 +990,6 @@ func GetStudioRoomsForCodeSession(ctx *vbeam.Context, req GetStudioRoomsForCodeS
 		rooms = []Room{}
 	}
 
-	resp.Success = true
 	resp.StudioName = studio.Name
 	resp.Rooms = rooms
 	resp.CodeExpiresAt = &accessCode.ExpiresAt
@@ -1116,35 +1000,26 @@ func GetRoomStreamKey(ctx *vbeam.Context, req GetRoomStreamKeyRequest) (resp Get
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get room
 	room := GetRoom(ctx.Tx, req.RoomId)
 	if room.Id == 0 {
-		resp.Success = false
-		resp.Error = "Room not found"
-		return
+		return resp, errors.New("Room not found")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, room.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has Admin+ permission to view stream key
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can view stream keys"
-		return
+		return resp, errors.New("Only studio admins can view stream keys")
 	}
 
-	resp.Success = true
 	resp.StreamKey = room.StreamKey
 	return
 }
@@ -1153,39 +1028,29 @@ func UpdateRoom(ctx *vbeam.Context, req UpdateRoomRequest) (resp UpdateRoomRespo
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get room
 	room := GetRoom(ctx.Tx, req.RoomId)
 	if room.Id == 0 {
-		resp.Success = false
-		resp.Error = "Room not found"
-		return
+		return resp, errors.New("Room not found")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, room.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can update rooms"
-		return
+		return resp, errors.New("Only studio admins can update rooms")
 	}
 
 	// Validate input
 	if req.Name == "" {
-		resp.Success = false
-		resp.Error = "Room name is required"
-		return
+		return resp, errors.New("Room name is required")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -1206,7 +1071,6 @@ func UpdateRoom(ctx *vbeam.Context, req UpdateRoomRequest) (resp UpdateRoomRespo
 		"userEmail":  caller.Email,
 	})
 
-	resp.Success = true
 	resp.Room = room
 	return
 }
@@ -1215,40 +1079,30 @@ func RegenerateStreamKey(ctx *vbeam.Context, req RegenerateStreamKeyRequest) (re
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get room
 	room := GetRoom(ctx.Tx, req.RoomId)
 	if room.Id == 0 {
-		resp.Success = false
-		resp.Error = "Room not found"
-		return
+		return resp, errors.New("Room not found")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, room.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can regenerate stream keys"
-		return
+		return resp, errors.New("Only studio admins can regenerate stream keys")
 	}
 
 	// Generate new stream key
 	newStreamKey, err := GenerateStreamKey()
 	if err != nil {
-		resp.Success = false
-		resp.Error = "Failed to generate stream key"
-		return
+		return resp, errors.New("Failed to generate stream key")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -1280,7 +1134,6 @@ func RegenerateStreamKey(ctx *vbeam.Context, req RegenerateStreamKeyRequest) (re
 		"newKeyPrefix":  newStreamKey[:8] + "...",
 	})
 
-	resp.Success = true
 	resp.StreamKey = newStreamKey
 	return
 }
@@ -1289,39 +1142,29 @@ func DeleteRoom(ctx *vbeam.Context, req DeleteRoomRequest) (resp DeleteRoomRespo
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Get room
 	room := GetRoom(ctx.Tx, req.RoomId)
 	if room.Id == 0 {
-		resp.Success = false
-		resp.Error = "Room not found"
-		return
+		return resp, errors.New("Room not found")
 	}
 
 	// Get studio
 	studio := GetStudioById(ctx.Tx, room.StudioId)
 	if studio.Id == 0 {
-		resp.Success = false
-		resp.Error = "Studio not found"
-		return
+		return resp, errors.New("Studio not found")
 	}
 
 	// Check if user has Admin+ permission
 	if !HasStudioPermission(ctx.Tx, caller.Id, studio.Id, StudioRoleAdmin) {
-		resp.Success = false
-		resp.Error = "Only studio admins can delete rooms"
-		return
+		return resp, errors.New("Only studio admins can delete rooms")
 	}
 
 	// Check if room is actively streaming
 	if room.IsActive {
-		resp.Success = false
-		resp.Error = "Cannot delete room while it is actively streaming"
-		return
+		return resp, errors.New("Cannot delete room while it is actively streaming")
 	}
 
 	vbeam.UseWriteTx(ctx)
@@ -1364,7 +1207,6 @@ func DeleteRoom(ctx *vbeam.Context, req DeleteRoomRequest) (resp DeleteRoomRespo
 		"streamsDeleted": len(streamIds),
 	})
 
-	resp.Success = true
 	return
 }
 

@@ -42,17 +42,13 @@ type LoginRequest struct {
 }
 
 type CreateAccountResponse struct {
-	Success bool         `json:"success"`
-	Error   string       `json:"error,omitempty"`
-	Token   string       `json:"token,omitempty"`
-	Auth    AuthResponse `json:"auth,omitempty"`
+	Token string       `json:"token,omitempty"`
+	Auth  AuthResponse `json:"auth,omitempty"`
 }
 
 type LoginResponse struct {
-	Success bool         `json:"success"`
-	Error   string       `json:"error,omitempty"`
-	Token   string       `json:"token,omitempty"`
-	Auth    AuthResponse `json:"auth,omitempty"`
+	Token string       `json:"token,omitempty"`
+	Auth  AuthResponse `json:"auth,omitempty"`
 }
 
 type AuthResponse struct {
@@ -159,25 +155,19 @@ func GetAuthResponseFromUser(tx *vbolt.Tx, user User) AuthResponse {
 func CreateAccount(ctx *vbeam.Context, req CreateAccountRequest) (resp CreateAccountResponse, err error) {
 	// Validate request
 	if err = validateCreateAccountRequest(req); err != nil {
-		resp.Success = false
-		resp.Error = err.Error()
 		return
 	}
 
 	// Check if email already exists
 	userId := GetUserId(ctx.Tx, req.Email)
 	if userId != 0 {
-		resp.Success = false
-		resp.Error = "Email already registered"
-		return
+		return resp, errors.New("Email already registered")
 	}
 
 	// Hash password
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
 	if err != nil {
-		resp.Success = false
-		resp.Error = "Failed to process password"
-		return
+		return resp, errors.New("Failed to process password")
 	}
 
 	// Create user
@@ -207,8 +197,6 @@ func CreateAccount(ctx *vbeam.Context, req CreateAccountRequest) (resp CreateAcc
 	resp.Auth = GetAuthResponseFromUser(ctx.Tx, user)
 	vbolt.TxCommit(ctx.Tx)
 
-	// Return success response
-	resp.Success = true
 	return
 }
 
@@ -224,16 +212,12 @@ func ListAllUsers(ctx *vbeam.Context, req ListAllUsersRequest) (resp ListAllUser
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Only site admins can list all users
 	if caller.Role != RoleSiteAdmin {
-		resp.Success = false
-		resp.Error = "Only site admins can access this feature"
-		return
+		return resp, errors.New("Only site admins can access this feature")
 	}
 
 	// Get all users from the bucket
@@ -255,7 +239,6 @@ func ListAllUsers(ctx *vbeam.Context, req ListAllUsersRequest) (resp ListAllUser
 		})
 	}
 
-	resp.Success = true
 	return
 }
 
@@ -263,38 +246,28 @@ func UpdateUserRole(ctx *vbeam.Context, req UpdateUserRoleRequest) (resp UpdateU
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
 	if authErr != nil {
-		resp.Success = false
-		resp.Error = "Authentication required"
-		return
+		return resp, errors.New("Authentication required")
 	}
 
 	// Only site admins can update user roles
 	if caller.Role != RoleSiteAdmin {
-		resp.Success = false
-		resp.Error = "Only site admins can change user roles"
-		return
+		return resp, errors.New("Only site admins can change user roles")
 	}
 
 	// Cannot change your own role
 	if caller.Id == req.UserId {
-		resp.Success = false
-		resp.Error = "You cannot change your own role"
-		return
+		return resp, errors.New("You cannot change your own role")
 	}
 
 	// Get the user to update
 	user := GetUser(ctx.Tx, req.UserId)
 	if user.Id == 0 {
-		resp.Success = false
-		resp.Error = "User not found"
-		return
+		return resp, errors.New("User not found")
 	}
 
 	// Validate new role
 	if req.NewRole < RoleUser || req.NewRole > RoleSiteAdmin {
-		resp.Success = false
-		resp.Error = "Invalid role value"
-		return
+		return resp, errors.New("Invalid role value")
 	}
 
 	// Update user role
@@ -311,7 +284,6 @@ func UpdateUserRole(ctx *vbeam.Context, req UpdateUserRoleRequest) (resp UpdateU
 		"updatedBy": caller.Id,
 	})
 
-	resp.Success = true
 	resp.User = user
 	return
 }
@@ -328,9 +300,7 @@ type UserWithStats struct {
 }
 
 type ListAllUsersResponse struct {
-	Success bool            `json:"success"`
-	Error   string          `json:"error,omitempty"`
-	Users   []UserWithStats `json:"users,omitempty"`
+	Users []UserWithStats `json:"users,omitempty"`
 }
 
 type UpdateUserRoleRequest struct {
@@ -339,9 +309,7 @@ type UpdateUserRoleRequest struct {
 }
 
 type UpdateUserRoleResponse struct {
-	Success bool   `json:"success"`
-	Error   string `json:"error,omitempty"`
-	User    User   `json:"user,omitempty"`
+	User User `json:"user,omitempty"`
 }
 
 func validateCreateAccountRequest(req CreateAccountRequest) error {

@@ -340,12 +340,13 @@ func TestGenerateAccessCode(t *testing.T) {
 
 	// Test 1: Generate room code as admin (should succeed)
 	t.Run("RoomCodeAsAdmin", func(t *testing.T) {
-		adminToken, err := createTestToken(adminUser.Id)
-		if err != nil {
-			t.Fatalf("Failed to create test token: %v", err)
+		adminToken, tokenErr := createTestToken(adminUser.Id)
+		if tokenErr != nil {
+			t.Fatalf("Failed to create test token: %v", tokenErr)
 		}
 
 		var resp GenerateAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -366,8 +367,8 @@ func TestGenerateAccessCode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Code == "" {
 			t.Error("Expected code to be generated")
@@ -442,8 +443,8 @@ func TestGenerateAccessCode(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Code == "" {
 			t.Error("Expected code to be generated")
@@ -457,7 +458,6 @@ func TestGenerateAccessCode(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GenerateAccessCodeResponse
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -472,17 +472,17 @@ func TestGenerateAccessCode(t *testing.T) {
 				Label:           "",
 			}
 
-			resp, err = GenerateAccessCode(ctx, req)
+			_, err = GenerateAccessCode(ctx, req)
 		})
 
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for non-admin user")
 		}
-		if resp.Error != "Only studio admins can generate access codes" {
-			t.Errorf("Expected permission error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Only studio admins can generate access codes" {
+			t.Errorf("Expected permission error, got: %s", err.Error())
 		}
 	})
 
@@ -493,7 +493,6 @@ func TestGenerateAccessCode(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GenerateAccessCodeResponse
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -508,17 +507,17 @@ func TestGenerateAccessCode(t *testing.T) {
 				Label:           "",
 			}
 
-			resp, err = GenerateAccessCode(ctx, req)
+			_, err = GenerateAccessCode(ctx, req)
 		})
 
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for invalid room ID")
 		}
-		if resp.Error != "Room not found" {
-			t.Errorf("Expected 'Room not found', got: %s", resp.Error)
+		if err != nil && err.Error() != "Room not found" {
+			t.Errorf("Expected 'Room not found', got: %s", err.Error())
 		}
 	})
 
@@ -529,7 +528,6 @@ func TestGenerateAccessCode(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GenerateAccessCodeResponse
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -544,17 +542,17 @@ func TestGenerateAccessCode(t *testing.T) {
 				Label:           "",
 			}
 
-			resp, err = GenerateAccessCode(ctx, req)
+			_, err = GenerateAccessCode(ctx, req)
 		})
 
 		if err != nil {
 			t.Fatalf("Unexpected error: %v", err)
 		}
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for invalid duration")
 		}
-		if resp.Error != "Duration value invalid" {
-			t.Errorf("Expected duration error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Duration value invalid" {
+			t.Errorf("Expected duration error, got: %s", err.Error())
 		}
 	})
 }
@@ -673,14 +671,15 @@ func TestValidateAccessCode(t *testing.T) {
 	// Test 1: Valid code (should succeed)
 	t.Run("ValidCode", func(t *testing.T) {
 		var resp ValidateAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: "12345"}
-			resp, _ = ValidateAccessCode(ctx, req)
+			resp, err = ValidateAccessCode(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.SessionToken == "" {
 			t.Error("Expected session token to be generated")
@@ -726,86 +725,86 @@ func TestValidateAccessCode(t *testing.T) {
 
 	// Test 2: Invalid code (doesn't exist)
 	t.Run("InvalidCode", func(t *testing.T) {
-		var resp ValidateAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: "99999"}
-			resp, _ = ValidateAccessCode(ctx, req)
+			_, err = ValidateAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for invalid code")
 		}
-		if resp.Error != "Invalid code" {
-			t.Errorf("Expected 'Invalid code', got: %s", resp.Error)
+		if err != nil && err.Error() != "Invalid code" {
+			t.Errorf("Expected 'Invalid code', got: %s", err.Error())
 		}
 	})
 
 	// Test 3: Invalid format (not 5 digits)
 	t.Run("InvalidFormat", func(t *testing.T) {
-		var resp ValidateAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: "123"}
-			resp, _ = ValidateAccessCode(ctx, req)
+			_, err = ValidateAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for invalid format")
 		}
-		if resp.Error != "Invalid code format" {
-			t.Errorf("Expected 'Invalid code format', got: %s", resp.Error)
+		if err != nil && err.Error() != "Invalid code format" {
+			t.Errorf("Expected 'Invalid code format', got: %s", err.Error())
 		}
 	})
 
 	// Test 4: Expired code
 	t.Run("ExpiredCode", func(t *testing.T) {
-		var resp ValidateAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: "11111"}
-			resp, _ = ValidateAccessCode(ctx, req)
+			_, err = ValidateAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for expired code")
 		}
-		if resp.Error != "Code has expired" {
-			t.Errorf("Expected 'Code has expired', got: %s", resp.Error)
+		if err != nil && err.Error() != "Code has expired" {
+			t.Errorf("Expected 'Code has expired', got: %s", err.Error())
 		}
 	})
 
 	// Test 5: Revoked code
 	t.Run("RevokedCode", func(t *testing.T) {
-		var resp ValidateAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: "22222"}
-			resp, _ = ValidateAccessCode(ctx, req)
+			_, err = ValidateAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for revoked code")
 		}
-		if resp.Error != "Code has been revoked" {
-			t.Errorf("Expected 'Code has been revoked', got: %s", resp.Error)
+		if err != nil && err.Error() != "Code has been revoked" {
+			t.Errorf("Expected 'Code has been revoked', got: %s", err.Error())
 		}
 	})
 
 	// Test 6: At capacity
 	t.Run("AtCapacity", func(t *testing.T) {
-		var resp ValidateAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: "33333"}
-			resp, _ = ValidateAccessCode(ctx, req)
+			_, err = ValidateAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Error("Expected failure for code at capacity")
 		}
-		if resp.Error != "Stream is at capacity (2/2 viewers)" {
-			t.Errorf("Expected capacity error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Stream is at capacity (2/2 viewers)" {
+			t.Errorf("Expected capacity error, got: %s", err.Error())
 		}
 	})
 
@@ -813,15 +812,15 @@ func TestValidateAccessCode(t *testing.T) {
 	t.Run("MultipleValidations", func(t *testing.T) {
 		// Validate the valid code 3 more times
 		for i := 0; i < 3; i++ {
-			var resp ValidateAccessCodeResponse
+			var err error
 			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 				ctx := &vbeam.Context{Tx: tx}
 				req := ValidateAccessCodeRequest{Code: "12345"}
-				resp, _ = ValidateAccessCode(ctx, req)
+				_, err = ValidateAccessCode(ctx, req)
 			})
 
-			if !resp.Success {
-				t.Fatalf("Validation %d failed: %s", i+1, resp.Error)
+			if err != nil {
+				t.Fatalf("Validation %d failed: %s", i+1, err.Error())
 			}
 		}
 
@@ -929,10 +928,6 @@ func TestValidateAccessCodeHandler(t *testing.T) {
 		var response ValidateAccessCodeResponse
 		json.NewDecoder(resp.Body).Decode(&response)
 
-		if !response.Success {
-			t.Fatalf("Expected validation to succeed, got error: %s", response.Error)
-		}
-
 		// Check that authToken cookie is set (contains JWT)
 		cookies := resp.Cookies()
 		var foundCookie *http.Cookie
@@ -1012,14 +1007,6 @@ func TestValidateAccessCodeHandler(t *testing.T) {
 			if cookie.Name == "authToken" {
 				t.Error("Expected authToken cookie NOT to be set for invalid code")
 			}
-		}
-
-		// Parse response body
-		var response ValidateAccessCodeResponse
-		json.NewDecoder(resp.Body).Decode(&response)
-
-		if response.Success {
-			t.Error("Expected success=false for invalid code")
 		}
 	})
 
@@ -1129,9 +1116,6 @@ func TestGetCodeStreamAccess(t *testing.T) {
 			validateResp, _ = ValidateAccessCode(ctx, req)
 		})
 
-		if !validateResp.Success {
-			t.Fatalf("Failed to validate code: %s", validateResp.Error)
-		}
 		sessionToken = validateResp.SessionToken
 
 		// Test: Access the room with the session
@@ -1233,9 +1217,6 @@ func TestGetCodeStreamAccess(t *testing.T) {
 			validateResp, _ = ValidateAccessCode(ctx, req)
 		})
 
-		if !validateResp.Success {
-			t.Fatalf("Failed to validate code: %s", validateResp.Error)
-		}
 		sessionToken = validateResp.SessionToken
 
 		// Test: Access both rooms with studio-wide code
@@ -1337,9 +1318,6 @@ func TestGetCodeStreamAccess(t *testing.T) {
 			validateResp, _ = ValidateAccessCode(ctx, req)
 		})
 
-		if !validateResp.Success {
-			t.Fatalf("Failed to validate code: %s", validateResp.Error)
-		}
 		sessionToken = validateResp.SessionToken
 
 		// Now revoke the code
@@ -1593,9 +1571,6 @@ func TestGetCodeStreamAccess(t *testing.T) {
 			validateResp, _ = ValidateAccessCode(ctx, req)
 		})
 
-		if !validateResp.Success {
-			t.Fatalf("Failed to validate code: %s", validateResp.Error)
-		}
 		sessionToken = validateResp.SessionToken
 
 		// Test: Try to access wrong room
@@ -1688,9 +1663,6 @@ func TestGetCodeStreamAccess(t *testing.T) {
 			validateResp, _ = ValidateAccessCode(ctx, req)
 		})
 
-		if !validateResp.Success {
-			t.Fatalf("Failed to validate code: %s", validateResp.Error)
-		}
 		sessionToken = validateResp.SessionToken
 
 		// Test: Try to access room in studio 2
@@ -1803,7 +1775,6 @@ func TestRevokeAccessCode(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp RevokeAccessCodeResponse
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -1813,14 +1784,14 @@ func TestRevokeAccessCode(t *testing.T) {
 			req := RevokeAccessCodeRequest{
 				Code: "00000",
 			}
-			resp, _ = RevokeAccessCode(ctx, req)
+			_, err = RevokeAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when revoking non-existent code")
 		}
-		if resp.Error != "Access code not found" {
-			t.Errorf("Expected 'Access code not found' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Access code not found" {
+			t.Errorf("Expected 'Access code not found' error, got: %s", err.Error())
 		}
 	})
 
@@ -1845,7 +1816,7 @@ func TestRevokeAccessCode(t *testing.T) {
 			vbolt.TxCommit(tx)
 		})
 
-		var resp RevokeAccessCodeResponse
+		var err error
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -1855,14 +1826,14 @@ func TestRevokeAccessCode(t *testing.T) {
 			req := RevokeAccessCodeRequest{
 				Code: code,
 			}
-			resp, _ = RevokeAccessCode(ctx, req)
+			_, err = RevokeAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when revoking without authentication")
 		}
-		if resp.Error != "Authentication required" {
-			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", err.Error())
 		}
 	})
 
@@ -1893,7 +1864,6 @@ func TestRevokeAccessCode(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp RevokeAccessCodeResponse
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -1903,14 +1873,14 @@ func TestRevokeAccessCode(t *testing.T) {
 			req := RevokeAccessCodeRequest{
 				Code: code,
 			}
-			resp, _ = RevokeAccessCode(ctx, req)
+			_, err = RevokeAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when viewer tries to revoke code")
 		}
-		if resp.Error != "Admin permission required" {
-			t.Errorf("Expected 'Admin permission required' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Admin permission required" {
+			t.Errorf("Expected 'Admin permission required' error, got: %s", err.Error())
 		}
 	})
 
@@ -1938,8 +1908,8 @@ func TestRevokeAccessCode(t *testing.T) {
 				Label:           "Code to be revoked",
 			}
 			resp, _ := GenerateAccessCode(ctx, req)
-			if !resp.Success {
-				t.Fatalf("Failed to generate code: %s", resp.Error)
+			if err != nil {
+				t.Fatalf("Failed to generate code: %s", err.Error())
 			}
 			code = resp.Code
 		})
@@ -1950,8 +1920,8 @@ func TestRevokeAccessCode(t *testing.T) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: code}
 			resp, _ := ValidateAccessCode(ctx, req)
-			if !resp.Success {
-				t.Fatalf("Failed to validate code for session 1: %s", resp.Error)
+			if err != nil {
+				t.Fatalf("Failed to validate code for session 1: %s", err.Error())
 			}
 			sessionToken1 = resp.SessionToken
 		})
@@ -1961,8 +1931,8 @@ func TestRevokeAccessCode(t *testing.T) {
 			ctx := &vbeam.Context{Tx: tx}
 			req := ValidateAccessCodeRequest{Code: code}
 			resp, _ := ValidateAccessCode(ctx, req)
-			if !resp.Success {
-				t.Fatalf("Failed to validate code for session 2: %s", resp.Error)
+			if err != nil {
+				t.Fatalf("Failed to validate code for session 2: %s", err.Error())
 			}
 			sessionToken2 = resp.SessionToken
 		})
@@ -1997,9 +1967,6 @@ func TestRevokeAccessCode(t *testing.T) {
 			revokeResp, _ = RevokeAccessCode(ctx, req)
 		})
 
-		if !revokeResp.Success {
-			t.Fatalf("Expected successful revocation, got error: %s", revokeResp.Error)
-		}
 		if revokeResp.SessionsKilled != 2 {
 			t.Errorf("Expected 2 sessions killed, got: %d", revokeResp.SessionsKilled)
 		}
@@ -2078,7 +2045,6 @@ func TestRevokeAccessCode(t *testing.T) {
 		})
 
 		// Try to revoke again
-		var resp RevokeAccessCodeResponse
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2086,14 +2052,14 @@ func TestRevokeAccessCode(t *testing.T) {
 			}
 
 			req := RevokeAccessCodeRequest{Code: code}
-			resp, _ = RevokeAccessCode(ctx, req)
+			_, err = RevokeAccessCode(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when revoking already-revoked code")
 		}
-		if resp.Error != "Access code is already revoked" {
-			t.Errorf("Expected 'Access code is already revoked' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Access code is already revoked" {
+			t.Errorf("Expected 'Access code is already revoked' error, got: %s", err.Error())
 		}
 	})
 
@@ -2120,14 +2086,13 @@ func TestRevokeAccessCode(t *testing.T) {
 				Label:           "Studio code to revoke",
 			}
 			resp, _ := GenerateAccessCode(ctx, req)
-			if !resp.Success {
-				t.Fatalf("Failed to generate studio code: %s", resp.Error)
+			if err != nil {
+				t.Fatalf("Failed to generate studio code: %s", err.Error())
 			}
 			code = resp.Code
 		})
 
 		// Revoke the studio code
-		var revokeResp RevokeAccessCodeResponse
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2135,12 +2100,8 @@ func TestRevokeAccessCode(t *testing.T) {
 			}
 
 			req := RevokeAccessCodeRequest{Code: code}
-			revokeResp, _ = RevokeAccessCode(ctx, req)
+			_, _ = RevokeAccessCode(ctx, req)
 		})
-
-		if !revokeResp.Success {
-			t.Fatalf("Expected successful revocation of studio code, got error: %s", revokeResp.Error)
-		}
 
 		// Verify code is revoked
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
@@ -2268,8 +2229,8 @@ func TestListAccessCodes(t *testing.T) {
 			resp, _ = ListAccessCodes(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if len(resp.Codes) != 0 {
 			t.Errorf("Expected empty list, got %d codes", len(resp.Codes))
@@ -2278,7 +2239,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Test 2: Authentication required
 	t.Run("AuthenticationRequired", func(t *testing.T) {
-		var resp ListAccessCodesResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2289,14 +2250,14 @@ func TestListAccessCodes(t *testing.T) {
 				Type:     int(CodeTypeRoom),
 				TargetId: room.Id,
 			}
-			resp, _ = ListAccessCodes(ctx, req)
+			_, err = ListAccessCodes(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when listing without authentication")
 		}
-		if resp.Error != "Authentication required" {
-			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", err.Error())
 		}
 	})
 
@@ -2307,7 +2268,6 @@ func TestListAccessCodes(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp ListAccessCodesResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2318,14 +2278,14 @@ func TestListAccessCodes(t *testing.T) {
 				Type:     int(CodeTypeRoom),
 				TargetId: 99999, // Non-existent room
 			}
-			resp, _ = ListAccessCodes(ctx, req)
+			_, err = ListAccessCodes(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when room not found")
 		}
-		if resp.Error != "Room not found" {
-			t.Errorf("Expected 'Room not found' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Room not found" {
+			t.Errorf("Expected 'Room not found' error, got: %s", err.Error())
 		}
 	})
 
@@ -2336,7 +2296,6 @@ func TestListAccessCodes(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp ListAccessCodesResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2347,14 +2306,14 @@ func TestListAccessCodes(t *testing.T) {
 				Type:     int(CodeTypeStudio),
 				TargetId: 99999, // Non-existent studio
 			}
-			resp, _ = ListAccessCodes(ctx, req)
+			_, err = ListAccessCodes(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when studio not found")
 		}
-		if resp.Error != "Studio not found" {
-			t.Errorf("Expected 'Studio not found' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Studio not found" {
+			t.Errorf("Expected 'Studio not found' error, got: %s", err.Error())
 		}
 	})
 
@@ -2365,7 +2324,6 @@ func TestListAccessCodes(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp ListAccessCodesResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2376,14 +2334,14 @@ func TestListAccessCodes(t *testing.T) {
 				Type:     int(CodeTypeRoom),
 				TargetId: room.Id,
 			}
-			resp, _ = ListAccessCodes(ctx, req)
+			_, err = ListAccessCodes(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when non-member tries to list codes")
 		}
-		if resp.Error != "You do not have permission to view access codes for this room" {
-			t.Errorf("Expected permission error, got: %s", resp.Error)
+		if err != nil && err.Error() != "You do not have permission to view access codes for this room" {
+			t.Errorf("Expected permission error, got: %s", err.Error())
 		}
 	})
 
@@ -2467,6 +2425,7 @@ func TestListAccessCodes(t *testing.T) {
 	// Test 6: List room codes as admin
 	t.Run("ListRoomCodesAsAdmin", func(t *testing.T) {
 		var resp ListAccessCodesResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2477,11 +2436,11 @@ func TestListAccessCodes(t *testing.T) {
 				Type:     int(CodeTypeRoom),
 				TargetId: room.Id,
 			}
-			resp, _ = ListAccessCodes(ctx, req)
+			resp, err = ListAccessCodes(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if len(resp.Codes) != 2 {
 			t.Fatalf("Expected 2 room codes, got %d", len(resp.Codes))
@@ -2542,8 +2501,8 @@ func TestListAccessCodes(t *testing.T) {
 			resp, _ = ListAccessCodes(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success for viewer, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error for viewer, got error: %s", err.Error())
 		}
 		if len(resp.Codes) != 2 {
 			t.Errorf("Viewer should see same codes as admin, got %d", len(resp.Codes))
@@ -2553,6 +2512,7 @@ func TestListAccessCodes(t *testing.T) {
 	// Test 8: List studio codes
 	t.Run("ListStudioCodes", func(t *testing.T) {
 		var resp ListAccessCodesResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2563,11 +2523,11 @@ func TestListAccessCodes(t *testing.T) {
 				Type:     int(CodeTypeStudio),
 				TargetId: studio.Id,
 			}
-			resp, _ = ListAccessCodes(ctx, req)
+			resp, err = ListAccessCodes(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if len(resp.Codes) != 1 {
 			t.Fatalf("Expected 1 studio code, got %d", len(resp.Codes))
@@ -2593,7 +2553,7 @@ func TestListAccessCodes(t *testing.T) {
 
 	// Test 9: Invalid code type
 	t.Run("InvalidCodeType", func(t *testing.T) {
-		var resp ListAccessCodesResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2604,14 +2564,14 @@ func TestListAccessCodes(t *testing.T) {
 				Type:     99, // Invalid type
 				TargetId: room.Id,
 			}
-			resp, _ = ListAccessCodes(ctx, req)
+			_, err = ListAccessCodes(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for invalid code type")
 		}
-		if resp.Error != "Invalid code type (must be 0 for room or 1 for studio)" {
-			t.Errorf("Expected invalid type error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Invalid code type (must be 0 for room or 1 for studio)" {
+			t.Errorf("Expected invalid type error, got: %s", err.Error())
 		}
 	})
 }
@@ -2717,7 +2677,6 @@ func TestGetCodeAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetCodeAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2725,20 +2684,20 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: "99999"}
-			resp, _ = GetCodeAnalytics(ctx, req)
+			_, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when code not found")
 		}
-		if resp.Error != "Access code not found" {
-			t.Errorf("Expected 'Access code not found' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Access code not found" {
+			t.Errorf("Expected 'Access code not found' error, got: %s", err.Error())
 		}
 	})
 
 	// Test 2: Authentication required
 	t.Run("AuthenticationRequired", func(t *testing.T) {
-		var resp GetCodeAnalyticsResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2746,14 +2705,14 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: "12345"}
-			resp, _ = GetCodeAnalytics(ctx, req)
+			_, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when not authenticated")
 		}
-		if resp.Error != "Authentication required" {
-			t.Errorf("Expected 'Authentication required' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Authentication required" {
+			t.Errorf("Expected 'Authentication required' error, got: %s", err.Error())
 		}
 	})
 
@@ -2764,7 +2723,6 @@ func TestGetCodeAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetCodeAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2772,14 +2730,14 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: "123"} // Too short
-			resp, _ = GetCodeAnalytics(ctx, req)
+			_, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure for invalid code format")
 		}
-		if resp.Error != "Invalid code format" {
-			t.Errorf("Expected 'Invalid code format' error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Invalid code format" {
+			t.Errorf("Expected 'Invalid code format' error, got: %s", err.Error())
 		}
 	})
 
@@ -2807,7 +2765,6 @@ func TestGetCodeAnalytics(t *testing.T) {
 			t.Fatalf("Failed to create test token: %v", err)
 		}
 
-		var resp GetCodeAnalyticsResponse
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2815,20 +2772,21 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: testCode}
-			resp, _ = GetCodeAnalytics(ctx, req)
+			_, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if resp.Success {
+		if err == nil {
 			t.Errorf("Expected failure when viewer tries to access analytics")
 		}
-		if resp.Error != "Only studio admins can view code analytics" {
-			t.Errorf("Expected admin permission error, got: %s", resp.Error)
+		if err != nil && err.Error() != "Only studio admins can view code analytics" {
+			t.Errorf("Expected admin permission error, got: %s", err.Error())
 		}
 	})
 
 	// Test 5: Successful analytics for active code (no sessions)
 	t.Run("ActiveCodeNoSessions", func(t *testing.T) {
 		var resp GetCodeAnalyticsResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2836,11 +2794,11 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: testCode}
-			resp, _ = GetCodeAnalytics(ctx, req)
+			resp, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Code != testCode {
 			t.Errorf("Expected code %s, got %s", testCode, resp.Code)
@@ -2907,6 +2865,7 @@ func TestGetCodeAnalytics(t *testing.T) {
 	// Test 6: Analytics with active sessions
 	t.Run("ActiveCodeWithSessions", func(t *testing.T) {
 		var resp GetCodeAnalyticsResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -2914,11 +2873,11 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: testCode}
-			resp, _ = GetCodeAnalytics(ctx, req)
+			resp, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.TotalConnections != 2 {
 			t.Errorf("Expected 2 total connections, got %d", resp.TotalConnections)
@@ -2995,6 +2954,7 @@ func TestGetCodeAnalytics(t *testing.T) {
 		})
 
 		var resp GetCodeAnalyticsResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -3002,11 +2962,11 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: expiredCode}
-			resp, _ = GetCodeAnalytics(ctx, req)
+			resp, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Status != "expired" {
 			t.Errorf("Expected status 'expired', got %s", resp.Status)
@@ -3050,6 +3010,7 @@ func TestGetCodeAnalytics(t *testing.T) {
 		})
 
 		var resp GetCodeAnalyticsResponse
+		var err error
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{
 				Tx:    tx,
@@ -3057,11 +3018,11 @@ func TestGetCodeAnalytics(t *testing.T) {
 			}
 
 			req := GetCodeAnalyticsRequest{Code: revokedCode}
-			resp, _ = GetCodeAnalytics(ctx, req)
+			resp, err = GetCodeAnalytics(ctx, req)
 		})
 
-		if !resp.Success {
-			t.Fatalf("Expected success, got error: %s", resp.Error)
+		if err != nil {
+			t.Fatalf("Expected no error, got error: %s", err.Error())
 		}
 		if resp.Status != "revoked" {
 			t.Errorf("Expected status 'revoked', got %s", resp.Status)
@@ -3784,8 +3745,8 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 				t.Fatalf("Failed to validate code: %v", err)
 			}
 
-			if !resp.Success {
-				t.Fatalf("Code validation failed: %s", resp.Error)
+			if err != nil {
+				t.Fatalf("Code validation failed: %s", err.Error())
 			}
 
 			sessionToken = resp.SessionToken
@@ -4112,10 +4073,6 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		var validateResp ValidateAccessCodeResponse
 		json.NewDecoder(w.Result().Body).Decode(&validateResp)
 
-		if !validateResp.Success {
-			t.Fatalf("Validation failed: %s", validateResp.Error)
-		}
-
 		sessionToken := validateResp.SessionToken
 		if sessionToken == "" {
 			t.Fatal("Session token in response is empty")
@@ -4224,7 +4181,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 
-			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+			_, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
 				Code: code,
 			})
 
@@ -4232,12 +4189,12 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 				t.Fatalf("ValidateAccessCode returned error: %v", err)
 			}
 
-			if resp.Success {
+			if err == nil {
 				t.Error("Expected expired code to be rejected")
 			}
 
-			if !strings.Contains(resp.Error, "expired") && !strings.Contains(resp.Error, "Expired") {
-				t.Errorf("Expected error message to mention expiration, got: %s", resp.Error)
+			if !strings.Contains(err.Error(), "expired") && !strings.Contains(err.Error(), "Expired") {
+				t.Errorf("Expected error message to mention expiration, got: %s", err.Error())
 			}
 
 			vbolt.TxCommit(tx)
@@ -4328,7 +4285,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 				t.Fatalf("Failed to revoke code: %v", err)
 			}
 
-			if !resp.Success {
+			if err != nil {
 				t.Error("Expected revocation to succeed")
 			}
 
@@ -4431,7 +4388,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 					t.Fatalf("Failed to validate code (session %d): %v", i+1, err)
 				}
 
-				if !resp.Success {
+				if err != nil {
 					t.Errorf("Session %d should be allowed (under limit)", i+1)
 				}
 
@@ -4457,19 +4414,15 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 
-			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+			_, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
 				Code: code,
 			})
-			if err != nil {
-				t.Fatalf("ValidateAccessCode returned error: %v", err)
-			}
-
-			if resp.Success {
+			if err == nil {
 				t.Error("Third session should be rejected (at capacity)")
-			}
-
-			if !strings.Contains(resp.Error, "capacity") && !strings.Contains(resp.Error, "full") {
-				t.Errorf("Expected error about capacity, got: %s", resp.Error)
+			} else {
+				if !strings.Contains(err.Error(), "capacity") && !strings.Contains(err.Error(), "full") {
+					t.Errorf("Expected error about capacity, got: %s", err.Error())
+				}
 			}
 
 			vbolt.TxCommit(tx)
@@ -4482,15 +4435,15 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 
-			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+			_, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
 				Code: code,
 			})
 			if err != nil {
 				t.Fatalf("Failed to validate after disconnect: %v", err)
 			}
 
-			if !resp.Success {
-				t.Errorf("Third session should succeed after disconnect: %s", resp.Error)
+			if err != nil {
+				t.Errorf("Third session should succeed after disconnect: %s", err.Error())
 			}
 
 			vbolt.TxCommit(tx)

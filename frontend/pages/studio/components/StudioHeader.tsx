@@ -95,8 +95,8 @@ async function submitEditStudio(modal: EditStudioModal) {
 
   modal.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to update studio";
+  if (err) {
+    modal.error = err || "Failed to update studio";
     vlens.scheduleRedraw();
     return;
   }
@@ -156,8 +156,8 @@ async function confirmDeleteStudio(modal: DeleteStudioModal) {
 
   modal.isDeleting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to delete studio";
+  if (err) {
+    modal.error = err || "Failed to delete studio";
     vlens.scheduleRedraw();
     return;
   }
@@ -238,8 +238,8 @@ async function submitCreateRoom(modal: CreateRoomModal) {
 
   modal.isSubmitting = false;
 
-  if (err || !resp || !resp.success) {
-    modal.error = resp?.error || err || "Failed to create room";
+  if (err) {
+    modal.error = err || "Failed to create room";
     vlens.scheduleRedraw();
     return;
   }

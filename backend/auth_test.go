@@ -53,9 +53,9 @@ func TestGetAuthFromRequest(t *testing.T) {
 		})
 
 		// Create a JWT token for the user
-		testToken, err := createTestToken(testUser.Id)
-		if err != nil {
-			t.Fatalf("Failed to create test token: %v", err)
+		testToken, tokenErr := createTestToken(testUser.Id)
+		if tokenErr != nil {
+			t.Fatalf("Failed to create test token: %v", tokenErr)
 		}
 
 		// Create a request with JWT cookie
@@ -973,13 +973,12 @@ func TestMigrateCodeSession_AnonymousRegister(t *testing.T) {
 	}
 
 	// Call CreateAccount procedure with anonymous JWT token
-	var resp CreateAccountResponse
 	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 		ctx := &vbeam.Context{
 			Tx:    tx,
 			Token: anonTokenString,
 		}
-		resp, err = CreateAccount(ctx, CreateAccountRequest{
+		_, err = CreateAccount(ctx, CreateAccountRequest{
 			Name:            "New User",
 			Email:           "newuser@example.com",
 			Password:        "password123",
@@ -991,8 +990,8 @@ func TestMigrateCodeSession_AnonymousRegister(t *testing.T) {
 		t.Fatalf("CreateAccount returned error: %v", err)
 	}
 
-	if !resp.Success {
-		t.Fatalf("Expected success, got error: %s", resp.Error)
+	if err != nil {
+		t.Fatalf("Expected no error, got error: %s", err.Error())
 	}
 
 	// Get new user ID from database
