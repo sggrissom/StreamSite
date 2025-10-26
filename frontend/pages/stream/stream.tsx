@@ -507,12 +507,18 @@ export function view(
         )}
 
         <div className="stream-actions">
-          <a
-            href={`/studio/${data.room.studioId}`}
-            className="btn btn-secondary"
-          >
-            ← Back to Studio
-          </a>
+          {!data.isCodeAuth && data.myRole >= server.StudioRoleMember ? (
+            <a
+              href={`/studio/${data.room.studioId}`}
+              className="btn btn-secondary"
+            >
+              ← Back to Studio
+            </a>
+          ) : (
+            <a href="/dashboard" className="btn btn-secondary">
+              ← Back to My Streams
+            </a>
+          )}
         </div>
       </main>
       <Footer />
