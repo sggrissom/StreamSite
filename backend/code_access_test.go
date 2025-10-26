@@ -475,13 +475,9 @@ func TestGenerateAccessCode(t *testing.T) {
 			_, err = GenerateAccessCode(ctx, req)
 		})
 
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
 		if err == nil {
 			t.Error("Expected failure for non-admin user")
-		}
-		if err != nil && err.Error() != "Only studio admins can generate access codes" {
+		} else if err.Error() != "Only studio admins can generate access codes" {
 			t.Errorf("Expected permission error, got: %s", err.Error())
 		}
 	})
@@ -510,13 +506,9 @@ func TestGenerateAccessCode(t *testing.T) {
 			_, err = GenerateAccessCode(ctx, req)
 		})
 
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
 		if err == nil {
 			t.Error("Expected failure for invalid room ID")
-		}
-		if err != nil && err.Error() != "Room not found" {
+		} else if err.Error() != "Room not found" {
 			t.Errorf("Expected 'Room not found', got: %s", err.Error())
 		}
 	})
@@ -545,13 +537,9 @@ func TestGenerateAccessCode(t *testing.T) {
 			_, err = GenerateAccessCode(ctx, req)
 		})
 
-		if err != nil {
-			t.Fatalf("Unexpected error: %v", err)
-		}
 		if err == nil {
 			t.Error("Expected failure for invalid duration")
-		}
-		if err != nil && err.Error() != "Duration value invalid" {
+		} else if err.Error() != "Duration value invalid" {
 			t.Errorf("Expected duration error, got: %s", err.Error())
 		}
 	})
@@ -684,6 +672,9 @@ func TestValidateAccessCode(t *testing.T) {
 		if resp.SessionToken == "" {
 			t.Error("Expected session token to be generated")
 		}
+
+		// Simulate SSE connection to increment viewer count
+		IncrementCodeViewerCount(db, resp.SessionToken)
 		if len(resp.SessionToken) != 44 { // base64 encoding of 32 bytes
 			t.Errorf("Session token has unexpected length: got %d, want 44 (token: %s)", len(resp.SessionToken), resp.SessionToken)
 		}
@@ -812,16 +803,20 @@ func TestValidateAccessCode(t *testing.T) {
 	t.Run("MultipleValidations", func(t *testing.T) {
 		// Validate the valid code 3 more times
 		for i := 0; i < 3; i++ {
+			var resp ValidateAccessCodeResponse
 			var err error
 			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 				ctx := &vbeam.Context{Tx: tx}
 				req := ValidateAccessCodeRequest{Code: "12345"}
-				_, err = ValidateAccessCode(ctx, req)
+				resp, err = ValidateAccessCode(ctx, req)
 			})
 
 			if err != nil {
 				t.Fatalf("Validation %d failed: %s", i+1, err.Error())
 			}
+
+			// Simulate SSE connection to increment viewer count
+			IncrementCodeViewerCount(db, resp.SessionToken)
 		}
 
 		// Check analytics
@@ -1925,6 +1920,8 @@ func TestRevokeAccessCode(t *testing.T) {
 			}
 			sessionToken1 = resp.SessionToken
 		})
+		// Simulate SSE connection to increment viewer count
+		IncrementCodeViewerCount(db, sessionToken1)
 
 		// Session 2
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -1936,6 +1933,8 @@ func TestRevokeAccessCode(t *testing.T) {
 			}
 			sessionToken2 = resp.SessionToken
 		})
+		// Simulate SSE connection to increment viewer count
+		IncrementCodeViewerCount(db, sessionToken2)
 
 		// Verify sessions exist and analytics show 2 current viewers
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
@@ -2833,6 +2832,8 @@ func TestGetCodeAnalytics(t *testing.T) {
 		resp, _ := ValidateAccessCode(ctx, req)
 		sessionToken1 = resp.SessionToken
 	})
+	// Simulate SSE connection to increment viewer count
+	IncrementCodeViewerCount(db, sessionToken1)
 
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		ctx := &vbeam.Context{Tx: tx}
@@ -2842,6 +2843,8 @@ func TestGetCodeAnalytics(t *testing.T) {
 		resp, _ := ValidateAccessCode(ctx, req)
 		sessionToken2 = resp.SessionToken
 	})
+	// Simulate SSE connection to increment viewer count
+	IncrementCodeViewerCount(db, sessionToken2)
 
 	// Manually set ClientIP and UserAgent for testing
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -3745,10 +3748,6 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 				t.Fatalf("Failed to validate code: %v", err)
 			}
 
-			if err != nil {
-				t.Fatalf("Code validation failed: %s", err.Error())
-			}
-
 			sessionToken = resp.SessionToken
 			vbolt.TxCommit(tx)
 		})
@@ -3756,6 +3755,9 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		if sessionToken == "" {
 			t.Fatal("Session token is empty")
 		}
+
+		// Simulate SSE connection to increment viewer count
+		IncrementCodeViewerCount(db, sessionToken)
 
 		// Step 4: Use session token to check stream access
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
@@ -4185,16 +4187,12 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 				Code: code,
 			})
 
-			if err != nil {
-				t.Fatalf("ValidateAccessCode returned error: %v", err)
-			}
-
 			if err == nil {
 				t.Error("Expected expired code to be rejected")
-			}
-
-			if !strings.Contains(err.Error(), "expired") && !strings.Contains(err.Error(), "Expired") {
-				t.Errorf("Expected error message to mention expiration, got: %s", err.Error())
+			} else {
+				if !strings.Contains(err.Error(), "expired") && !strings.Contains(err.Error(), "Expired") {
+					t.Errorf("Expected error message to mention expiration, got: %s", err.Error())
+				}
 			}
 
 			vbolt.TxCommit(tx)
@@ -4378,6 +4376,7 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		// Create first two sessions - should succeed
 		var session1 string
 		for i := 0; i < 2; i++ {
+			var sessionToken string
 			vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 				ctx := &vbeam.Context{Tx: tx}
 
@@ -4388,16 +4387,16 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 					t.Fatalf("Failed to validate code (session %d): %v", i+1, err)
 				}
 
-				if err != nil {
-					t.Errorf("Session %d should be allowed (under limit)", i+1)
-				}
-
+				sessionToken = resp.SessionToken
 				if i == 0 {
 					session1 = resp.SessionToken
 				}
 
 				vbolt.TxCommit(tx)
 			})
+
+			// Simulate SSE connection to increment viewer count
+			IncrementCodeViewerCount(db, sessionToken)
 		}
 
 		// Verify current viewers = 2
@@ -4432,22 +4431,23 @@ func TestEndToEndCodeAuthFlow(t *testing.T) {
 		DecrementCodeViewerCount(db, session1)
 
 		// Now third session should succeed
+		var session3Token string
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
 
-			_, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
+			resp, err := ValidateAccessCode(ctx, ValidateAccessCodeRequest{
 				Code: code,
 			})
 			if err != nil {
 				t.Fatalf("Failed to validate after disconnect: %v", err)
 			}
 
-			if err != nil {
-				t.Errorf("Third session should succeed after disconnect: %s", err.Error())
-			}
-
+			session3Token = resp.SessionToken
 			vbolt.TxCommit(tx)
 		})
+
+		// Simulate SSE connection to increment viewer count
+		IncrementCodeViewerCount(db, session3Token)
 
 		// Verify final count = 2 (session2 + new session3)
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {

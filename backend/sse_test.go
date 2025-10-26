@@ -796,8 +796,9 @@ func TestViewerCountTracking(t *testing.T) {
 			afterViewers = analytics.CurrentViewers
 		})
 
-		if afterViewers != 2 {
-			t.Errorf("Expected viewers to decrement to 2, got %d", afterViewers)
+		// After SSE connect (3 -> 4) and disconnect (4 -> 3), should be back to 3
+		if afterViewers != 3 {
+			t.Errorf("Expected viewers to return to 3, got %d", afterViewers)
 		}
 	})
 
@@ -858,23 +859,33 @@ func TestViewerCountTracking(t *testing.T) {
 
 		// Validate code successfully for first viewer
 		var err1 error
+		var token1 string
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
-			_, err1 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+			resp, respErr := ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+			err1 = respErr
+			token1 = resp.SessionToken
 		})
 		if err1 != nil {
 			t.Fatalf("First validation should succeed: %v", err1)
 		}
+		// Simulate SSE connection to increment viewer count
+		IncrementCodeViewerCount(db, token1)
 
 		// Validate code successfully for second viewer
 		var err2 error
+		var token2 string
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			ctx := &vbeam.Context{Tx: tx}
-			_, err2 = ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+			resp, respErr := ValidateAccessCode(ctx, ValidateAccessCodeRequest{Code: code})
+			err2 = respErr
+			token2 = resp.SessionToken
 		})
 		if err2 != nil {
 			t.Fatalf("Second validation should succeed: %v", err2)
 		}
+		// Simulate SSE connection to increment viewer count
+		IncrementCodeViewerCount(db, token2)
 
 		// Verify current viewers is 2
 		var currentViewers int
