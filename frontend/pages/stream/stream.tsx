@@ -1,5 +1,6 @@
 import * as preact from "preact";
 import * as vlens from "vlens";
+import { registerCleanupFunction } from "vlens/core";
 import * as server from "../../server";
 import { Header, Footer } from "../../layout";
 import "./stream-styles";
@@ -100,6 +101,20 @@ type StreamState = {
   handleCodeExpiredGrace: () => void;
 };
 
+// Module-level reference to stream state for cleanup during navigation
+// Updated by useStreamPlayer hook on each render
+let streamStateRef: StreamState | null = null;
+
+// Register cleanup function with vlens
+// This will be called automatically during navigation
+registerCleanupFunction(() => {
+  if (streamStateRef && streamStateRef.eventSource) {
+    streamStateRef.disconnectSSE();
+    cleanupPlayer(streamStateRef);
+    streamStateRef.roomId = 0;
+  }
+});
+
 const useStreamPlayer = vlens.declareHook((): StreamState => {
   const state: StreamState = {
     videoElement: null,
@@ -186,6 +201,10 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       }
     },
   };
+
+  // Update module-level reference for cleanup during navigation
+  streamStateRef = state;
+
   return state;
 });
 

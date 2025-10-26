@@ -638,6 +638,7 @@ func StartViewerSessionCleanup(db *vbolt.DB) {
 // This should be called on server startup since SSE connections cannot persist across restarts
 func ResetAllCurrentViewers(db *vbolt.DB) {
 	resetCount := 0
+	sessionCount := 0
 
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		// Reset room analytics
@@ -678,7 +679,25 @@ func ResetAllCurrentViewers(db *vbolt.DB) {
 		resetCount += codeResetCount
 	})
 
+	// Delete all viewer sessions since SSE connections are closed on restart
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		vbolt.IterateAll(tx, ViewerSessionsBkt, func(sessionKey string, session ViewerSession) bool {
+			// Delete session from bucket
+			vbolt.Delete(tx, ViewerSessionsBkt, sessionKey)
+			// Remove from room index
+			vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, -1)
+			// Remove from code index if applicable
+			if session.Code != "" {
+				vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, sessionKey, "")
+			}
+			sessionCount++
+			return true // continue iteration
+		})
+		vbolt.TxCommit(tx)
+	})
+
 	LogInfo(LogCategorySystem, "Reset all CurrentViewers to 0 on startup", map[string]interface{}{
-		"resetCount": resetCount,
+		"resetCount":      resetCount,
+		"deletedSessions": sessionCount,
 	})
 }

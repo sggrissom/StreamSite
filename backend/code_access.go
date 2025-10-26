@@ -1399,10 +1399,8 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 		var analytics CodeAnalytics
 		vbolt.Read(ctx.Tx, CodeAnalyticsBkt, code, &analytics)
 
-		// Calculate current viewers by counting active ViewerSessions for this code
-		var sessionKeys []string
-		vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIndex, code, &sessionKeys, vbolt.Window{})
-		currentViewers := len(sessionKeys)
+		// Use the CurrentViewers counter from analytics (properly maintained on connect/disconnect)
+		currentViewers := analytics.CurrentViewers
 
 		// Build list item
 		item := AccessCodeListItem{

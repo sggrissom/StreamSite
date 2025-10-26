@@ -59,7 +59,7 @@ async function handleLogout(event: Event) {
 // Helper function to determine which header type to render
 function getHeaderType(authState: AuthState): string {
   if (authState.isLoading) return "guest";
-  if (!authState.auth) return "guest";
+  if (!authState.auth || authState.auth.id === 0) return "guest";
   if (authState.auth.id === -1) return "anonymous-code";
   if (authState.auth.isSiteAdmin) return "site-admin";
   if (authState.auth.canManageStudios) return "studio-manager";
