@@ -185,7 +185,7 @@ async function validateCode(form: CodeEntryForm, code: string) {
 
     const data = await res.json();
 
-    if (data.success) {
+    if (data.redirectTo) {
       // Successfully validated - redirect to stream
       core.setRoute(data.redirectTo);
     } else if (data.rateLimited) {
