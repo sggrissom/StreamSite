@@ -160,7 +160,7 @@ export function view(
   const usersState = useUsersState();
 
   // Check permissions
-  if (!data || !data.success) {
+  if (!data || !data.studios) {
     return (
       <div>
         <Header />
@@ -170,8 +170,8 @@ export function view(
               <div className="error-icon">⚠️</div>
               <h2>Access Denied</h2>
               <p>
-                {data?.error ||
-                  "You don't have permission to access this page. Only site administrators can view this area."}
+                You don't have permission to access this page. Only site
+                administrators can view this area.
               </p>
               <a href="/dashboard" className="btn btn-primary">
                 Back to Dashboard

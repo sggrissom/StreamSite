@@ -29,7 +29,7 @@ export function view(
   data: Data,
 ): preact.ComponentChild {
   // Handle errors or missing data
-  if (!data || !data.success) {
+  if (!data || !data.studio) {
     return (
       <div>
         <Header />
@@ -39,8 +39,8 @@ export function view(
               <div className="error-icon">⚠️</div>
               <h2>Studio Not Found</h2>
               <p>
-                {data?.error ||
-                  "The studio you're looking for doesn't exist or you don't have permission to view it."}
+                The studio you're looking for doesn't exist or you don't have
+                permission to view it.
               </p>
               <a href="/studios" className="btn btn-primary">
                 Back to Studios

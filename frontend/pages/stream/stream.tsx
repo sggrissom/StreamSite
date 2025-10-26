@@ -350,7 +350,7 @@ export function view(
   const state = useStreamPlayer();
 
   // Check if we have valid room details
-  const hasValidRoom = data && data.room && data.success;
+  const hasValidRoom = data && data.room;
 
   // If no valid room, show error
   if (!hasValidRoom) {

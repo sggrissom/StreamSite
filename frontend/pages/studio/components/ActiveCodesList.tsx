@@ -104,7 +104,7 @@ async function loadCodes(
   }
 
   // Add studio codes
-  if (studioResp && studioResp.success) {
+  if (studioResp && studioResp.codes) {
     for (const code of studioResp.codes || []) {
       allCodes.push({
         ...code,

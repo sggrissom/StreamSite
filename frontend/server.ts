@@ -23,8 +23,6 @@ export interface CreateAccountRequest {
 }
 
 export interface CreateAccountResponse {
-    success: boolean
-    error: string
     token: string
     auth: AuthResponse
 }
@@ -46,8 +44,6 @@ export interface ListAllUsersRequest {
 }
 
 export interface ListAllUsersResponse {
-    success: boolean
-    error: string
     users: UserWithStats[]
 }
 
@@ -57,8 +53,6 @@ export interface UpdateUserRoleRequest {
 }
 
 export interface UpdateUserRoleResponse {
-    success: boolean
-    error: string
     user: User
 }
 
@@ -68,8 +62,6 @@ export interface SetUserRoleRequest {
 }
 
 export interface SetUserRoleResponse {
-    success: boolean
-    error: string
 }
 
 export interface ListUsersRequest {
@@ -86,8 +78,6 @@ export interface CreateStudioRequest {
 }
 
 export interface CreateStudioResponse {
-    success: boolean
-    error: string
     studio: Studio
 }
 
@@ -102,8 +92,6 @@ export interface ListAllStudiosRequest {
 }
 
 export interface ListAllStudiosResponse {
-    success: boolean
-    error: string
     studios: StudioWithOwner[]
 }
 
@@ -112,8 +100,6 @@ export interface GetStudioRequest {
 }
 
 export interface GetStudioResponse {
-    success: boolean
-    error: string
     studio: Studio
     myRole: StudioRole
     myRoleName: string
@@ -124,8 +110,6 @@ export interface GetStudioDashboardRequest {
 }
 
 export interface GetStudioDashboardResponse {
-    success: boolean
-    error: string
     studio: Studio
     myRole: StudioRole
     myRoleName: string
@@ -141,8 +125,6 @@ export interface UpdateStudioRequest {
 }
 
 export interface UpdateStudioResponse {
-    success: boolean
-    error: string
     studio: Studio
 }
 
@@ -151,8 +133,6 @@ export interface DeleteStudioRequest {
 }
 
 export interface DeleteStudioResponse {
-    success: boolean
-    error: string
 }
 
 export interface CreateRoomRequest {
@@ -161,8 +141,6 @@ export interface CreateRoomRequest {
 }
 
 export interface CreateRoomResponse {
-    success: boolean
-    error: string
     room: Room
 }
 
@@ -171,8 +149,6 @@ export interface ListRoomsRequest {
 }
 
 export interface ListRoomsResponse {
-    success: boolean
-    error: string
     rooms: Room[]
 }
 
@@ -181,8 +157,6 @@ export interface GetRoomDetailsRequest {
 }
 
 export interface GetRoomDetailsResponse {
-    success: boolean
-    error: string
     room: Room
     studioName: string
     myRole: StudioRole
@@ -196,8 +170,6 @@ export interface GetStudioRoomsForCodeSessionRequest {
 }
 
 export interface GetStudioRoomsForCodeSessionResponse {
-    success: boolean
-    error: string
     studioName: string
     rooms: Room[]
     codeExpiresAt: string | null
@@ -216,8 +188,6 @@ export interface GetRoomStreamKeyRequest {
 }
 
 export interface GetRoomStreamKeyResponse {
-    success: boolean
-    error: string
     streamKey: string
 }
 
@@ -227,8 +197,6 @@ export interface UpdateRoomRequest {
 }
 
 export interface UpdateRoomResponse {
-    success: boolean
-    error: string
     room: Room
 }
 
@@ -237,8 +205,6 @@ export interface RegenerateStreamKeyRequest {
 }
 
 export interface RegenerateStreamKeyResponse {
-    success: boolean
-    error: string
     streamKey: string
 }
 
@@ -247,8 +213,6 @@ export interface DeleteRoomRequest {
 }
 
 export interface DeleteRoomResponse {
-    success: boolean
-    error: string
 }
 
 export interface AddStudioMemberRequest {
@@ -259,8 +223,6 @@ export interface AddStudioMemberRequest {
 }
 
 export interface AddStudioMemberResponse {
-    success: boolean
-    error: string
     membership: StudioMembership
 }
 
@@ -270,8 +232,6 @@ export interface RemoveStudioMemberRequest {
 }
 
 export interface RemoveStudioMemberResponse {
-    success: boolean
-    error: string
 }
 
 export interface UpdateStudioMemberRoleRequest {
@@ -281,8 +241,6 @@ export interface UpdateStudioMemberRoleRequest {
 }
 
 export interface UpdateStudioMemberRoleResponse {
-    success: boolean
-    error: string
     membership: StudioMembership
 }
 
@@ -291,8 +249,6 @@ export interface ListStudioMembersRequest {
 }
 
 export interface ListStudioMembersResponse {
-    success: boolean
-    error: string
     members: MemberWithDetails[]
 }
 
@@ -301,8 +257,6 @@ export interface LeaveStudioRequest {
 }
 
 export interface LeaveStudioResponse {
-    success: boolean
-    error: string
 }
 
 export interface GenerateAccessCodeRequest {
@@ -314,8 +268,6 @@ export interface GenerateAccessCodeRequest {
 }
 
 export interface GenerateAccessCodeResponse {
-    success: boolean
-    error: string
     code: string
     expiresAt: string
     shareUrl: string
@@ -340,8 +292,6 @@ export interface RevokeAccessCodeRequest {
 }
 
 export interface RevokeAccessCodeResponse {
-    success: boolean
-    error: string
     sessionsKilled: number
 }
 
@@ -351,8 +301,6 @@ export interface ListAccessCodesRequest {
 }
 
 export interface ListAccessCodesResponse {
-    success: boolean
-    error: string
     codes: AccessCodeListItem[]
 }
 
@@ -361,8 +309,6 @@ export interface GetCodeAnalyticsRequest {
 }
 
 export interface GetCodeAnalyticsResponse {
-    success: boolean
-    error: string
     code: string
     type: number
     label: string
@@ -381,8 +327,6 @@ export interface GetRoomAnalyticsRequest {
 }
 
 export interface GetRoomAnalyticsResponse {
-    success: boolean
-    error: string
     analytics: RoomAnalytics | null
     isStreaming: boolean
     roomName: string
@@ -393,8 +337,6 @@ export interface GetStudioAnalyticsRequest {
 }
 
 export interface GetStudioAnalyticsResponse {
-    success: boolean
-    error: string
     analytics: StudioAnalytics | null
     studioName: string
 }
@@ -404,8 +346,6 @@ export interface RecalculateViewerCountsRequest {
 }
 
 export interface RecalculateViewerCountsResponse {
-    success: boolean
-    error: string
     roomsUpdated: number
     studiosUpdated: number
     codesUpdated: number
