@@ -252,8 +252,9 @@ type DeleteStudioResponse struct {
 }
 
 type CreateRoomRequest struct {
-	StudioId int    `json:"studioId"`
-	Name     string `json:"name"`
+	StudioId   int     `json:"studioId"`
+	Name       string  `json:"name"`
+	CameraRTSP *string `json:"cameraRtsp,omitempty"`
 }
 
 type CreateRoomResponse struct {
@@ -277,8 +278,9 @@ type GetRoomStreamKeyResponse struct {
 }
 
 type UpdateRoomRequest struct {
-	RoomId int    `json:"roomId"`
-	Name   string `json:"name"`
+	RoomId     int     `json:"roomId"`
+	Name       string  `json:"name"`
+	CameraRTSP *string `json:"cameraRtsp,omitempty"`
 }
 
 type UpdateRoomResponse struct {
@@ -749,6 +751,11 @@ func CreateRoom(ctx *vbeam.Context, req CreateRoomRequest) (resp CreateRoomRespo
 	vbolt.SetTargetSingleTerm(ctx.Tx, RoomsByStudioIdx, room.Id, studio.Id)
 	vbolt.Write(ctx.Tx, RoomStreamKeyBkt, streamKey, &room.Id)
 
+	// Set camera config if provided
+	if req.CameraRTSP != nil && *req.CameraRTSP != "" {
+		SetCameraConfigData(ctx.Tx, room.Id, *req.CameraRTSP)
+	}
+
 	vbolt.TxCommit(ctx.Tx)
 
 	// Log room creation
@@ -1058,6 +1065,17 @@ func UpdateRoom(ctx *vbeam.Context, req UpdateRoomRequest) (resp UpdateRoomRespo
 	// Update room name
 	room.Name = req.Name
 	vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
+
+	// Handle camera config updates
+	if req.CameraRTSP != nil {
+		if *req.CameraRTSP != "" {
+			// Set or update camera config
+			SetCameraConfigData(ctx.Tx, room.Id, *req.CameraRTSP)
+		} else {
+			// Empty string means delete camera config
+			DeleteCameraConfigData(ctx.Tx, room.Id)
+		}
+	}
 
 	vbolt.TxCommit(ctx.Tx)
 
