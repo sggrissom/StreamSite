@@ -42,7 +42,7 @@ const useActiveCodesListState = vlens.declareHook(
     codes: [],
     isLoading: false,
     error: "",
-    filterShowAll: true,
+    filterShowAll: false,
     refreshTimerId: null,
     hasInitiallyLoaded: false,
     revokeModal: {

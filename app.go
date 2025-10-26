@@ -57,7 +57,6 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.RegisterCodeAccessMethods(app)
 	backend.RegisterAnalyticsMethods(app)
 	backend.RegisterAdminMethods(app)
-	backend.RegisterStreamProxy(app)
 	backend.RegisterRoomStreamProxy(app)
 
 	// SRS HTTP callbacks (no auth required - SRS makes these calls)
