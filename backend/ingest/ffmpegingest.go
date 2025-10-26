@@ -6,9 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/exec"
-	"stream/backend"
 	"sync"
 	"syscall"
 	"time"
@@ -111,13 +111,8 @@ func (m *IngestManager) Start(ctx context.Context, roomId int, rtspURL, rtmpOut 
 	m.processes[roomId] = process
 
 	// Log process start
-	backend.LogInfo(backend.LogCategorySystem, "FFmpeg ingest started", map[string]interface{}{
-		"roomId":    roomId,
-		"pid":       cmd.Process.Pid,
-		"rtspURL":   rtspURL,
-		"rtmpOut":   rtmpOut,
-		"startTime": process.StartTime,
-	})
+	log.Printf("[INGEST] FFmpeg ingest started for room %d (PID: %d, RTSP: %s, RTMP: %s)",
+		roomId, cmd.Process.Pid, rtspURL, rtmpOut)
 
 	// Start goroutines to read stdout/stderr
 	go m.logOutput(roomId, "stdout", stdout)
@@ -156,17 +151,13 @@ func (m *IngestManager) Stop(roomId int) error {
 			select {
 			case <-done:
 				// Graceful shutdown succeeded
-				backend.LogInfo(backend.LogCategorySystem, "FFmpeg ingest stopped gracefully", map[string]interface{}{
-					"roomId": roomId,
-					"pid":    process.Cmd.Process.Pid,
-				})
+				log.Printf("[INGEST] FFmpeg ingest stopped gracefully for room %d (PID: %d)",
+					roomId, process.Cmd.Process.Pid)
 			case <-time.After(5 * time.Second):
 				// Graceful shutdown timed out, force kill
 				process.Cmd.Process.Kill()
-				backend.LogInfo(backend.LogCategorySystem, "FFmpeg ingest force killed", map[string]interface{}{
-					"roomId": roomId,
-					"pid":    process.Cmd.Process.Pid,
-				})
+				log.Printf("[INGEST] FFmpeg ingest force killed for room %d (PID: %d)",
+					roomId, process.Cmd.Process.Pid)
 			}
 		} else {
 			// SIGINT failed, force kill
@@ -207,18 +198,10 @@ func (m *IngestManager) logOutput(roomId int, stream string, reader io.Reader) {
 	scanner := bufio.NewScanner(reader)
 	for scanner.Scan() {
 		line := scanner.Text()
-		backend.LogInfo(backend.LogCategorySystem, fmt.Sprintf("FFmpeg %s", stream), map[string]interface{}{
-			"roomId":  roomId,
-			"stream":  stream,
-			"message": line,
-		})
+		log.Printf("[INGEST] FFmpeg %s [room %d]: %s", stream, roomId, line)
 	}
 	if err := scanner.Err(); err != nil {
-		backend.LogErrorSimple(backend.LogCategorySystem, fmt.Sprintf("Error reading FFmpeg %s", stream), map[string]interface{}{
-			"roomId": roomId,
-			"stream": stream,
-			"error":  err.Error(),
-		})
+		log.Printf("[INGEST] Error reading FFmpeg %s for room %d: %v", stream, roomId, err)
 	}
 }
 
@@ -238,18 +221,12 @@ func (m *IngestManager) waitForProcess(roomId int, process *IngestProcess) {
 	delete(m.processes, roomId)
 
 	// Log process exit
+	duration := time.Since(process.StartTime)
 	if err != nil {
-		backend.LogErrorSimple(backend.LogCategorySystem, "FFmpeg ingest exited with error", map[string]interface{}{
-			"roomId":    roomId,
-			"startTime": process.StartTime,
-			"duration":  time.Since(process.StartTime),
-			"error":     err.Error(),
-		})
+		log.Printf("[INGEST] FFmpeg ingest exited with error for room %d (duration: %s): %v",
+			roomId, duration, err)
 	} else {
-		backend.LogInfo(backend.LogCategorySystem, "FFmpeg ingest exited normally", map[string]interface{}{
-			"roomId":    roomId,
-			"startTime": process.StartTime,
-			"duration":  time.Since(process.StartTime),
-		})
+		log.Printf("[INGEST] FFmpeg ingest exited normally for room %d (duration: %s)",
+			roomId, duration)
 	}
 }
