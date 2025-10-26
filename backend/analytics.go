@@ -205,30 +205,35 @@ func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, code st
 	})
 }
 
-func DecrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string) {
+func DecrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, accessCode string) {
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		room := GetRoom(tx, roomId)
 		if room.Id == 0 {
 			return
 		}
 
-		// Build session key to look up the session
-		sessionKey := viewerId + ":" + strconv.Itoa(roomId)
+		// Determine the code to use for analytics
+		// Prefer the passed accessCode, but fall back to session lookup for backwards compatibility
+		codeToUse := accessCode
 
-		// Look up session to check if it's code-based
-		var session ViewerSession
-		vbolt.Read(tx, ViewerSessionsBkt, sessionKey, &session)
+		// If no code was passed, try to look it up from the session
+		if codeToUse == "" {
+			sessionKey := viewerId + ":" + strconv.Itoa(roomId)
+			var session ViewerSession
+			vbolt.Read(tx, ViewerSessionsBkt, sessionKey, &session)
+			codeToUse = session.Code
+		}
 
 		// If this is a code-based session, decrement code analytics
-		if session.Code != "" {
+		if codeToUse != "" {
 			var codeAnalytics CodeAnalytics
-			vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+			vbolt.Read(tx, CodeAnalyticsBkt, codeToUse, &codeAnalytics)
 
 			if codeAnalytics.CurrentViewers > 0 {
 				codeAnalytics.CurrentViewers--
 			}
 
-			vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+			vbolt.Write(tx, CodeAnalyticsBkt, codeToUse, &codeAnalytics)
 		}
 
 		// Load room analytics

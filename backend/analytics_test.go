@@ -256,7 +256,7 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 	t.Run("ReconnectWithinTimeout", func(t *testing.T) {
 		// Same viewer reconnects within 5 minutes (simulated by immediate reconnect)
 		// Decrement first to simulate disconnect
-		DecrementRoomViewerCount(db, 10, "user:1")
+		DecrementRoomViewerCount(db, 10, "user:1", "")
 
 		// Get current totals before reconnection
 		var beforeAnalytics RoomAnalytics
@@ -303,7 +303,7 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 		})
 
 		// Decrement and reconnect after timeout
-		DecrementRoomViewerCount(db, 10, "user:1")
+		DecrementRoomViewerCount(db, 10, "user:1", "")
 		IncrementRoomViewerCount(db, 10, "user:1", "")
 
 		// Verify TotalViews increased but UniqueViewers did NOT

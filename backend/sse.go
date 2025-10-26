@@ -381,7 +381,7 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 		IncrementRoomViewerCount(db, roomID, viewerId, accessCode)
 
 		defer func() {
-			DecrementRoomViewerCount(db, roomID, viewerId)
+			DecrementRoomViewerCount(db, roomID, viewerId, accessCode)
 			sseManager.RemoveClient(roomID, client)
 		}()
 
