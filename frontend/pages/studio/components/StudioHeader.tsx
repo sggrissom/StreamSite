@@ -193,6 +193,7 @@ type CreateRoomModal = {
   isSubmitting: boolean;
   error: string;
   name: string;
+  cameraRtsp: string;
   studioId: number;
 };
 
@@ -202,6 +203,7 @@ const useCreateRoomModal = vlens.declareHook(
     isSubmitting: false,
     error: "",
     name: "",
+    cameraRtsp: "",
     studioId: 0,
   }),
 );
@@ -210,6 +212,7 @@ function openRoomModal(modal: CreateRoomModal, studioId: number) {
   modal.isOpen = true;
   modal.error = "";
   modal.name = "";
+  modal.cameraRtsp = "";
   modal.studioId = studioId;
   vlens.scheduleRedraw();
 }
@@ -234,6 +237,7 @@ async function submitCreateRoom(modal: CreateRoomModal) {
   const [resp, err] = await server.CreateRoom({
     studioId: modal.studioId,
     name: modal.name.trim(),
+    cameraRtsp: modal.cameraRtsp.trim() || null,
   });
 
   modal.isSubmitting = false;
@@ -506,6 +510,21 @@ export function StudioHeader(props: StudioHeaderProps): preact.ComponentChild {
           />
           <small className="form-help">
             Choose a descriptive name for this streaming room
+          </small>
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="camera-rtsp">Camera RTSP URL (Optional)</label>
+          <input
+            id="camera-rtsp"
+            type="text"
+            className="form-input"
+            placeholder="rtsp://192.168.1.100:554/stream1"
+            {...vlens.attrsBindInput(vlens.ref(createRoomModal, "cameraRtsp"))}
+            disabled={createRoomModal.isSubmitting}
+          />
+          <small className="form-help">
+            Enable automated camera streaming with an RTSP URL
           </small>
         </div>
       </Modal>

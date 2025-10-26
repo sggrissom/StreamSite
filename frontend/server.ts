@@ -138,6 +138,7 @@ export interface DeleteStudioResponse {
 export interface CreateRoomRequest {
     studioId: number
     name: string
+    cameraRtsp: string | null
 }
 
 export interface CreateRoomResponse {
@@ -194,6 +195,7 @@ export interface GetRoomStreamKeyResponse {
 export interface UpdateRoomRequest {
     roomId: number
     name: string
+    cameraRtsp: string | null
 }
 
 export interface UpdateRoomResponse {
@@ -320,6 +322,30 @@ export interface GetCodeAnalyticsResponse {
     peakViewers: number
     peakViewersAt: string
     sessions: SessionInfo[]
+}
+
+export interface SetCameraConfigRequest {
+    roomId: number
+    rtspUrl: string
+}
+
+export interface SetCameraConfigResponse {
+}
+
+export interface GetCameraConfigRequest {
+    roomId: number
+}
+
+export interface GetCameraConfigResponse {
+    roomId: number
+    rtspUrl: string | null
+}
+
+export interface DeleteCameraConfigRequest {
+    roomId: number
+}
+
+export interface DeleteCameraConfigResponse {
 }
 
 export interface GetRoomAnalyticsRequest {
@@ -640,6 +666,18 @@ export async function ListAccessCodes(data: ListAccessCodesRequest): Promise<rpc
 
 export async function GetCodeAnalytics(data: GetCodeAnalyticsRequest): Promise<rpc.Response<GetCodeAnalyticsResponse>> {
     return await rpc.call<GetCodeAnalyticsResponse>('GetCodeAnalytics', JSON.stringify(data));
+}
+
+export async function SetCameraConfig(data: SetCameraConfigRequest): Promise<rpc.Response<SetCameraConfigResponse>> {
+    return await rpc.call<SetCameraConfigResponse>('SetCameraConfig', JSON.stringify(data));
+}
+
+export async function GetCameraConfigProc(data: GetCameraConfigRequest): Promise<rpc.Response<GetCameraConfigResponse>> {
+    return await rpc.call<GetCameraConfigResponse>('GetCameraConfigProc', JSON.stringify(data));
+}
+
+export async function DeleteCameraConfigProc(data: DeleteCameraConfigRequest): Promise<rpc.Response<DeleteCameraConfigResponse>> {
+    return await rpc.call<DeleteCameraConfigResponse>('DeleteCameraConfigProc', JSON.stringify(data));
 }
 
 export async function GetRoomAnalytics(data: GetRoomAnalyticsRequest): Promise<rpc.Response<GetRoomAnalyticsResponse>> {

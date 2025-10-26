@@ -4,6 +4,7 @@ import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
 import { Dropdown, DropdownItem } from "../../../components/Dropdown";
 import { GenerateAccessCodeModal } from "./GenerateAccessCodeModal";
+import "./RoomsSection-styles";
 
 type Studio = {
   id: number;
@@ -148,30 +149,46 @@ async function confirmRegenerateStreamKey(modal: StreamKeyModal) {
 type EditRoomModal = {
   isOpen: boolean;
   isSubmitting: boolean;
+  isLoadingConfig: boolean;
   error: string;
   roomId: number;
   roomName: string;
+  cameraRtsp: string;
 };
 
 const useEditRoomModal = vlens.declareHook(
   (): EditRoomModal => ({
     isOpen: false,
     isSubmitting: false,
+    isLoadingConfig: false,
     error: "",
     roomId: 0,
     roomName: "",
+    cameraRtsp: "",
   }),
 );
 
-function openEditRoomModal(
+async function openEditRoomModal(
   modal: EditRoomModal,
   roomId: number,
   currentName: string,
 ) {
   modal.isOpen = true;
+  modal.isLoadingConfig = true;
   modal.error = "";
   modal.roomId = roomId;
   modal.roomName = currentName;
+  modal.cameraRtsp = "";
+  vlens.scheduleRedraw();
+
+  // Load camera config
+  const [configResp, configErr] = await server.GetCameraConfigProc({ roomId });
+  modal.isLoadingConfig = false;
+
+  if (configResp && configResp.rtspUrl) {
+    modal.cameraRtsp = configResp.rtspUrl;
+  }
+
   vlens.scheduleRedraw();
 }
 
@@ -195,6 +212,7 @@ async function submitEditRoom(modal: EditRoomModal) {
   const [resp, err] = await server.UpdateRoom({
     roomId: modal.roomId,
     name: modal.roomName.trim(),
+    cameraRtsp: modal.cameraRtsp.trim() || null,
   });
 
   modal.isSubmitting = false;
@@ -382,6 +400,145 @@ function closeAnalyticsModal(modal: ViewAnalyticsModal) {
   vlens.scheduleRedraw();
 }
 
+// ===== Camera Ingest Management =====
+type CameraIngestStatus = {
+  roomId: number;
+  running: boolean;
+  hasCamera: boolean;
+  startedAt: string | null;
+  error: string;
+  isStarting: boolean;
+  isStopping: boolean;
+};
+
+type CameraIngestManager = {
+  statuses: Map<number, CameraIngestStatus>;
+  pollInterval: number | null;
+};
+
+const useCameraIngestManager = vlens.declareHook(
+  (): CameraIngestManager => ({
+    statuses: new Map(),
+    pollInterval: null,
+  }),
+);
+
+function getCameraStatus(
+  manager: CameraIngestManager,
+  roomId: number,
+): CameraIngestStatus {
+  if (!manager.statuses.has(roomId)) {
+    manager.statuses.set(roomId, {
+      roomId,
+      running: false,
+      hasCamera: false,
+      startedAt: null,
+      error: "",
+      isStarting: false,
+      isStopping: false,
+    });
+  }
+  return manager.statuses.get(roomId)!;
+}
+
+async function fetchCameraStatus(manager: CameraIngestManager, roomId: number) {
+  try {
+    const response = await fetch(`/api/rooms/${roomId}/ingest/status`);
+    const data = await response.json();
+
+    const status = getCameraStatus(manager, roomId);
+    status.running = data.running || false;
+    status.hasCamera = data.hasCamera || false;
+    status.startedAt = data.startedAt || null;
+    status.error = "";
+    vlens.scheduleRedraw();
+  } catch (err) {
+    // Silently fail for status polling
+  }
+}
+
+async function startCameraIngest(manager: CameraIngestManager, roomId: number) {
+  const status = getCameraStatus(manager, roomId);
+  status.isStarting = true;
+  status.error = "";
+  vlens.scheduleRedraw();
+
+  try {
+    const response = await fetch(`/api/rooms/${roomId}/ingest/start`, {
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      status.error = errorData.error || "Failed to start camera";
+      status.isStarting = false;
+      vlens.scheduleRedraw();
+      return;
+    }
+
+    // Immediately fetch status after starting
+    await fetchCameraStatus(manager, roomId);
+    status.isStarting = false;
+    vlens.scheduleRedraw();
+  } catch (err) {
+    status.error = "Network error: Failed to start camera";
+    status.isStarting = false;
+    vlens.scheduleRedraw();
+  }
+}
+
+async function stopCameraIngest(manager: CameraIngestManager, roomId: number) {
+  const status = getCameraStatus(manager, roomId);
+  status.isStopping = true;
+  status.error = "";
+  vlens.scheduleRedraw();
+
+  try {
+    const response = await fetch(`/api/rooms/${roomId}/ingest/stop`, {
+      method: "POST",
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      status.error = errorData.error || "Failed to stop camera";
+      status.isStopping = false;
+      vlens.scheduleRedraw();
+      return;
+    }
+
+    // Immediately fetch status after stopping
+    await fetchCameraStatus(manager, roomId);
+    status.isStopping = false;
+    vlens.scheduleRedraw();
+  } catch (err) {
+    status.error = "Network error: Failed to stop camera";
+    status.isStopping = false;
+    vlens.scheduleRedraw();
+  }
+}
+
+function startCameraPolling(manager: CameraIngestManager, roomIds: number[]) {
+  // Clear existing interval
+  if (manager.pollInterval !== null) {
+    clearInterval(manager.pollInterval);
+  }
+
+  // Initial fetch for all rooms
+  roomIds.forEach((roomId) => fetchCameraStatus(manager, roomId));
+
+  // Poll every 3 seconds
+  manager.pollInterval = window.setInterval(() => {
+    roomIds.forEach((roomId) => fetchCameraStatus(manager, roomId));
+  }, 3000);
+}
+
+function stopCameraPolling(manager: CameraIngestManager) {
+  if (manager.pollInterval !== null) {
+    clearInterval(manager.pollInterval);
+    manager.pollInterval = null;
+  }
+}
+
 // ===== Component =====
 export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const { studio, rooms, canManageRooms } = props;
@@ -390,6 +547,19 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const deleteRoomModal = useDeleteRoomModal();
   const generateCodeModal = useGenerateCodeModalState();
   const analyticsModal = useViewAnalyticsModal();
+  const cameraIngest = useCameraIngestManager();
+
+  // Start camera status polling when rooms change
+  if (rooms.length > 0) {
+    const roomIds = rooms.map((room) => room.id);
+    // Only start polling if not already polling
+    if (cameraIngest.pollInterval === null) {
+      startCameraPolling(cameraIngest, roomIds);
+    }
+  } else {
+    // Stop polling if no rooms
+    stopCameraPolling(cameraIngest);
+  }
 
   return (
     <>
@@ -410,93 +580,142 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
           </div>
         ) : (
           <div className="rooms-grid">
-            {rooms.map((room) => (
-              <div key={room.id} className="room-card">
-                <div className="room-header">
-                  <div className="room-number">Room {room.roomNumber}</div>
-                  {room.isActive && (
-                    <span className="room-status active">🔴 Live</span>
-                  )}
-                </div>
+            {rooms.map((room) => {
+              const cameraStatus = getCameraStatus(cameraIngest, room.id);
 
-                <h3 className="room-name">{room.name}</h3>
+              return (
+                <div key={room.id} className="room-card">
+                  <div className="room-header">
+                    <div className="room-number">Room {room.roomNumber}</div>
+                    {room.isActive && (
+                      <span className="room-status active">🔴 Live</span>
+                    )}
+                    {cameraStatus.running && (
+                      <span className="camera-status running">🎥 Camera</span>
+                    )}
+                  </div>
 
-                <div className="room-meta">
-                  <span className="meta-item">
-                    <span className="meta-label">Created:</span>
-                    <span className="meta-value">
-                      {new Date(room.creation).toLocaleDateString()}
+                  <h3 className="room-name">{room.name}</h3>
+
+                  <div className="room-meta">
+                    <span className="meta-item">
+                      <span className="meta-label">Created:</span>
+                      <span className="meta-value">
+                        {new Date(room.creation).toLocaleDateString()}
+                      </span>
                     </span>
-                  </span>
-                </div>
+                  </div>
 
-                <div className="room-actions">
-                  <a
-                    href={`/stream/${room.id}`}
-                    className={`btn btn-sm ${room.isActive ? "btn-primary" : "btn-secondary"}`}
-                  >
-                    {room.isActive ? "Watch Stream" : "View Stream"}
-                  </a>
-                  {canManageRooms && (
-                    <Dropdown
-                      id={room.id}
-                      trigger={
-                        <button className="btn btn-secondary btn-sm">
-                          Actions ▼
+                  {/* Camera Controls */}
+                  {canManageRooms && cameraStatus.hasCamera && (
+                    <div className="camera-controls">
+                      {cameraStatus.error && (
+                        <div className="camera-error">{cameraStatus.error}</div>
+                      )}
+                      {!cameraStatus.running ? (
+                        <button
+                          className="btn btn-sm btn-camera"
+                          onClick={() =>
+                            startCameraIngest(cameraIngest, room.id)
+                          }
+                          disabled={cameraStatus.isStarting}
+                        >
+                          {cameraStatus.isStarting
+                            ? "Starting..."
+                            : "🎥 Start Camera"}
                         </button>
-                      }
-                      align="right"
-                    >
-                      <DropdownItem
-                        onClick={() =>
-                          openStreamKeyModal(streamKeyModal, room.id, room.name)
-                        }
-                      >
-                        View Stream Key
-                      </DropdownItem>
-                      <DropdownItem
-                        onClick={() =>
-                          openAnalyticsModal(analyticsModal, room.id, room.name)
-                        }
-                      >
-                        View Analytics
-                      </DropdownItem>
-                      <DropdownItem
-                        onClick={() =>
-                          openGenerateCodeModal(
-                            generateCodeModal,
-                            room.id,
-                            room.name,
-                          )
-                        }
-                      >
-                        Generate Access Code
-                      </DropdownItem>
-                      <DropdownItem
-                        onClick={() =>
-                          openEditRoomModal(editRoomModal, room.id, room.name)
-                        }
-                      >
-                        Edit Room
-                      </DropdownItem>
-                      <DropdownItem
-                        onClick={() =>
-                          openDeleteRoomModal(
-                            deleteRoomModal,
-                            room.id,
-                            room.name,
-                            room.isActive,
-                          )
-                        }
-                        variant="danger"
-                      >
-                        Delete Room
-                      </DropdownItem>
-                    </Dropdown>
+                      ) : (
+                        <button
+                          className="btn btn-sm btn-camera-stop"
+                          onClick={() =>
+                            stopCameraIngest(cameraIngest, room.id)
+                          }
+                          disabled={cameraStatus.isStopping}
+                        >
+                          {cameraStatus.isStopping
+                            ? "Stopping..."
+                            : "⏹ Stop Camera"}
+                        </button>
+                      )}
+                    </div>
                   )}
+
+                  <div className="room-actions">
+                    <a
+                      href={`/stream/${room.id}`}
+                      className={`btn btn-sm ${room.isActive ? "btn-primary" : "btn-secondary"}`}
+                    >
+                      {room.isActive ? "Watch Stream" : "View Stream"}
+                    </a>
+                    {canManageRooms && (
+                      <Dropdown
+                        id={room.id}
+                        trigger={
+                          <button className="btn btn-secondary btn-sm">
+                            Actions ▼
+                          </button>
+                        }
+                        align="right"
+                      >
+                        <DropdownItem
+                          onClick={() =>
+                            openStreamKeyModal(
+                              streamKeyModal,
+                              room.id,
+                              room.name,
+                            )
+                          }
+                        >
+                          View Stream Key
+                        </DropdownItem>
+                        <DropdownItem
+                          onClick={() =>
+                            openAnalyticsModal(
+                              analyticsModal,
+                              room.id,
+                              room.name,
+                            )
+                          }
+                        >
+                          View Analytics
+                        </DropdownItem>
+                        <DropdownItem
+                          onClick={() =>
+                            openGenerateCodeModal(
+                              generateCodeModal,
+                              room.id,
+                              room.name,
+                            )
+                          }
+                        >
+                          Generate Access Code
+                        </DropdownItem>
+                        <DropdownItem
+                          onClick={() =>
+                            openEditRoomModal(editRoomModal, room.id, room.name)
+                          }
+                        >
+                          Edit Room
+                        </DropdownItem>
+                        <DropdownItem
+                          onClick={() =>
+                            openDeleteRoomModal(
+                              deleteRoomModal,
+                              room.id,
+                              room.name,
+                              room.isActive,
+                            )
+                          }
+                          variant="danger"
+                        >
+                          Delete Room
+                        </DropdownItem>
+                      </Dropdown>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
 
@@ -651,6 +870,25 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
             {...vlens.attrsBindInput(vlens.ref(editRoomModal, "roomName"))}
             disabled={editRoomModal.isSubmitting}
           />
+        </div>
+
+        <div className="form-group">
+          <label htmlFor="edit-camera-rtsp">Camera RTSP URL (Optional)</label>
+          <input
+            id="edit-camera-rtsp"
+            type="text"
+            className="form-input"
+            placeholder="rtsp://192.168.1.100:554/stream1"
+            {...vlens.attrsBindInput(vlens.ref(editRoomModal, "cameraRtsp"))}
+            disabled={
+              editRoomModal.isSubmitting || editRoomModal.isLoadingConfig
+            }
+          />
+          <small className="form-help">
+            {editRoomModal.isLoadingConfig
+              ? "Loading camera configuration..."
+              : "Enable automated camera streaming with an RTSP URL"}
+          </small>
         </div>
       </Modal>
 

@@ -282,10 +282,18 @@ func IngestStatusHandler(db *vbolt.DB) http.HandlerFunc {
 		// Get ingest status
 		running, startTime, rtspURL := ingestManager.GetStatus(roomId)
 
+		// Check if camera is configured
+		var hasCamera bool
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			cameraConfig := GetCameraConfig(tx, roomId)
+			hasCamera = cameraConfig.RoomId > 0 && cameraConfig.RTSPURL != ""
+		})
+
 		// Build response
 		response := map[string]interface{}{
-			"roomId":  roomId,
-			"running": running,
+			"roomId":    roomId,
+			"running":   running,
+			"hasCamera": hasCamera,
 		}
 
 		if running {
