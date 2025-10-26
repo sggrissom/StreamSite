@@ -472,8 +472,8 @@ func TestRateLimiter_ViolationReset(t *testing.T) {
 	// Reset violations (simulating successful validation)
 	rl.ResetViolations("test", identifier)
 
-	// Wait for window and lockout to expire
-	time.Sleep(2 * time.Second)
+	// Wait for window to expire (lockout already cleared by ResetViolations)
+	time.Sleep(150 * time.Millisecond) // 100ms window + 50ms buffer
 
 	// Should be able to use quota again without escalated penalty
 	for i := 0; i < limit; i++ {
