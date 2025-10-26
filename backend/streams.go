@@ -14,6 +14,46 @@ import (
 	"go.hasen.dev/vbolt"
 )
 
+// extractRoomIdFromPath parses a path like "/streams/room/{roomId}{suffix}"
+// and extracts the room ID and suffix portion.
+// Returns an error if the path format is invalid.
+func extractRoomIdFromPath(path string) (roomId int, suffix string, err error) {
+	if !strings.HasPrefix(path, "/streams/room/") {
+		return 0, "", fmt.Errorf("invalid path: must start with /streams/room/")
+	}
+
+	// Get everything after /streams/room/
+	pathRemainder := strings.TrimPrefix(path, "/streams/room/")
+	if pathRemainder == "" {
+		return 0, "", fmt.Errorf("invalid path: no content after /streams/room/")
+	}
+
+	// Find where roomId ends (first non-digit character)
+	roomIdEnd := 0
+	for i, ch := range pathRemainder {
+		if ch < '0' || ch > '9' {
+			roomIdEnd = i
+			break
+		}
+	}
+
+	// If no non-digit found, the entire string is just a roomId (invalid - needs suffix)
+	if roomIdEnd == 0 {
+		return 0, "", fmt.Errorf("invalid path: no suffix after room ID")
+	}
+
+	roomIdStr := pathRemainder[:roomIdEnd]
+	suffix = pathRemainder[roomIdEnd:]
+
+	// Parse room ID
+	roomId, err = strconv.Atoi(roomIdStr)
+	if err != nil {
+		return 0, "", fmt.Errorf("invalid room ID: %w", err)
+	}
+
+	return roomId, suffix, nil
+}
+
 // RegisterRoomStreamProxy sets up a proxy that maps /streams/room/{roomId}/* to the
 // actual stream key path on SRS, hiding stream keys from viewers
 func RegisterRoomStreamProxy(app *vbeam.Application) {
@@ -33,41 +73,10 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 		//   /streams/room/1.m3u8 -> roomId=1, suffix=.m3u8
 		//   /streams/room/1-0.ts -> roomId=1, suffix=-0.ts
 		path := r.URL.Path
-		if !strings.HasPrefix(path, "/streams/room/") {
-			// Invalid path, let it 404
-			return
-		}
-
-		// Get everything after /streams/room/
-		pathRemainder := strings.TrimPrefix(path, "/streams/room/")
-		if pathRemainder == "" {
-			return
-		}
-
-		// Find where roomId ends (first non-digit character)
-		roomIdEnd := 0
-		for i, ch := range pathRemainder {
-			if ch < '0' || ch > '9' {
-				roomIdEnd = i
-				break
-			}
-		}
-
-		// If no non-digit found, the entire string might be just a roomId (invalid)
-		if roomIdEnd == 0 {
-			LogWarn(LogCategorySystem, "Invalid room stream path - no suffix",
-				"path", path, "pathRemainder", pathRemainder)
-			return
-		}
-
-		roomIdStr := pathRemainder[:roomIdEnd]
-		suffix := pathRemainder[roomIdEnd:]
-
-		// Parse room ID
-		roomId, err := strconv.Atoi(roomIdStr)
+		roomId, suffix, err := extractRoomIdFromPath(path)
 		if err != nil {
-			LogWarn(LogCategorySystem, "Invalid room ID in stream request",
-				"path", path, "roomIdStr", roomIdStr, "error", err.Error())
+			LogWarn(LogCategorySystem, "Invalid room stream path",
+				"path", path, "error", err.Error())
 			return
 		}
 
@@ -93,7 +102,7 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 		r.URL.Path = newPath
 
 		// Store roomId and streamKey in headers for use in ModifyResponse
-		r.Header.Set("X-Room-Id", roomIdStr)
+		r.Header.Set("X-Room-Id", strconv.Itoa(roomId))
 		r.Header.Set("X-Stream-Key", room.StreamKey)
 
 		LogInfo(LogCategorySystem, "Proxying room stream request",
@@ -165,27 +174,9 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 	// Create authenticated wrapper for the proxy
 	authenticatedHandler := func(w http.ResponseWriter, r *http.Request) {
 		// Extract roomId from path for authentication check
-		path := r.URL.Path
-		pathRemainder := strings.TrimPrefix(path, "/streams/room/")
-
-		// Find where roomId ends
-		roomIdEnd := 0
-		for i, ch := range pathRemainder {
-			if ch < '0' || ch > '9' {
-				roomIdEnd = i
-				break
-			}
-		}
-
-		if roomIdEnd == 0 {
-			http.Error(w, "Invalid stream path", http.StatusBadRequest)
-			return
-		}
-
-		roomIdStr := pathRemainder[:roomIdEnd]
-		roomId, err := strconv.Atoi(roomIdStr)
+		roomId, _, err := extractRoomIdFromPath(r.URL.Path)
 		if err != nil {
-			http.Error(w, "Invalid room ID", http.StatusBadRequest)
+			http.Error(w, "Invalid stream path", http.StatusBadRequest)
 			return
 		}
 
@@ -194,7 +185,7 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 		if authErr != nil {
 			LogWarnWithRequest(r, LogCategoryAuth, "Unauthorized stream access attempt", map[string]interface{}{
 				"roomId": roomId,
-				"path":   path,
+				"path":   r.URL.Path,
 			})
 			http.Error(w, "Authentication required", http.StatusForbidden)
 			return

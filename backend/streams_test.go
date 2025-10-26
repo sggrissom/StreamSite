@@ -20,6 +20,96 @@ func setupTestStreamsDB(t *testing.T) *vbolt.DB {
 	return db
 }
 
+func TestExtractRoomIdFromPath(t *testing.T) {
+	tests := []struct {
+		name           string
+		path           string
+		expectedId     int
+		expectedSuffix string
+		shouldError    bool
+	}{
+		{
+			name:           "Valid m3u8 path",
+			path:           "/streams/room/123.m3u8",
+			expectedId:     123,
+			expectedSuffix: ".m3u8",
+			shouldError:    false,
+		},
+		{
+			name:           "Valid ts segment path",
+			path:           "/streams/room/456-0.ts",
+			expectedId:     456,
+			expectedSuffix: "-0.ts",
+			shouldError:    false,
+		},
+		{
+			name:           "Valid path with complex suffix",
+			path:           "/streams/room/789-segment-12.ts",
+			expectedId:     789,
+			expectedSuffix: "-segment-12.ts",
+			shouldError:    false,
+		},
+		{
+			name:           "Single digit room ID",
+			path:           "/streams/room/1.m3u8",
+			expectedId:     1,
+			expectedSuffix: ".m3u8",
+			shouldError:    false,
+		},
+		{
+			name:        "Invalid - missing suffix",
+			path:        "/streams/room/123",
+			shouldError: true,
+		},
+		{
+			name:        "Invalid - non-numeric room ID",
+			path:        "/streams/room/abc.m3u8",
+			shouldError: true,
+		},
+		{
+			name:        "Invalid - wrong prefix",
+			path:        "/streams/live/123.m3u8",
+			shouldError: true,
+		},
+		{
+			name:        "Invalid - empty path after prefix",
+			path:        "/streams/room/",
+			shouldError: true,
+		},
+		{
+			name:        "Invalid - no prefix",
+			path:        "/123.m3u8",
+			shouldError: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			roomId, suffix, err := extractRoomIdFromPath(tt.path)
+
+			if tt.shouldError {
+				if err == nil {
+					t.Errorf("Expected error for path %s, but got none", tt.path)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("Unexpected error for path %s: %v", tt.path, err)
+				return
+			}
+
+			if roomId != tt.expectedId {
+				t.Errorf("Expected room ID %d, got %d", tt.expectedId, roomId)
+			}
+
+			if suffix != tt.expectedSuffix {
+				t.Errorf("Expected suffix %s, got %s", tt.expectedSuffix, suffix)
+			}
+		})
+	}
+}
+
 func TestAuthenticatedStreamProxy(t *testing.T) {
 	t.Run("NoAuthenticationReturns403", func(t *testing.T) {
 		db := setupTestStreamsDB(t)

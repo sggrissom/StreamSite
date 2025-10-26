@@ -84,6 +84,12 @@ export function view(
             canManageRooms={canManageRooms}
           />
 
+          {/* Studio Analytics Section - visible to all members */}
+          <StudioAnalyticsSection
+            studioId={studio.id}
+            studioName={studio.name}
+          />
+
           {/* Rooms Section with all room management */}
           <RoomsSection
             studio={studio}
@@ -99,12 +105,6 @@ export function view(
               rooms={rooms}
             />
           )}
-
-          {/* Studio Analytics Section - visible to all members */}
-          <StudioAnalyticsSection
-            studioId={studio.id}
-            studioName={studio.name}
-          />
 
           {/* Members Section with all member management */}
           <MembersSection
