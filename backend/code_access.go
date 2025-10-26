@@ -125,9 +125,7 @@ var CodesByStudioIdx = vbolt.Index(&cfg.Info, "codes_by_studio", vpack.FInt, vpa
 // Find all codes created by a user
 var CodesByCreatorIdx = vbolt.Index(&cfg.Info, "codes_by_creator", vpack.FInt, vpack.StringZ)
 
-// SessionsByCodeIdx: code (term) -> sessionToken (target)
-// Find all active sessions for a code
-var SessionsByCodeIdx = vbolt.Index(&cfg.Info, "sessions_by_code", vpack.StringZ, vpack.StringZ)
+// NOTE: SessionsByCodeIndex is now defined in analytics.go as part of the unified ViewerSession system
 
 // Code generation utilities
 
@@ -373,206 +371,6 @@ func ValidateCodeSession(tx *vbolt.Tx, sessionToken string) (bool, CodeSession, 
 	return true, session, code, ""
 }
 
-// IncrementCodeViewerCount increments the CurrentViewers count for a code session
-// This should be called when SSE clients connect to accurately track active viewers
-func IncrementCodeViewerCount(db *vbolt.DB, sessionToken string) error {
-	if sessionToken == "" {
-		return nil // Not a code session, nothing to increment
-	}
-
-	var codeStr string
-
-	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-		// Load the session to get the associated code
-		var session CodeSession
-		vbolt.Read(tx, CodeSessionsBkt, sessionToken, &session)
-
-		if session.Token == "" {
-			// Session not found, nothing to increment
-			return
-		}
-
-		codeStr = session.Code
-
-		// Load the analytics for this code
-		var analytics CodeAnalytics
-		vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &analytics)
-
-		// Increment CurrentViewers
-		analytics.CurrentViewers++
-
-		// Update peak viewers if necessary
-		if analytics.CurrentViewers > analytics.PeakViewers {
-			analytics.PeakViewers = analytics.CurrentViewers
-			analytics.PeakViewersAt = time.Now()
-		}
-
-		vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &analytics)
-
-		LogDebug(LogCategorySystem, "Incremented viewer count for code session", map[string]interface{}{
-			"code":           session.Code,
-			"currentViewers": analytics.CurrentViewers,
-			"sessionToken":   sessionToken,
-		})
-
-		vbolt.TxCommit(tx)
-	})
-
-	if codeStr != "" {
-		LogInfo(LogCategorySystem, "Code session connected", map[string]interface{}{
-			"code":         codeStr,
-			"sessionToken": sessionToken,
-		})
-	}
-
-	return nil
-}
-
-// DecrementCodeViewerCount decrements the CurrentViewers count for a code session
-// This should be called when SSE clients disconnect to accurately track active viewers
-func DecrementCodeViewerCount(db *vbolt.DB, sessionToken string) error {
-	if sessionToken == "" {
-		return nil // Not a code session, nothing to decrement
-	}
-
-	var codeStr string
-
-	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-		// Load the session to get the associated code
-		var session CodeSession
-		vbolt.Read(tx, CodeSessionsBkt, sessionToken, &session)
-
-		if session.Token == "" {
-			// Session not found, nothing to decrement
-			return
-		}
-
-		codeStr = session.Code
-
-		// Load the analytics for this code
-		var analytics CodeAnalytics
-		vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &analytics)
-
-		// Decrement CurrentViewers (with bounds check)
-		if analytics.CurrentViewers > 0 {
-			analytics.CurrentViewers--
-			vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &analytics)
-
-			LogDebug(LogCategorySystem, "Decremented viewer count for code session", map[string]interface{}{
-				"code":           session.Code,
-				"currentViewers": analytics.CurrentViewers,
-				"sessionToken":   sessionToken,
-			})
-		}
-
-		vbolt.TxCommit(tx)
-	})
-
-	if codeStr != "" {
-		LogInfo(LogCategorySystem, "Code session disconnected", map[string]interface{}{
-			"code":         codeStr,
-			"sessionToken": sessionToken,
-		})
-	}
-
-	return nil
-}
-
-// CleanupInactiveSessions removes code sessions that haven't been active
-// for more than 10 minutes. This prevents zombie sessions from keeping
-// viewer counts inflated and database bloat.
-// Returns the number of sessions cleaned up.
-//
-// Note: This iterates through all codes in the AccessCodesBkt. For better
-// performance in production, consider adding an index of all codes or
-// tracking recently active codes.
-func CleanupInactiveSessions(db *vbolt.DB) int {
-	cleanedCount := 0
-	cutoffTime := time.Now().Add(-10 * time.Minute)
-
-	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
-		// Collect all unique codes that have sessions
-		// We do this by reading all sessions from the SessionsByCodeIdx
-		codesWithSessions := make(map[string]bool)
-
-		// Iterate through all access codes and check their sessions
-		vbolt.IterateAll(tx, AccessCodesBkt, func(code string, accessCode AccessCode) bool {
-			codesWithSessions[code] = true
-			return true
-		})
-
-		// For each code that has sessions, check for inactive ones
-		for code := range codesWithSessions {
-			var sessionTokens []string
-			vbolt.ReadTermTargets(tx, SessionsByCodeIdx, code, &sessionTokens, vbolt.Window{})
-
-			for _, token := range sessionTokens {
-				var session CodeSession
-				vbolt.Read(tx, CodeSessionsBkt, token, &session)
-
-				if session.Token == "" {
-					continue
-				}
-
-				// Check if session is inactive (LastSeen > 10 minutes ago)
-				if session.LastSeen.Before(cutoffTime) {
-					// Decrement viewer count for this session's code
-					var analytics CodeAnalytics
-					vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &analytics)
-
-					if analytics.CurrentViewers > 0 {
-						analytics.CurrentViewers--
-						vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &analytics)
-					}
-
-					// Remove session from index
-					vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, "")
-
-					// Delete the session
-					vbolt.Delete(tx, CodeSessionsBkt, session.Token)
-
-					cleanedCount++
-
-					LogDebug(LogCategorySystem, "Cleaned up inactive code session", map[string]interface{}{
-						"sessionToken": token,
-						"code":         session.Code,
-						"lastSeen":     session.LastSeen,
-						"inactiveFor":  time.Since(session.LastSeen).String(),
-					})
-				}
-			}
-		}
-
-		vbolt.TxCommit(tx)
-	})
-
-	if cleanedCount > 0 {
-		LogInfo(LogCategorySystem, "Session cleanup completed", map[string]interface{}{
-			"sessionsRemoved": cleanedCount,
-		})
-	}
-
-	return cleanedCount
-}
-
-// StartCodeSessionCleanup starts a background goroutine that periodically
-// cleans up inactive code sessions every 5 minutes
-func StartCodeSessionCleanup(db *vbolt.DB) {
-	LogInfo(LogCategorySystem, "Starting code session cleanup job", map[string]interface{}{
-		"frequency":       "5 minutes",
-		"inactivityLimit": "10 minutes",
-	})
-
-	go func() {
-		ticker := time.NewTicker(5 * time.Minute)
-		defer ticker.Stop()
-
-		for range ticker.C {
-			CleanupInactiveSessions(db)
-		}
-	}()
-}
-
 // CleanupOldAccessCodes removes access codes that have been expired for more than
 // the specified retention period. This prevents database bloat from accumulating
 // old codes and their associated data.
@@ -616,12 +414,12 @@ func CleanupOldAccessCodes(db *vbolt.DB, retentionDays int) int {
 			vbolt.Delete(tx, CodeAnalyticsBkt, codeStr)
 
 			// Delete any remaining sessions for this code
-			// Use the SessionsByCodeIdx to find sessions efficiently
+			// Use the SessionsByCodeIndex to find sessions efficiently
 			var sessionTokens []string
-			vbolt.ReadTermTargets(tx, SessionsByCodeIdx, codeStr, &sessionTokens, vbolt.Window{})
+			vbolt.ReadTermTargets(tx, SessionsByCodeIndex, codeStr, &sessionTokens, vbolt.Window{})
 			for _, token := range sessionTokens {
 				vbolt.Delete(tx, CodeSessionsBkt, token)
-				vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, token, "")
+				vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, token, "")
 			}
 
 			// Remove from indexes
@@ -701,7 +499,7 @@ func HandleExpiredCodes(db *vbolt.DB) int {
 
 			// Find all sessions for this expired code
 			var sessionTokens []string
-			vbolt.ReadTermTargets(tx, SessionsByCodeIdx, code.Code, &sessionTokens, vbolt.Window{})
+			vbolt.ReadTermTargets(tx, SessionsByCodeIndex, code.Code, &sessionTokens, vbolt.Window{})
 
 			for _, token := range sessionTokens {
 				var session CodeSession
@@ -746,7 +544,7 @@ func HandleExpiredCodes(db *vbolt.DB) int {
 					}
 
 					// Remove session from index
-					vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, session.Token, "")
+					vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, session.Token, "")
 
 					// Delete the session
 					vbolt.Delete(tx, CodeSessionsBkt, session.Token)
@@ -1155,8 +953,8 @@ func validateAccessCodeLogic(db *vbolt.DB, code string) (resp ValidateAccessCode
 		}
 		vbolt.Write(tx, CodeSessionsBkt, sessionToken, &session)
 
-		// Add to session index
-		vbolt.SetTargetSingleTerm(tx, SessionsByCodeIdx, sessionToken, accessCode.Code)
+		// Note: CodeSessions are NOT indexed in SessionsByCodeIndex
+		// Only ViewerSessions are indexed there (created when SSE connects)
 
 		// Update analytics
 		var analytics CodeAnalytics
@@ -1232,12 +1030,13 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 
 	// Check viewer limit (if set)
 	if accessCode.MaxViewers > 0 {
-		// Load current analytics to check viewer count
-		var analytics CodeAnalytics
-		vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
+		// Count current viewers by counting active ViewerSessions for this code
+		var sessionKeys []string
+		vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIndex, accessCode.Code, &sessionKeys, vbolt.Window{})
+		currentViewers := len(sessionKeys)
 
-		if analytics.CurrentViewers >= accessCode.MaxViewers {
-			return resp, fmt.Errorf("Stream is at capacity (%d/%d viewers)", analytics.CurrentViewers, accessCode.MaxViewers)
+		if currentViewers >= accessCode.MaxViewers {
+			return resp, fmt.Errorf("Stream is at capacity (%d/%d viewers)", currentViewers, accessCode.MaxViewers)
 		}
 	}
 
@@ -1261,8 +1060,8 @@ func ValidateAccessCode(ctx *vbeam.Context, req ValidateAccessCodeRequest) (resp
 	}
 	vbolt.Write(ctx.Tx, CodeSessionsBkt, sessionToken, &session)
 
-	// Add to session index
-	vbolt.SetTargetSingleTerm(ctx.Tx, SessionsByCodeIdx, sessionToken, accessCode.Code)
+	// Note: CodeSessions are NOT indexed in SessionsByCodeIndex
+	// Only ViewerSessions are indexed there (created when SSE connects)
 
 	// Update analytics
 	var analytics CodeAnalytics
@@ -1437,33 +1236,65 @@ func RevokeAccessCode(ctx *vbeam.Context, req RevokeAccessCodeRequest) (resp Rev
 	accessCode.IsRevoked = true
 	vbolt.Write(ctx.Tx, AccessCodesBkt, accessCode.Code, &accessCode)
 
-	// Find all active sessions for this code
+	// Find all active viewer sessions for this code
+	var sessionKeys []string
+	vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIndex, accessCode.Code, &sessionKeys, vbolt.Window{})
+
+	// Delete each viewer session
+	// Note: We also need to collect the session tokens for SSE broadcast
 	var sessionTokens []string
-	vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIdx, accessCode.Code, &sessionTokens, vbolt.Window{})
-
-	// Delete each session and update analytics
-	var analytics CodeAnalytics
-	vbolt.Read(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
-
 	sessionsKilled := 0
-	for _, token := range sessionTokens {
-		// Delete session
-		var emptySession CodeSession
-		vbolt.Write(ctx.Tx, CodeSessionsBkt, token, &emptySession)
+	for _, sessionKey := range sessionKeys {
+		var session ViewerSession
+		vbolt.Read(ctx.Tx, ViewerSessionsBkt, sessionKey, &session)
+		if session.SessionKey == "" {
+			continue
+		}
 
-		// Remove from index
-		vbolt.SetTargetSingleTerm(ctx.Tx, SessionsByCodeIdx, token, "")
+		// Extract session token from viewerId if it's a code session
+		// ViewerId format is "code:<token>"
+		if len(session.ViewerId) > 5 && session.ViewerId[:5] == "code:" {
+			token := session.ViewerId[5:] // Extract token after "code:" prefix
+			sessionTokens = append(sessionTokens, token)
+		}
+
+		// Decrement viewer counts for room and studio
+		room := GetRoom(ctx.Tx, session.RoomId)
+		if room.Id != 0 {
+			// Decrement room analytics
+			var roomAnalytics RoomAnalytics
+			vbolt.Read(ctx.Tx, RoomAnalyticsBkt, session.RoomId, &roomAnalytics)
+			if roomAnalytics.CurrentViewers > 0 {
+				roomAnalytics.CurrentViewers--
+				vbolt.Write(ctx.Tx, RoomAnalyticsBkt, session.RoomId, &roomAnalytics)
+			}
+
+			// Decrement studio analytics
+			var studioAnalytics StudioAnalytics
+			vbolt.Read(ctx.Tx, StudioAnalyticsBkt, room.StudioId, &studioAnalytics)
+			if studioAnalytics.CurrentViewers > 0 {
+				studioAnalytics.CurrentViewers--
+				vbolt.Write(ctx.Tx, StudioAnalyticsBkt, room.StudioId, &studioAnalytics)
+			}
+		}
+
+		// Decrement code analytics
+		var codeAnalytics CodeAnalytics
+		vbolt.Read(ctx.Tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+		if codeAnalytics.CurrentViewers > 0 {
+			codeAnalytics.CurrentViewers--
+			vbolt.Write(ctx.Tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+		}
+
+		// Remove from indexes
+		vbolt.SetTargetSingleTerm(ctx.Tx, SessionsByRoomIndex, sessionKey, -1)
+		vbolt.SetTargetSingleTerm(ctx.Tx, SessionsByCodeIndex, sessionKey, "-1")
+
+		// Delete the viewer session
+		vbolt.Delete(ctx.Tx, ViewerSessionsBkt, sessionKey)
 
 		sessionsKilled++
 	}
-
-	// Update analytics to reflect terminated sessions
-	if analytics.CurrentViewers >= sessionsKilled {
-		analytics.CurrentViewers -= sessionsKilled
-	} else {
-		analytics.CurrentViewers = 0
-	}
-	vbolt.Write(ctx.Tx, CodeAnalyticsBkt, accessCode.Code, &analytics)
 
 	// For studio codes, fetch room IDs before committing transaction
 	var roomIds []int
@@ -1568,6 +1399,11 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 		var analytics CodeAnalytics
 		vbolt.Read(ctx.Tx, CodeAnalyticsBkt, code, &analytics)
 
+		// Calculate current viewers by counting active ViewerSessions for this code
+		var sessionKeys []string
+		vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIndex, code, &sessionKeys, vbolt.Window{})
+		currentViewers := len(sessionKeys)
+
 		// Build list item
 		item := AccessCodeListItem{
 			Code:           accessCode.Code,
@@ -1577,7 +1413,7 @@ func ListAccessCodes(ctx *vbeam.Context, req ListAccessCodesRequest) (resp ListA
 			ExpiresAt:      accessCode.ExpiresAt,
 			IsRevoked:      accessCode.IsRevoked,
 			IsExpired:      now.After(accessCode.ExpiresAt),
-			CurrentViewers: analytics.CurrentViewers,
+			CurrentViewers: currentViewers,
 			TotalViews:     analytics.TotalConnections,
 		}
 		items = append(items, item)
@@ -1675,34 +1511,38 @@ func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp Get
 		status = "expired"
 	}
 
-	// Load active sessions
-	var sessionTokens []string
-	vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIdx, accessCode.Code, &sessionTokens, vbolt.Window{})
+	// Load active viewer sessions for this code
+	var sessionKeys []string
+	vbolt.ReadTermTargets(ctx.Tx, SessionsByCodeIndex, accessCode.Code, &sessionKeys, vbolt.Window{})
 
 	var sessions []SessionInfo
-	for _, token := range sessionTokens {
-		var session CodeSession
-		vbolt.Read(ctx.Tx, CodeSessionsBkt, token, &session)
-		if session.Token == "" {
+	for _, sessionKey := range sessionKeys {
+		var session ViewerSession
+		vbolt.Read(ctx.Tx, ViewerSessionsBkt, sessionKey, &session)
+		if session.SessionKey == "" {
 			continue // Skip if session not found
 		}
 
 		// Calculate duration
-		duration := int(session.LastSeen.Sub(session.ConnectedAt).Seconds())
+		duration := int(session.LastSeenAt.Sub(session.FirstSeenAt).Seconds())
 
-		// Determine if session is still active (LastSeen within last 10 minutes)
-		isActive := now.Sub(session.LastSeen) < 10*time.Minute
+		// Determine if session is still active (LastSeenAt within last 10 minutes)
+		isActive := now.Sub(session.LastSeenAt) < 10*time.Minute
 
-		// Build session info
+		// Build session info - note: ViewerSession doesn't have ClientIP/UserAgent
+		// Those are stored in CodeSession, but we're unifying on ViewerSession
 		info := SessionInfo{
-			ConnectedAt: session.ConnectedAt,
+			ConnectedAt: session.FirstSeenAt,
 			Duration:    duration,
-			ClientIP:    anonymizeIP(session.ClientIP),
-			UserAgent:   session.UserAgent,
+			ClientIP:    "", // Not stored in ViewerSession
+			UserAgent:   "", // Not stored in ViewerSession
 			IsActive:    isActive,
 		}
 		sessions = append(sessions, info)
 	}
+
+	// Calculate current viewers from active sessions
+	currentViewers := len(sessionKeys)
 
 	// Log access
 	LogInfo(LogCategorySystem, "Code analytics viewed", map[string]interface{}{
@@ -1723,7 +1563,7 @@ func GetCodeAnalytics(ctx *vbeam.Context, req GetCodeAnalyticsRequest) (resp Get
 	resp.CreatedAt = accessCode.CreatedAt
 	resp.ExpiresAt = accessCode.ExpiresAt
 	resp.TotalConnections = analytics.TotalConnections
-	resp.CurrentViewers = analytics.CurrentViewers
+	resp.CurrentViewers = currentViewers
 	resp.PeakViewers = analytics.PeakViewers
 	resp.PeakViewersAt = analytics.PeakViewersAt
 	resp.Sessions = sessions

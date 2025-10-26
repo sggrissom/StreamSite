@@ -51,6 +51,7 @@ type ViewerSession struct {
 	SessionKey  string    `json:"sessionKey"` // Composite key: "viewerId:roomId"
 	ViewerId    string    `json:"viewerId"`   // userId (JWT) or sessionToken (code auth)
 	RoomId      int       `json:"roomId"`
+	Code        string    `json:"code"`        // Access code used (empty for regular users)
 	FirstSeenAt time.Time `json:"firstSeenAt"` // When this viewer first connected to this room
 	LastSeenAt  time.Time `json:"lastSeenAt"`  // Most recent activity (updated on reconnect)
 }
@@ -90,6 +91,7 @@ func PackViewerSession(self *ViewerSession, buf *vpack.Buffer) {
 	vpack.String(&self.SessionKey, buf)
 	vpack.String(&self.ViewerId, buf)
 	vpack.Int(&self.RoomId, buf)
+	vpack.String(&self.Code, buf)
 	vpack.Time(&self.FirstSeenAt, buf)
 	vpack.Time(&self.LastSeenAt, buf)
 }
@@ -110,9 +112,13 @@ var ViewerSessionsBkt = vbolt.Bucket(&cfg.Info, "viewer_sessions", vpack.StringZ
 // SessionsByRoomIndex: Term=roomId, Target=sessionKey
 var SessionsByRoomIndex = vbolt.Index(&cfg.Info, "sessions_by_room", vpack.FInt, vpack.StringZ)
 
+// SessionsByCodeIndex: Term=code, Target=sessionKey
+// Find all viewer sessions using a specific access code
+var SessionsByCodeIndex = vbolt.Index(&cfg.Info, "sessions_by_code", vpack.StringZ, vpack.StringZ)
+
 // Helper functions for analytics tracking
 
-func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string) {
+func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, code string) {
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		// Get room to find studioId
 		room := GetRoom(tx, roomId)
@@ -164,6 +170,7 @@ func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string) {
 			session.SessionKey = sessionKey
 			session.ViewerId = viewerId
 			session.RoomId = roomId
+			session.Code = code
 			session.FirstSeenAt = now
 		}
 		session.LastSeenAt = now
@@ -171,6 +178,25 @@ func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string) {
 		// Save session and analytics
 		vbolt.Write(tx, ViewerSessionsBkt, sessionKey, &session)
 		vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, roomId)
+
+		// Index by code if this is a code-based session
+		if code != "" {
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, sessionKey, code)
+
+			// Increment code analytics
+			var codeAnalytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, code, &codeAnalytics)
+			codeAnalytics.CurrentViewers++
+
+			// Update peak if necessary
+			if codeAnalytics.CurrentViewers > codeAnalytics.PeakViewers {
+				codeAnalytics.PeakViewers = codeAnalytics.CurrentViewers
+				codeAnalytics.PeakViewersAt = now
+			}
+
+			vbolt.Write(tx, CodeAnalyticsBkt, code, &codeAnalytics)
+		}
+
 		vbolt.Write(tx, RoomAnalyticsBkt, roomId, &analytics)
 
 		incrementStudioViewerCount(tx, room.StudioId, viewerId, isNewSession, isExpiredSession)
@@ -179,11 +205,30 @@ func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string) {
 	})
 }
 
-func DecrementRoomViewerCount(db *vbolt.DB, roomId int) {
+func DecrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string) {
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		room := GetRoom(tx, roomId)
 		if room.Id == 0 {
 			return
+		}
+
+		// Build session key to look up the session
+		sessionKey := viewerId + ":" + strconv.Itoa(roomId)
+
+		// Look up session to check if it's code-based
+		var session ViewerSession
+		vbolt.Read(tx, ViewerSessionsBkt, sessionKey, &session)
+
+		// If this is a code-based session, decrement code analytics
+		if session.Code != "" {
+			var codeAnalytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+
+			if codeAnalytics.CurrentViewers > 0 {
+				codeAnalytics.CurrentViewers--
+			}
+
+			vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
 		}
 
 		// Load room analytics
@@ -549,6 +594,19 @@ func StartViewerSessionCleanup(db *vbolt.DB) {
 								studioAnalytics.CurrentViewers--
 								vbolt.Write(tx, StudioAnalyticsBkt, room.StudioId, &studioAnalytics)
 							}
+						}
+
+						// If this is a code-based session, decrement code analytics
+						if session.Code != "" {
+							var codeAnalytics CodeAnalytics
+							vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+							if codeAnalytics.CurrentViewers > 0 {
+								codeAnalytics.CurrentViewers--
+								vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+							}
+
+							// Remove from code index
+							vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, sessionKey, "")
 						}
 
 						// Now delete the session

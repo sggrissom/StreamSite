@@ -210,7 +210,7 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 
 	t.Run("NewViewer", func(t *testing.T) {
 		// First connection from a new viewer
-		IncrementRoomViewerCount(db, 10, "user:1")
+		IncrementRoomViewerCount(db, 10, "user:1", "")
 
 		// Verify all counters incremented including unique viewers
 		var analytics RoomAnalytics
@@ -256,7 +256,7 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 	t.Run("ReconnectWithinTimeout", func(t *testing.T) {
 		// Same viewer reconnects within 5 minutes (simulated by immediate reconnect)
 		// Decrement first to simulate disconnect
-		DecrementRoomViewerCount(db, 10)
+		DecrementRoomViewerCount(db, 10, "user:1")
 
 		// Get current totals before reconnection
 		var beforeAnalytics RoomAnalytics
@@ -265,7 +265,7 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 		})
 
 		// Reconnect same viewer
-		IncrementRoomViewerCount(db, 10, "user:1")
+		IncrementRoomViewerCount(db, 10, "user:1", "")
 
 		// Verify totals did NOT increase (session still valid)
 		var afterAnalytics RoomAnalytics
@@ -303,8 +303,8 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 		})
 
 		// Decrement and reconnect after timeout
-		DecrementRoomViewerCount(db, 10)
-		IncrementRoomViewerCount(db, 10, "user:1")
+		DecrementRoomViewerCount(db, 10, "user:1")
+		IncrementRoomViewerCount(db, 10, "user:1", "")
 
 		// Verify TotalViews increased but UniqueViewers did NOT
 		var afterAnalytics RoomAnalytics
@@ -324,10 +324,10 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 
 	t.Run("MultipleUniqueViewers", func(t *testing.T) {
 		// Add second viewer
-		IncrementRoomViewerCount(db, 10, "user:2")
+		IncrementRoomViewerCount(db, 10, "user:2", "")
 
-		// Add third viewer
-		IncrementRoomViewerCount(db, 10, "code:abc123")
+		// Add third viewer (code-based)
+		IncrementRoomViewerCount(db, 10, "code:abc123token", "abc123")
 
 		// Verify analytics
 		var analytics RoomAnalytics
@@ -347,14 +347,17 @@ func TestIncrementRoomViewerCount(t *testing.T) {
 		var session2, session3 ViewerSession
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
 			vbolt.Read(tx, ViewerSessionsBkt, "user:2:10", &session2)
-			vbolt.Read(tx, ViewerSessionsBkt, "code:abc123:10", &session3)
+			vbolt.Read(tx, ViewerSessionsBkt, "code:abc123token:10", &session3)
 		})
 
 		if session2.ViewerId != "user:2" {
 			t.Errorf("Session2 viewerId should be 'user:2', got '%s'", session2.ViewerId)
 		}
-		if session3.ViewerId != "code:abc123" {
-			t.Errorf("Session3 viewerId should be 'code:abc123', got '%s'", session3.ViewerId)
+		if session3.ViewerId != "code:abc123token" {
+			t.Errorf("Session3 viewerId should be 'code:abc123token', got '%s'", session3.ViewerId)
+		}
+		if session3.Code != "abc123" {
+			t.Errorf("Session3 code should be 'abc123', got '%s'", session3.Code)
 		}
 
 		// Verify studio analytics aggregation

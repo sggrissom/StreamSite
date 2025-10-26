@@ -812,6 +812,7 @@ func TestViewerCountTracking(t *testing.T) {
 
 		// Create room and code with MaxViewers=2
 		var code string
+		var roomId int
 
 		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 			studio := Studio{
@@ -831,6 +832,7 @@ func TestViewerCountTracking(t *testing.T) {
 				StreamKey:  "test-key",
 				Creation:   time.Now(),
 			}
+			roomId = room.Id
 			vbolt.Write(tx, RoomsBkt, room.Id, &room)
 
 			// Create access code with MaxViewers=2
@@ -869,8 +871,21 @@ func TestViewerCountTracking(t *testing.T) {
 		if err1 != nil {
 			t.Fatalf("First validation should succeed: %v", err1)
 		}
-		// Simulate SSE connection to increment viewer count
-		IncrementCodeViewerCount(db, token1)
+		// Simulate SSE connection by creating ViewerSession
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			session := ViewerSession{
+				SessionKey:  "code:" + token1 + ":" + fmt.Sprint(roomId),
+				ViewerId:    "code:" + token1,
+				RoomId:      roomId,
+				Code:        code,
+				FirstSeenAt: time.Now(),
+				LastSeenAt:  time.Now(),
+			}
+			vbolt.Write(tx, ViewerSessionsBkt, session.SessionKey, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, session.SessionKey, roomId)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, session.SessionKey, code)
+			vbolt.TxCommit(tx)
+		})
 
 		// Validate code successfully for second viewer
 		var err2 error
@@ -884,15 +899,28 @@ func TestViewerCountTracking(t *testing.T) {
 		if err2 != nil {
 			t.Fatalf("Second validation should succeed: %v", err2)
 		}
-		// Simulate SSE connection to increment viewer count
-		IncrementCodeViewerCount(db, token2)
+		// Simulate SSE connection by creating ViewerSession
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			session := ViewerSession{
+				SessionKey:  "code:" + token2 + ":" + fmt.Sprint(roomId),
+				ViewerId:    "code:" + token2,
+				RoomId:      roomId,
+				Code:        code,
+				FirstSeenAt: time.Now(),
+				LastSeenAt:  time.Now(),
+			}
+			vbolt.Write(tx, ViewerSessionsBkt, session.SessionKey, &session)
+			vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, session.SessionKey, roomId)
+			vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, session.SessionKey, code)
+			vbolt.TxCommit(tx)
+		})
 
-		// Verify current viewers is 2
+		// Verify current viewers is 2 by counting ViewerSessions
 		var currentViewers int
 		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
-			var analytics CodeAnalytics
-			vbolt.Read(tx, CodeAnalyticsBkt, code, &analytics)
-			currentViewers = analytics.CurrentViewers
+			var sessionKeys []string
+			vbolt.ReadTermTargets(tx, SessionsByCodeIndex, code, &sessionKeys, vbolt.Window{})
+			currentViewers = len(sessionKeys)
 		})
 
 		if currentViewers != 2 {

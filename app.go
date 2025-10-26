@@ -41,7 +41,6 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.ResetAllCurrentViewers(db)
 
 	// Start background jobs
-	backend.StartCodeSessionCleanup(db)
 	backend.StartOldCodeCleanup(db)
 	backend.StartExpiredCodeHandler(db)
 	backend.StartMonthlyAnalyticsReset(db)
