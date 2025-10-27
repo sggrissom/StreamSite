@@ -97,6 +97,8 @@ type StreamState = {
   inGracePeriod: boolean;
   gracePeriodUntil: string | null;
   liveEdgeCheckInterval: number | null;
+  offlineGraceTimer: number | null;
+  isInOfflineGrace: boolean;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
@@ -197,6 +199,8 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     inGracePeriod: false,
     gracePeriodUntil: null,
     liveEdgeCheckInterval: null,
+    offlineGraceTimer: null,
+    isInOfflineGrace: false,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
     },
@@ -215,15 +219,28 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       state.isStreamLive = live;
 
       if (live) {
-        // Stream came online - initialize player
+        // Stream came online - cancel grace period and initialize player
+        if (state.offlineGraceTimer !== null) {
+          clearTimeout(state.offlineGraceTimer);
+          state.offlineGraceTimer = null;
+        }
+        state.isInOfflineGrace = false;
+
         if (state.videoElement && state.streamUrl) {
           initializePlayer(state, state.videoElement);
         }
         // Start checking live edge
         state.startLiveEdgeChecking();
       } else {
-        // Stream went offline - cleanup player
-        cleanupPlayer(state);
+        // Stream went offline - start grace period (30 seconds)
+        state.isInOfflineGrace = true;
+        state.offlineGraceTimer = window.setTimeout(() => {
+          // Grace period expired - cleanup player and show offline message
+          state.isInOfflineGrace = false;
+          state.offlineGraceTimer = null;
+          cleanupPlayer(state);
+          vlens.scheduleRedraw();
+        }, 30000); // 30 seconds
       }
 
       vlens.scheduleRedraw();
@@ -394,6 +411,13 @@ function cleanupPlayer(state: StreamState) {
   // Stop live edge checking
   state.stopLiveEdgeChecking();
 
+  // Clear offline grace timer if active
+  if (state.offlineGraceTimer !== null) {
+    clearTimeout(state.offlineGraceTimer);
+    state.offlineGraceTimer = null;
+  }
+  state.isInOfflineGrace = false;
+
   if (state.hlsInstance?.destroy) {
     try {
       state.hlsInstance.destroy();
@@ -460,10 +484,23 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
     state.isPlaying = false;
     vlens.scheduleRedraw();
   };
+  const handleEnded = () => {
+    // If video ended during grace period, immediately show offline message
+    if (state.isInOfflineGrace) {
+      if (state.offlineGraceTimer !== null) {
+        clearTimeout(state.offlineGraceTimer);
+        state.offlineGraceTimer = null;
+      }
+      state.isInOfflineGrace = false;
+      cleanupPlayer(state);
+      vlens.scheduleRedraw();
+    }
+  };
   el.addEventListener("play", handlePlay);
   el.addEventListener("pause", handlePause);
   el.addEventListener("playing", handlePlay);
   el.addEventListener("waiting", handlePause);
+  el.addEventListener("ended", handleEnded);
 
   // init exactly once for this element
   if (el.canPlayType("application/vnd.apple.mpegurl")) {
@@ -710,7 +747,7 @@ export function view(
           </div>
         )}
 
-        {state.isStreamLive ? (
+        {state.isStreamLive || state.isInOfflineGrace ? (
           <div className="video-container">
             <video
               ref={state.onVideoRef}
