@@ -5,6 +5,9 @@ type VideoControlsProps = {
   id: string;
   videoElement: HTMLVideoElement | null;
   isPlaying: boolean;
+  isBehindLive: boolean;
+  secondsBehindLive: number;
+  onJumpToLive: () => void;
 };
 
 type ControlsState = {
@@ -243,6 +246,30 @@ export function VideoControls(props: VideoControlsProps) {
 
         {/* Bottom controls bar */}
         <div className="control-bar">
+          {/* Live indicator / Go Live button */}
+          {props.isBehindLive ? (
+            <button
+              className="control-btn control-go-live"
+              onClick={props.onJumpToLive}
+              aria-label="Jump to live"
+            >
+              <span className="live-icon">●</span>
+              <span className="live-text">GO LIVE</span>
+              {props.secondsBehindLive > 0 && props.secondsBehindLive < 60 && (
+                <span className="live-time">
+                  -{Math.floor(props.secondsBehindLive)}s
+                </span>
+              )}
+            </button>
+          ) : (
+            <div className="control-live-badge">
+              <span className="live-icon pulsing">●</span>
+              <span className="live-text">LIVE</span>
+            </div>
+          )}
+
+          <div className="control-spacer"></div>
+
           {/* Fullscreen button */}
           <button
             className="control-btn control-fullscreen"

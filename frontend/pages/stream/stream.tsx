@@ -88,12 +88,15 @@ type StreamState = {
   streamUrl: string;
   isStreamLive: boolean;
   isPlaying: boolean;
+  isBehindLive: boolean;
+  secondsBehindLive: number;
   roomId: number;
   eventSource: EventSource | null;
   retryCount: number;
   showRevokedModal: boolean;
   inGracePeriod: boolean;
   gracePeriodUntil: string | null;
+  liveEdgeCheckInterval: number | null;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
@@ -101,6 +104,10 @@ type StreamState = {
   disconnectSSE: () => void;
   handleCodeRevoked: () => void;
   handleCodeExpiredGrace: () => void;
+  jumpToLive: () => void;
+  checkLiveEdge: () => void;
+  startLiveEdgeChecking: () => void;
+  stopLiveEdgeChecking: () => void;
 };
 
 type OrientationState = {
@@ -181,12 +188,15 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     streamUrl: "",
     isStreamLive: false,
     isPlaying: false,
+    isBehindLive: false,
+    secondsBehindLive: 0,
     roomId: 0,
     eventSource: null,
     retryCount: 0,
     showRevokedModal: false,
     inGracePeriod: false,
     gracePeriodUntil: null,
+    liveEdgeCheckInterval: null,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
     },
@@ -209,6 +219,8 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
         if (state.videoElement && state.streamUrl) {
           initializePlayer(state, state.videoElement);
         }
+        // Start checking live edge
+        state.startLiveEdgeChecking();
       } else {
         // Stream went offline - cleanup player
         cleanupPlayer(state);
@@ -260,6 +272,115 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
         state.eventSource = null;
       }
     },
+    jumpToLive: () => {
+      if (!state.videoElement) return;
+
+      try {
+        if (state.hlsInstance) {
+          // HLS.js: Use liveSyncPosition or seek to end
+          const liveSyncPos = state.hlsInstance.liveSyncPosition;
+          if (liveSyncPos !== undefined && liveSyncPos !== null) {
+            state.videoElement.currentTime = liveSyncPos;
+          } else {
+            // Fallback: seek to the end of the seekable range
+            const seekable = state.videoElement.seekable;
+            if (seekable.length > 0) {
+              state.videoElement.currentTime = seekable.end(
+                seekable.length - 1,
+              );
+            }
+          }
+        } else {
+          // Safari native HLS: seek to end of seekable range
+          const seekable = state.videoElement.seekable;
+          if (seekable.length > 0) {
+            state.videoElement.currentTime = seekable.end(seekable.length - 1);
+          }
+        }
+
+        // Resume playback if paused
+        if (state.videoElement.paused) {
+          state.videoElement
+            .play()
+            .catch((e) => console.warn("Play failed:", e));
+        }
+
+        // Immediately update state
+        state.isBehindLive = false;
+        state.secondsBehindLive = 0;
+        vlens.scheduleRedraw();
+      } catch (e) {
+        console.warn("Failed to jump to live:", e);
+      }
+    },
+    checkLiveEdge: () => {
+      if (!state.videoElement || !state.isStreamLive) {
+        state.isBehindLive = false;
+        state.secondsBehindLive = 0;
+        return;
+      }
+
+      try {
+        let liveEdge = 0;
+        let currentTime = state.videoElement.currentTime;
+
+        if (state.hlsInstance) {
+          // HLS.js: Use liveSyncPosition
+          const liveSyncPos = state.hlsInstance.liveSyncPosition;
+          if (liveSyncPos !== undefined && liveSyncPos !== null) {
+            liveEdge = liveSyncPos;
+          } else {
+            // Fallback to seekable range
+            const seekable = state.videoElement.seekable;
+            if (seekable.length > 0) {
+              liveEdge = seekable.end(seekable.length - 1);
+            }
+          }
+        } else {
+          // Safari native HLS: Use seekable range
+          const seekable = state.videoElement.seekable;
+          if (seekable.length > 0) {
+            liveEdge = seekable.end(seekable.length - 1);
+          }
+        }
+
+        // Calculate distance from live edge
+        const distance = liveEdge - currentTime;
+        state.secondsBehindLive = Math.max(0, distance);
+
+        // Consider "behind" if more than 3 seconds from live edge OR if paused
+        const threshold = 3;
+        const wasBehind = state.isBehindLive;
+        state.isBehindLive =
+          state.secondsBehindLive > threshold || state.videoElement.paused;
+
+        // Redraw if state changed
+        if (wasBehind !== state.isBehindLive) {
+          vlens.scheduleRedraw();
+        }
+      } catch (e) {
+        console.warn("Error checking live edge:", e);
+      }
+    },
+    startLiveEdgeChecking: () => {
+      if (state.liveEdgeCheckInterval !== null) return; // Already running
+
+      // Check immediately
+      state.checkLiveEdge();
+
+      // Check every 2 seconds
+      state.liveEdgeCheckInterval = window.setInterval(() => {
+        state.checkLiveEdge();
+      }, 2000);
+    },
+    stopLiveEdgeChecking: () => {
+      if (state.liveEdgeCheckInterval !== null) {
+        clearInterval(state.liveEdgeCheckInterval);
+        state.liveEdgeCheckInterval = null;
+      }
+      state.isBehindLive = false;
+      state.secondsBehindLive = 0;
+    },
   };
 
   // Update module-level reference for cleanup during navigation
@@ -270,6 +391,9 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
 // Helper to cleanup video player
 function cleanupPlayer(state: StreamState) {
+  // Stop live edge checking
+  state.stopLiveEdgeChecking();
+
   if (state.hlsInstance?.destroy) {
     try {
       state.hlsInstance.destroy();
@@ -478,7 +602,7 @@ export function view(
 
     // Sync initial state from backend BEFORE connecting SSE
     // After SSE connects, it becomes the source of truth
-    state.isStreamLive = data.room.isActive;
+    state.setStreamLive(data.room.isActive);
 
     state.connectSSE();
   }
@@ -600,6 +724,9 @@ export function view(
               id={`video-controls-${data.room?.id || 0}`}
               videoElement={state.videoElement}
               isPlaying={state.isPlaying}
+              isBehindLive={state.isBehindLive}
+              secondsBehindLive={state.secondsBehindLive}
+              onJumpToLive={state.jumpToLive}
             />
           </div>
         ) : (
