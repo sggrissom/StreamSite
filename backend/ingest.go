@@ -307,6 +307,120 @@ func IngestStatusHandler(db *vbolt.DB) http.HandlerFunc {
 	}
 }
 
+// StudioCameraStatusHandler handles GET /api/studios/{id}/camera-status
+// Returns camera status for all rooms in a studio (batch endpoint)
+func StudioCameraStatusHandler(db *vbolt.DB) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// Only accept GET
+		if r.Method != http.MethodGet {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		// Extract studio ID from path: /api/studios/{id}/camera-status
+		path := r.URL.Path
+		if !strings.HasPrefix(path, "/api/studios/") {
+			http.Error(w, "Invalid path", http.StatusBadRequest)
+			return
+		}
+
+		remainder := strings.TrimPrefix(path, "/api/studios/")
+		slashIdx := strings.Index(remainder, "/")
+		if slashIdx == -1 {
+			http.Error(w, "Invalid path: no studio ID found", http.StatusBadRequest)
+			return
+		}
+
+		studioIdStr := remainder[:slashIdx]
+		studioId, err := strconv.Atoi(studioIdStr)
+		if err != nil {
+			http.Error(w, "Invalid studio ID", http.StatusBadRequest)
+			return
+		}
+
+		// Check authentication
+		authCtx, authErr := GetAuthFromRequest(r, db)
+		if authErr != nil {
+			LogWarnWithRequest(r, LogCategoryAuth, "Unauthorized studio camera status check", map[string]interface{}{
+				"studioId": studioId,
+			})
+			http.Error(w, "Authentication required", http.StatusForbidden)
+			return
+		}
+
+		// Check permissions - require Viewer or higher on studio
+		var hasPermission bool
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			hasPermission = HasStudioPermission(tx, authCtx.User.Id, studioId, StudioRoleViewer)
+		})
+
+		if !hasPermission {
+			LogWarnWithRequest(r, LogCategoryAuth, "Permission denied for studio camera status", map[string]interface{}{
+				"studioId": studioId,
+				"userId":   authCtx.User.Id,
+			})
+			http.Error(w, "Permission denied", http.StatusForbidden)
+			return
+		}
+
+		// Get all rooms for this studio
+		var rooms []Room
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			var roomIds []int
+			vbolt.ReadTermTargets(tx, RoomsByStudioIdx, studioId, &roomIds, vbolt.Window{})
+
+			rooms = make([]Room, 0, len(roomIds))
+			for _, roomId := range roomIds {
+				room := GetRoom(tx, roomId)
+				if room.Id > 0 {
+					rooms = append(rooms, room)
+				}
+			}
+		})
+
+		// Build status array for all rooms
+		type RoomCameraStatus struct {
+			RoomID    int    `json:"roomId"`
+			Running   bool   `json:"running"`
+			HasCamera bool   `json:"hasCamera"`
+			StartedAt string `json:"startedAt,omitempty"`
+		}
+
+		statuses := make([]RoomCameraStatus, 0, len(rooms))
+
+		for _, room := range rooms {
+			// Get ingest status
+			running, startTime, _ := ingestManager.GetStatus(room.Id)
+
+			// Check if camera is configured
+			var hasCamera bool
+			vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+				cameraConfig := GetCameraConfig(tx, room.Id)
+				hasCamera = cameraConfig.RoomId > 0 && cameraConfig.RTSPURL != ""
+			})
+
+			status := RoomCameraStatus{
+				RoomID:    room.Id,
+				Running:   running,
+				HasCamera: hasCamera,
+			}
+
+			if running {
+				status.StartedAt = startTime.Format("2006-01-02T15:04:05Z07:00")
+			}
+
+			statuses = append(statuses, status)
+		}
+
+		// Return status array
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"studioId": studioId,
+			"statuses": statuses,
+		})
+	}
+}
+
 // RegisterIngestMethods registers HTTP handlers for camera ingest control
 func RegisterIngestMethods(app *vbeam.Application) {
 	// Initialize global IngestManager
@@ -315,7 +429,7 @@ func RegisterIngestMethods(app *vbeam.Application) {
 	// Get database reference from app
 	db := app.DB
 
-	// Register HTTP handlers
+	// Register HTTP handlers for individual room operations
 	app.HandleFunc("/api/rooms/", func(w http.ResponseWriter, r *http.Request) {
 		// Route to appropriate handler based on path suffix
 		if strings.HasSuffix(r.URL.Path, "/ingest/start") {
@@ -324,6 +438,15 @@ func RegisterIngestMethods(app *vbeam.Application) {
 			StopIngestHandler(db)(w, r)
 		} else if strings.HasSuffix(r.URL.Path, "/ingest/status") {
 			IngestStatusHandler(db)(w, r)
+		} else {
+			http.NotFound(w, r)
+		}
+	})
+
+	// Register batch status handler for studio
+	app.HandleFunc("/api/studios/", func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/camera-status") {
+			StudioCameraStatusHandler(db)(w, r)
 		} else {
 			http.NotFound(w, r)
 		}

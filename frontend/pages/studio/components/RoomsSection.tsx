@@ -414,14 +414,40 @@ type CameraIngestStatus = {
 type CameraIngestManager = {
   statuses: Map<number, CameraIngestStatus>;
   pollInterval: number | null;
+  studioId: number;
+  isPollingPaused: boolean;
 };
 
-const useCameraIngestManager = vlens.declareHook(
-  (): CameraIngestManager => ({
+const useCameraIngestManager = vlens.declareHook((): CameraIngestManager => {
+  const manager: CameraIngestManager = {
     statuses: new Map(),
     pollInterval: null,
-  }),
-);
+    studioId: 0,
+    isPollingPaused: false,
+  };
+
+  // Add Page Visibility API listener
+  const handleVisibilityChange = () => {
+    if (document.hidden) {
+      // Tab is hidden - pause polling
+      if (manager.pollInterval !== null) {
+        clearInterval(manager.pollInterval);
+        manager.pollInterval = null;
+        manager.isPollingPaused = true;
+      }
+    } else {
+      // Tab is visible - resume polling if it was paused
+      if (manager.isPollingPaused && manager.studioId > 0) {
+        manager.isPollingPaused = false;
+        startCameraPolling(manager, manager.studioId);
+      }
+    }
+  };
+
+  document.addEventListener("visibilitychange", handleVisibilityChange);
+
+  return manager;
+});
 
 function getCameraStatus(
   manager: CameraIngestManager,
@@ -441,23 +467,35 @@ function getCameraStatus(
   return manager.statuses.get(roomId)!;
 }
 
-async function fetchCameraStatus(manager: CameraIngestManager, roomId: number) {
+async function fetchAllCameraStatuses(
+  manager: CameraIngestManager,
+  studioId: number,
+) {
   try {
-    const response = await fetch(`/api/rooms/${roomId}/ingest/status`);
+    const response = await fetch(`/api/studios/${studioId}/camera-status`);
     const data = await response.json();
 
-    const status = getCameraStatus(manager, roomId);
-    status.running = data.running || false;
-    status.hasCamera = data.hasCamera || false;
-    status.startedAt = data.startedAt || null;
-    status.error = "";
-    vlens.scheduleRedraw();
+    // Update all room statuses from batch response
+    if (data.statuses && Array.isArray(data.statuses)) {
+      for (const roomStatus of data.statuses) {
+        const status = getCameraStatus(manager, roomStatus.roomId);
+        status.running = roomStatus.running || false;
+        status.hasCamera = roomStatus.hasCamera || false;
+        status.startedAt = roomStatus.startedAt || null;
+        status.error = "";
+      }
+      vlens.scheduleRedraw();
+    }
   } catch (err) {
     // Silently fail for status polling
   }
 }
 
-async function startCameraIngest(manager: CameraIngestManager, roomId: number) {
+async function startCameraIngest(
+  manager: CameraIngestManager,
+  roomId: number,
+  studioId: number,
+) {
   const status = getCameraStatus(manager, roomId);
   status.isStarting = true;
   status.error = "";
@@ -476,8 +514,8 @@ async function startCameraIngest(manager: CameraIngestManager, roomId: number) {
       return;
     }
 
-    // Immediately fetch status after starting
-    await fetchCameraStatus(manager, roomId);
+    // Immediately fetch all statuses after starting
+    await fetchAllCameraStatuses(manager, studioId);
     status.isStarting = false;
     vlens.scheduleRedraw();
   } catch (err) {
@@ -487,7 +525,11 @@ async function startCameraIngest(manager: CameraIngestManager, roomId: number) {
   }
 }
 
-async function stopCameraIngest(manager: CameraIngestManager, roomId: number) {
+async function stopCameraIngest(
+  manager: CameraIngestManager,
+  roomId: number,
+  studioId: number,
+) {
   const status = getCameraStatus(manager, roomId);
   status.isStopping = true;
   status.error = "";
@@ -506,8 +548,8 @@ async function stopCameraIngest(manager: CameraIngestManager, roomId: number) {
       return;
     }
 
-    // Immediately fetch status after stopping
-    await fetchCameraStatus(manager, roomId);
+    // Immediately fetch all statuses after stopping
+    await fetchAllCameraStatuses(manager, studioId);
     status.isStopping = false;
     vlens.scheduleRedraw();
   } catch (err) {
@@ -517,19 +559,23 @@ async function stopCameraIngest(manager: CameraIngestManager, roomId: number) {
   }
 }
 
-function startCameraPolling(manager: CameraIngestManager, roomIds: number[]) {
+function startCameraPolling(manager: CameraIngestManager, studioId: number) {
   // Clear existing interval
   if (manager.pollInterval !== null) {
     clearInterval(manager.pollInterval);
   }
 
-  // Initial fetch for all rooms
-  roomIds.forEach((roomId) => fetchCameraStatus(manager, roomId));
+  // Store studio ID for visibility-based resume
+  manager.studioId = studioId;
+  manager.isPollingPaused = false;
 
-  // Poll every 3 seconds
+  // Initial fetch for all rooms in the studio
+  fetchAllCameraStatuses(manager, studioId);
+
+  // Poll every 10 seconds (reduced from 3 seconds)
   manager.pollInterval = window.setInterval(() => {
-    roomIds.forEach((roomId) => fetchCameraStatus(manager, roomId));
-  }, 3000);
+    fetchAllCameraStatuses(manager, studioId);
+  }, 10000);
 }
 
 function stopCameraPolling(manager: CameraIngestManager) {
@@ -537,6 +583,8 @@ function stopCameraPolling(manager: CameraIngestManager) {
     clearInterval(manager.pollInterval);
     manager.pollInterval = null;
   }
+  manager.studioId = 0;
+  manager.isPollingPaused = false;
 }
 
 // ===== Component =====
@@ -551,10 +599,9 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
 
   // Start camera status polling when rooms change
   if (rooms.length > 0) {
-    const roomIds = rooms.map((room) => room.id);
     // Only start polling if not already polling
     if (cameraIngest.pollInterval === null) {
-      startCameraPolling(cameraIngest, roomIds);
+      startCameraPolling(cameraIngest, studio.id);
     }
   } else {
     // Stop polling if no rooms
@@ -616,7 +663,7 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                         <button
                           className="btn btn-sm btn-camera"
                           onClick={() =>
-                            startCameraIngest(cameraIngest, room.id)
+                            startCameraIngest(cameraIngest, room.id, studio.id)
                           }
                           disabled={cameraStatus.isStarting}
                         >
@@ -628,7 +675,7 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                         <button
                           className="btn btn-sm btn-camera-stop"
                           onClick={() =>
-                            stopCameraIngest(cameraIngest, room.id)
+                            stopCameraIngest(cameraIngest, room.id, studio.id)
                           }
                           disabled={cameraStatus.isStopping}
                         >

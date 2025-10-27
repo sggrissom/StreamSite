@@ -162,7 +162,28 @@ function closeRevokeModal(state: ActiveCodesListState) {
   vlens.scheduleRedraw();
 }
 
-function openQrModal(
+// Convert GIF data URL to PNG data URL
+function convertGifToPng(gifDataUrl: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Failed to get canvas context"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = () => reject(new Error("Failed to load image"));
+    img.src = gifDataUrl;
+  });
+}
+
+async function openQrModal(
   state: ActiveCodesListState,
   code: string,
   label: string,
@@ -185,7 +206,9 @@ function openQrModal(
     const qr = qrcode(0, "M");
     qr.addData(state.qrModal.shareUrl);
     qr.make();
-    state.qrModal.qrDataUrl = qr.createDataURL(4);
+    const gifDataUrl = qr.createDataURL(4);
+    // Convert GIF to PNG for proper download
+    state.qrModal.qrDataUrl = await convertGifToPng(gifDataUrl);
   } catch (qrError) {
     console.error("Failed to generate QR code:", qrError);
     state.qrModal.qrDataUrl = "";

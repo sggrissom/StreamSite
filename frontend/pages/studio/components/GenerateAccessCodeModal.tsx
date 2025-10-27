@@ -75,6 +75,27 @@ function durationToMinutes(duration: string): number {
   }
 }
 
+// Convert GIF data URL to PNG data URL
+function convertGifToPng(gifDataUrl: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement("canvas");
+      canvas.width = img.width;
+      canvas.height = img.height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        reject(new Error("Failed to get canvas context"));
+        return;
+      }
+      ctx.drawImage(img, 0, 0);
+      resolve(canvas.toDataURL("image/png"));
+    };
+    img.onerror = () => reject(new Error("Failed to load image"));
+    img.src = gifDataUrl;
+  });
+}
+
 async function submitGenerateCode(
   state: ModalState,
   codeType: number,
@@ -119,7 +140,9 @@ async function submitGenerateCode(
     const qr = qrcode(0, "M");
     qr.addData(state.shareUrl);
     qr.make();
-    state.qrDataUrl = qr.createDataURL(4);
+    const gifDataUrl = qr.createDataURL(4);
+    // Convert GIF to PNG for proper download
+    state.qrDataUrl = await convertGifToPng(gifDataUrl);
   } catch (qrError) {
     console.error("Failed to generate QR code:", qrError);
     state.qrDataUrl = "";
