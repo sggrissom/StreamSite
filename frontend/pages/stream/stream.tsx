@@ -3,6 +3,7 @@ import * as vlens from "vlens";
 import { registerCleanupFunction } from "vlens/core";
 import * as server from "../../server";
 import { Header, Footer } from "../../layout";
+import { VideoControls } from "./VideoControls";
 import "./stream-styles";
 
 type Data = server.GetRoomDetailsResponse;
@@ -86,6 +87,7 @@ type StreamState = {
   hlsInstance: any;
   streamUrl: string;
   isStreamLive: boolean;
+  isPlaying: boolean;
   roomId: number;
   eventSource: EventSource | null;
   retryCount: number;
@@ -100,6 +102,63 @@ type StreamState = {
   handleCodeRevoked: () => void;
   handleCodeExpiredGrace: () => void;
 };
+
+type OrientationState = {
+  isPortrait: boolean;
+  isMobile: boolean;
+  showHint: boolean;
+  dismissHint: () => void;
+};
+
+const useOrientation = vlens.declareHook((): OrientationState => {
+  const state: OrientationState = {
+    isPortrait: false,
+    isMobile: false,
+    showHint: false,
+    dismissHint: () => {
+      state.showHint = false;
+      vlens.scheduleRedraw();
+    },
+  };
+
+  // Check if mobile device
+  const checkMobile = () => {
+    state.isMobile = window.innerWidth <= 768;
+  };
+
+  // Check orientation
+  const checkOrientation = () => {
+    const isPortraitNow = window.matchMedia("(orientation: portrait)").matches;
+    state.isPortrait = isPortraitNow;
+    state.showHint = state.isMobile && state.isPortrait;
+    vlens.scheduleRedraw();
+  };
+
+  checkMobile();
+  checkOrientation();
+
+  // Listen for orientation changes
+  const orientationQuery = window.matchMedia("(orientation: portrait)");
+  const handleOrientationChange = () => {
+    checkOrientation();
+  };
+
+  if (orientationQuery.addEventListener) {
+    orientationQuery.addEventListener("change", handleOrientationChange);
+  } else {
+    // Fallback for older browsers
+    orientationQuery.addListener(handleOrientationChange);
+  }
+
+  // Listen for resize to detect mobile
+  const handleResize = () => {
+    checkMobile();
+    checkOrientation();
+  };
+  window.addEventListener("resize", handleResize);
+
+  return state;
+});
 
 // Module-level reference to stream state for cleanup during navigation
 // Updated by useStreamPlayer hook on each render
@@ -121,6 +180,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     hlsInstance: null,
     streamUrl: "",
     isStreamLive: false,
+    isPlaying: false,
     roomId: 0,
     eventSource: null,
     retryCount: 0,
@@ -267,6 +327,20 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   // if unmounting, we're done
   if (!el) return;
 
+  // Add play/pause event listeners to track playing state
+  const handlePlay = () => {
+    state.isPlaying = true;
+    vlens.scheduleRedraw();
+  };
+  const handlePause = () => {
+    state.isPlaying = false;
+    vlens.scheduleRedraw();
+  };
+  el.addEventListener("play", handlePlay);
+  el.addEventListener("pause", handlePause);
+  el.addEventListener("playing", handlePlay);
+  el.addEventListener("waiting", handlePause);
+
   // init exactly once for this element
   if (el.canPlayType("application/vnd.apple.mpegurl")) {
     // Safari native HLS
@@ -367,6 +441,7 @@ export function view(
   data: Data,
 ): preact.ComponentChild {
   const state = useStreamPlayer();
+  const orientation = useOrientation();
 
   // Check if we have valid room details
   const hasValidRoom = data && data.room;
@@ -502,16 +577,29 @@ export function view(
           </div>
         )}
 
+        {orientation.showHint && state.isStreamLive && (
+          <div className="orientation-hint">
+            <span className="hint-icon">📱</span>
+            <span className="hint-text">
+              Rotate your device to landscape for the best viewing experience
+            </span>
+          </div>
+        )}
+
         {state.isStreamLive ? (
           <div className="video-container">
             <video
               ref={state.onVideoRef}
-              controls
               autoPlay
               muted
               playsInline
               preload="auto"
               className="video-player"
+            />
+            <VideoControls
+              id={`video-controls-${data.room?.id || 0}`}
+              videoElement={state.videoElement}
+              isPlaying={state.isPlaying}
             />
           </div>
         ) : (
