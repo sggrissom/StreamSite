@@ -63,7 +63,6 @@ block(`
 // Table Container
 block(`
 .codes-table-container {
-  overflow-x: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -343,6 +342,10 @@ block(`
   .section-actions {
     width: 100%;
     justify-content: flex-end;
+  }
+
+  .codes-table-container {
+    overflow-x: auto;
   }
 
   .codes-table th,
