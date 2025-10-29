@@ -665,7 +665,7 @@ export function view(
   return (
     <div>
       <Header />
-      <main className="stream-container">
+      <main className={`stream-container`}>
         <div className="stream-context">
           <div className="context-header">
             <div className="context-info">
@@ -753,15 +753,6 @@ export function view(
           </div>
         )}
 
-        {orientation.showHint && state.isStreamLive && (
-          <div className="orientation-hint">
-            <span className="hint-icon">📱</span>
-            <span className="hint-text">
-              Rotate your device to landscape for the best viewing experience
-            </span>
-          </div>
-        )}
-
         {state.isStreamLive || state.isInOfflineGrace ? (
           <div className="video-container">
             <video
@@ -778,6 +769,7 @@ export function view(
               isPlaying={state.isPlaying}
               isBehindLive={state.isBehindLive}
               secondsBehindLive={state.secondsBehindLive}
+              viewerCount={state.viewerCount}
               onJumpToLive={state.jumpToLive}
             />
           </div>

@@ -119,6 +119,7 @@ var SessionsByCodeIndex = vbolt.Index(&cfg.Info, "sessions_by_code", vpack.Strin
 // Helper functions for analytics tracking
 
 func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, code string) {
+	var currentCount int
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		// Get room to find studioId
 		room := GetRoom(tx, roomId)
@@ -202,13 +203,14 @@ func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, code st
 		incrementStudioViewerCount(tx, room.StudioId, viewerId, isNewSession, isExpiredSession)
 
 		vbolt.TxCommit(tx)
+		currentCount = analytics.CurrentViewers
 	})
 
-	// Broadcast updated viewer count to all connected clients
-	sseManager.BroadcastViewerCount(roomId, analytics.CurrentViewers)
+	sseManager.BroadcastViewerCount(roomId, currentCount)
 }
 
 func DecrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, accessCode string) {
+	var currentCount int
 	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
 		room := GetRoom(tx, roomId)
 		if room.Id == 0 {
@@ -256,10 +258,11 @@ func DecrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, accessC
 		decrementStudioViewerCount(tx, room.StudioId)
 
 		vbolt.TxCommit(tx)
+		currentCount = analytics.CurrentViewers
 	})
 
 	// Broadcast updated viewer count to all connected clients
-	sseManager.BroadcastViewerCount(roomId, analytics.CurrentViewers)
+	sseManager.BroadcastViewerCount(roomId, currentCount)
 }
 
 func UpdateStudioAnalyticsFromRoom(tx *vbolt.Tx, studioId int) {

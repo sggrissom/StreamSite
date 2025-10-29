@@ -7,6 +7,7 @@ type VideoControlsProps = {
   isPlaying: boolean;
   isBehindLive: boolean;
   secondsBehindLive: number;
+  viewerCount: number;
   onJumpToLive: () => void;
 };
 
@@ -246,6 +247,12 @@ export function VideoControls(props: VideoControlsProps) {
 
         {/* Bottom controls bar */}
         <div className="control-bar">
+          {/* Viewer count badge */}
+          <div className="control-viewer-badge">
+            <span className="viewer-icon">👁</span>
+            <span className="viewer-text">{props.viewerCount}</span>
+          </div>
+
           {/* Live indicator / Go Live button */}
           {props.isBehindLive ? (
             <button
@@ -270,15 +277,6 @@ export function VideoControls(props: VideoControlsProps) {
 
           <div className="control-spacer"></div>
 
-          {/* Fullscreen button */}
-          <button
-            className="control-btn control-fullscreen"
-            onClick={state.onFullscreenClick}
-            aria-label={state.isFullscreen ? "Exit fullscreen" : "Fullscreen"}
-          >
-            {state.isFullscreen ? "⛶" : "⛶"}
-          </button>
-
           {/* Picture-in-Picture button (only show if supported) */}
           {state.isPiPSupported && (
             <button
@@ -293,6 +291,15 @@ export function VideoControls(props: VideoControlsProps) {
               ⧉
             </button>
           )}
+
+          {/* Fullscreen button */}
+          <button
+            className="control-btn control-fullscreen"
+            onClick={state.onFullscreenClick}
+            aria-label={state.isFullscreen ? "Exit fullscreen" : "Fullscreen"}
+          >
+            {state.isFullscreen ? "⛶" : "⛶"}
+          </button>
         </div>
       </div>
     </div>
