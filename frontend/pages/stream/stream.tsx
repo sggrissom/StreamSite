@@ -99,9 +99,11 @@ type StreamState = {
   liveEdgeCheckInterval: number | null;
   offlineGraceTimer: number | null;
   isInOfflineGrace: boolean;
+  viewerCount: number;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
+  setViewerCount: (count: number) => void;
   connectSSE: () => void;
   disconnectSSE: () => void;
   handleCodeRevoked: () => void;
@@ -201,6 +203,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     liveEdgeCheckInterval: null,
     offlineGraceTimer: null,
     isInOfflineGrace: false,
+    viewerCount: 0,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
     },
@@ -245,6 +248,10 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
       vlens.scheduleRedraw();
     },
+    setViewerCount: (count: number) => {
+      state.viewerCount = count;
+      vlens.scheduleRedraw();
+    },
     handleCodeRevoked: () => {
       state.showRevokedModal = true;
       cleanupPlayer(state);
@@ -276,6 +283,11 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
       state.eventSource.addEventListener("code_expired_grace", (e) => {
         state.handleCodeExpiredGrace();
+      });
+
+      state.eventSource.addEventListener("viewer_count", (e) => {
+        const data = JSON.parse(e.data);
+        state.setViewerCount(data.count);
       });
 
       state.eventSource.onerror = (err) => {
@@ -661,6 +673,9 @@ export function view(
               <h1 className="context-room">{data.room.name}</h1>
             </div>
             <div className="context-meta">
+              <span className="viewer-count">
+                👁 {state.viewerCount} watching
+              </span>
               <span className={`role-badge role-${data.myRole}`}>
                 {data.myRoleName}
               </span>

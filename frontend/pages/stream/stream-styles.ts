@@ -119,6 +119,18 @@ block(`
 `);
 
 block(`
+.viewer-count {
+  font-size: 0.875rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+  padding: 0.25rem 0.75rem;
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+}
+`);
+
+block(`
 .room-number {
   font-size: 0.875rem;
   font-weight: 500;

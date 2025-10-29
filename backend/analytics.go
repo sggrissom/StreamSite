@@ -203,6 +203,9 @@ func IncrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, code st
 
 		vbolt.TxCommit(tx)
 	})
+
+	// Broadcast updated viewer count to all connected clients
+	sseManager.BroadcastViewerCount(roomId, analytics.CurrentViewers)
 }
 
 func DecrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, accessCode string) {
@@ -254,6 +257,9 @@ func DecrementRoomViewerCount(db *vbolt.DB, roomId int, viewerId string, accessC
 
 		vbolt.TxCommit(tx)
 	})
+
+	// Broadcast updated viewer count to all connected clients
+	sseManager.BroadcastViewerCount(roomId, analytics.CurrentViewers)
 }
 
 func UpdateStudioAnalyticsFromRoom(tx *vbolt.Tx, studioId int) {
