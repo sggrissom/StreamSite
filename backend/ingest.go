@@ -6,15 +6,14 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"stream/backend/ingest"
 	"strings"
 
 	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 )
 
-// Global IngestManager instance
-var ingestManager *ingest.IngestManager
+// Global CameraManager instance
+var cameraManager *CameraManager
 
 // extractRoomIdFromIngestPath extracts room ID from paths like "/api/rooms/{id}/ingest/..."
 func extractRoomIdFromIngestPath(path string) (roomId int, err error) {
@@ -106,10 +105,10 @@ func StartIngestHandler(db *vbolt.DB) http.HandlerFunc {
 		}
 
 		// Build RTMP target URL
-		rtmpOut := fmt.Sprintf("rtmp://127.0.0.1/live/%s", room.StreamKey)
+		rtmpOut := fmt.Sprintf("rtmp://127.0.0.1:1935/live/%s", room.StreamKey)
 
-		// Start the ingest process
-		err = ingestManager.Start(context.Background(), roomId, cameraConfig.RTSPURL, rtmpOut)
+		// Start the camera ingest
+		err = cameraManager.Start(context.Background(), roomId, cameraConfig.RTSPURL, rtmpOut)
 		if err != nil {
 			if strings.Contains(err.Error(), "already running") {
 				http.Error(w, "Ingest already running for this room", http.StatusConflict)
@@ -195,8 +194,8 @@ func StopIngestHandler(db *vbolt.DB) http.HandlerFunc {
 			return
 		}
 
-		// Stop the ingest process
-		err = ingestManager.Stop(roomId)
+		// Stop the camera ingest
+		err = cameraManager.Stop(roomId)
 		if err != nil {
 			if strings.Contains(err.Error(), "no ingest running") {
 				http.Error(w, "No ingest running for this room", http.StatusNotFound)
@@ -280,7 +279,7 @@ func IngestStatusHandler(db *vbolt.DB) http.HandlerFunc {
 		}
 
 		// Get ingest status
-		running, startTime, rtspURL := ingestManager.GetStatus(roomId)
+		running, startTime, rtspURL := cameraManager.GetStatus(roomId)
 
 		// Check if camera is configured
 		var hasCamera bool
@@ -390,7 +389,7 @@ func StudioCameraStatusHandler(db *vbolt.DB) http.HandlerFunc {
 
 		for _, room := range rooms {
 			// Get ingest status
-			running, startTime, _ := ingestManager.GetStatus(room.Id)
+			running, startTime, _ := cameraManager.GetStatus(room.Id)
 
 			// Check if camera is configured
 			var hasCamera bool
@@ -423,8 +422,8 @@ func StudioCameraStatusHandler(db *vbolt.DB) http.HandlerFunc {
 
 // RegisterIngestMethods registers HTTP handlers for camera ingest control
 func RegisterIngestMethods(app *vbeam.Application) {
-	// Initialize global IngestManager
-	ingestManager = ingest.NewIngestManager()
+	// Initialize global CameraManager
+	cameraManager = NewCameraManager()
 
 	// Get database reference from app
 	db := app.DB
