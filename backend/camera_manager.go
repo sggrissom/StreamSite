@@ -120,8 +120,11 @@ func (m *CameraManager) Start(ctx context.Context, roomId int, rtspURL, rtmpOut 
 	// -flags low_delay: Reduce RTSP read latency
 	// -i: Input URL
 	// -c:v copy: Copy video codec without re-encoding (fast)
-	// -an: Disable audio (camera's malformed AAC headers cause transcoding to fail)
-	//      Note: Audio works in VLC but FFmpeg cannot successfully transcode it
+	// -c:a aac: Transcode audio to AAC
+	// -b:a 128k: Audio bitrate 128kbps
+	//      Note: Camera configured to use G.711/G.711A (PCMA/PCMU) instead of AAC
+	//            G.711 has simple RTP packetization with no complex headers
+	//            FFmpeg auto-detects G.711 and transcodes to AAC for RTMP output
 	// -f flv: Output format FLV (RTMP container)
 	cmd := exec.CommandContext(procCtx, m.ffmpegBin,
 		"-rtsp_transport", "tcp",
@@ -130,7 +133,8 @@ func (m *CameraManager) Start(ctx context.Context, roomId int, rtspURL, rtmpOut 
 		"-flags", "low_delay",
 		"-i", rtspURL,
 		"-c:v", "copy",
-		"-an",
+		"-c:a", "aac",
+		"-b:a", "128k",
 		"-f", "flv",
 		rtmpOut,
 	)
