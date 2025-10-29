@@ -1347,6 +1347,56 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 	return
 }
 
+// ResetAllRoomStreaming resets all Room.IsActive flags to false on server startup
+// This handles rooms that were streaming when the server was stopped/crashed
+func ResetAllRoomStreaming(db *vbolt.DB) {
+	LogInfo(LogCategorySystem, "ResetAllRoomStreaming called - starting room streaming state reset", nil)
+
+	resetCount := 0
+	totalRooms := 0
+	studiosUpdated := 0
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Iterate all rooms
+		vbolt.IterateAll(tx, RoomsBkt, func(roomId int, room Room) bool {
+			totalRooms++
+
+			LogInfo(LogCategorySystem, "Checking room", map[string]interface{}{
+				"roomId":   roomId,
+				"roomName": room.Name,
+				"isActive": room.IsActive,
+			})
+
+			if room.IsActive {
+				room.IsActive = false
+				vbolt.Write(tx, RoomsBkt, roomId, &room)
+				resetCount++
+
+				LogInfo(LogCategorySystem, "RESET room streaming state on startup", map[string]interface{}{
+					"roomId":   roomId,
+					"roomName": room.Name,
+					"studioId": room.StudioId,
+				})
+			}
+			return true // continue iteration
+		})
+
+		vbolt.IterateAll(tx, StudiosBkt, func(studioId int, studio Studio) bool {
+			UpdateStudioAnalyticsFromRoom(tx, studioId)
+			studiosUpdated++
+			return true // continue iteration
+		})
+
+		vbolt.TxCommit(tx)
+	})
+
+	LogInfo(LogCategorySystem, "Room streaming state reset completed", map[string]interface{}{
+		"totalRooms":     totalRooms,
+		"resetCount":     resetCount,
+		"studiosUpdated": studiosUpdated,
+	})
+}
+
 // RegisterStudioMethods registers studio-related API procedures
 func RegisterStudioMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateStudio)

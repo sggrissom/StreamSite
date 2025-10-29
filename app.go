@@ -39,6 +39,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 
 	// Reset viewer counts on startup (SSE connections don't persist across restarts)
 	backend.ResetAllCurrentViewers(db)
+	backend.ResetAllRoomStreaming(db)
 
 	// Start background jobs
 	backend.StartOldCodeCleanup(db)
