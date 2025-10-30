@@ -4,9 +4,18 @@ import { registerCleanupFunction } from "vlens/core";
 import * as server from "../../server";
 import { Header, Footer } from "../../layout";
 import { VideoControls } from "./VideoControls";
+import { EmotePicker } from "./EmotePicker";
 import "./stream-styles";
 
 type Data = server.GetRoomDetailsResponse;
+
+// Emote animation for floating effects
+type EmoteAnimation = {
+  id: string; // Unique ID for key
+  emote: string; // Emoji character
+  x: number; // Horizontal position (percentage)
+  timestamp: number; // When it was created
+};
 
 // Countdown timer for code expiration
 type CountdownState = {
@@ -101,11 +110,20 @@ type StreamState = {
   offlineGraceTimer: number | null;
   isInOfflineGrace: boolean;
   viewerCount: number;
+  activeEmotes: EmoteAnimation[];
+  emoteCounter: number; // Counter for unique emote IDs
+  controlsVisible: boolean;
+  controlsAutoHideTimer: number | null;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   onContainerRef: (el: HTMLDivElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
   setViewerCount: (count: number) => void;
+  addEmote: (emote: string) => void;
+  removeEmote: (id: string) => void;
+  sendEmote: (emote: string) => void;
+  showControls: () => void;
+  hideControls: () => void;
   connectSSE: () => void;
   disconnectSSE: () => void;
   handleCodeRevoked: () => void;
@@ -207,8 +225,27 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     offlineGraceTimer: null,
     isInOfflineGrace: false,
     viewerCount: 0,
+    activeEmotes: [],
+    emoteCounter: 0,
+    controlsVisible: true,
+    controlsAutoHideTimer: null,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
+
+      // Set up video click handler
+      if (el) {
+        const handleVideoClick = (e: MouseEvent) => {
+          // Only toggle if clicking directly on video, not controls
+          if ((e.target as HTMLElement).tagName === "VIDEO") {
+            if (state.controlsVisible) {
+              state.hideControls();
+            } else {
+              state.showControls();
+            }
+          }
+        };
+        el.addEventListener("click", handleVideoClick);
+      }
     },
     onContainerRef: (el: HTMLDivElement | null) => {
       state.containerElement = el;
@@ -258,6 +295,64 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       state.viewerCount = count;
       vlens.scheduleRedraw();
     },
+    addEmote: (emote: string) => {
+      // Generate unique ID
+      state.emoteCounter++;
+      const id = `emote-${state.emoteCounter}-${Date.now()}`;
+
+      // Random horizontal position (20% - 80%)
+      const x = 20 + Math.random() * 60;
+
+      // Create animation object
+      const animation: EmoteAnimation = {
+        id,
+        emote,
+        x,
+        timestamp: Date.now(),
+      };
+
+      // Add to active emotes (limit to 20 for performance)
+      state.activeEmotes = [...state.activeEmotes, animation].slice(-20);
+      vlens.scheduleRedraw();
+
+      // Auto-remove after 3 seconds (animation duration)
+      setTimeout(() => {
+        state.removeEmote(id);
+      }, 3000);
+    },
+    removeEmote: (id: string) => {
+      state.activeEmotes = state.activeEmotes.filter((e) => e.id !== id);
+      vlens.scheduleRedraw();
+    },
+    sendEmote: (emote: string) => {
+      // Call API to broadcast emote
+      server
+        .SendEmote({
+          roomId: state.roomId,
+          emote: emote,
+        })
+        .catch((err: any) => {
+          console.warn("Failed to send emote:", err);
+        });
+    },
+    showControls: () => {
+      state.controlsVisible = true;
+      vlens.scheduleRedraw();
+
+      // Clear existing timer
+      if (state.controlsAutoHideTimer !== null) {
+        clearTimeout(state.controlsAutoHideTimer);
+      }
+
+      // Auto-hide after 3 seconds
+      state.controlsAutoHideTimer = window.setTimeout(() => {
+        state.hideControls();
+      }, 3000);
+    },
+    hideControls: () => {
+      state.controlsVisible = false;
+      vlens.scheduleRedraw();
+    },
     handleCodeRevoked: () => {
       state.showRevokedModal = true;
       cleanupPlayer(state);
@@ -294,6 +389,11 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       state.eventSource.addEventListener("viewer_count", (e) => {
         const data = JSON.parse(e.data);
         state.setViewerCount(data.count);
+      });
+
+      state.eventSource.addEventListener("emote", (e) => {
+        const data = JSON.parse(e.data);
+        state.addEmote(data.emote);
       });
 
       state.eventSource.onerror = (err) => {
@@ -435,6 +535,12 @@ function cleanupPlayer(state: StreamState) {
     state.offlineGraceTimer = null;
   }
   state.isInOfflineGrace = false;
+
+  // Clear controls auto-hide timer if active
+  if (state.controlsAutoHideTimer !== null) {
+    clearTimeout(state.controlsAutoHideTimer);
+    state.controlsAutoHideTimer = null;
+  }
 
   if (state.hlsInstance?.destroy) {
     try {
@@ -769,6 +875,20 @@ export function view(
               preload="auto"
               className="video-player"
             />
+
+            {/* Floating emote overlay */}
+            <div className="emote-overlay">
+              {state.activeEmotes.map((emote) => (
+                <div
+                  key={emote.id}
+                  className="floating-emote"
+                  style={{ left: `${emote.x}%` }}
+                >
+                  {emote.emote}
+                </div>
+              ))}
+            </div>
+
             <VideoControls
               id={`video-controls-${data.room?.id || 0}`}
               videoElement={state.videoElement}
@@ -777,7 +897,18 @@ export function view(
               isBehindLive={state.isBehindLive}
               secondsBehindLive={state.secondsBehindLive}
               viewerCount={state.viewerCount}
+              visible={state.controlsVisible}
               onJumpToLive={state.jumpToLive}
+              onShowControls={state.showControls}
+              onHideControls={state.hideControls}
+            />
+
+            {/* Emote picker */}
+            <EmotePicker
+              id={`emote-picker-${data.room?.id || 0}`}
+              controlsVisible={state.controlsVisible}
+              onLocalEmote={state.addEmote}
+              onSendEmote={state.sendEmote}
             />
           </div>
         ) : (

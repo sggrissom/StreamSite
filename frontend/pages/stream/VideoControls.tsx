@@ -9,17 +9,18 @@ type VideoControlsProps = {
   isBehindLive: boolean;
   secondsBehindLive: number;
   viewerCount: number;
+  visible: boolean;
   onJumpToLive: () => void;
+  onShowControls: () => void;
+  onHideControls: () => void;
 };
 
 type ControlsState = {
-  visible: boolean;
   isPiPSupported: boolean;
   isPiPActive: boolean;
   isFullscreen: boolean;
   volume: number;
   isMuted: boolean;
-  autoHideTimer: number | null;
   videoClickHandler: ((e: MouseEvent) => void) | null;
   onControlsClick: (e: Event) => void;
   onPlayPauseClick: () => void;
@@ -27,8 +28,6 @@ type ControlsState = {
   onPiPClick: () => void;
   onMuteClick: () => void;
   onVolumeChange: (value: number) => void;
-  showControls: () => void;
-  hideControls: () => void;
   checkPiPSupport: () => void;
   checkFullscreenState: () => void;
   cleanup: () => void;
@@ -39,6 +38,8 @@ const useVideoControls = vlens.declareHook(
     id: string,
     videoElement: HTMLVideoElement | null,
     containerElement: HTMLDivElement | null,
+    onShowControls: () => void,
+    onHideControls: () => void,
   ): ControlsState => {
     // Load volume preferences from localStorage
     const loadVolumePrefs = () => {
@@ -60,13 +61,11 @@ const useVideoControls = vlens.declareHook(
     const volumePrefs = loadVolumePrefs();
 
     const state: ControlsState = {
-      visible: true,
       isPiPSupported: false,
       isPiPActive: false,
       isFullscreen: false,
       volume: volumePrefs.volume,
       isMuted: volumePrefs.isMuted,
-      autoHideTimer: null,
       videoClickHandler: null,
       onControlsClick: (e: Event) => {
         // Prevent click from bubbling to video element
@@ -79,7 +78,7 @@ const useVideoControls = vlens.declareHook(
         } else {
           videoElement.pause();
         }
-        state.showControls();
+        onShowControls();
       },
       onFullscreenClick: () => {
         const doc = document as any;
@@ -113,7 +112,7 @@ const useVideoControls = vlens.declareHook(
             }
           }
         }
-        state.showControls();
+        onShowControls();
       },
       onPiPClick: async () => {
         if (!videoElement) return;
@@ -138,7 +137,7 @@ const useVideoControls = vlens.declareHook(
         } catch (e) {
           console.warn("PiP failed:", e);
         }
-        state.showControls();
+        onShowControls();
       },
       onMuteClick: () => {
         if (!videoElement) return;
@@ -159,7 +158,7 @@ const useVideoControls = vlens.declareHook(
         }
 
         vlens.scheduleRedraw();
-        state.showControls();
+        onShowControls();
       },
       onVolumeChange: (value: number) => {
         if (!videoElement) return;
@@ -186,25 +185,7 @@ const useVideoControls = vlens.declareHook(
         }
 
         vlens.scheduleRedraw();
-        state.showControls();
-      },
-      showControls: () => {
-        state.visible = true;
-        vlens.scheduleRedraw();
-
-        // Clear existing timer
-        if (state.autoHideTimer !== null) {
-          clearTimeout(state.autoHideTimer);
-        }
-
-        // Auto-hide after 3 seconds
-        state.autoHideTimer = window.setTimeout(() => {
-          state.hideControls();
-        }, 3000);
-      },
-      hideControls: () => {
-        state.visible = false;
-        vlens.scheduleRedraw();
+        onShowControls();
       },
       checkPiPSupport: () => {
         const doc = document as any;
@@ -227,12 +208,6 @@ const useVideoControls = vlens.declareHook(
         }
       },
       cleanup: () => {
-        // Clear auto-hide timer
-        if (state.autoHideTimer !== null) {
-          clearTimeout(state.autoHideTimer);
-          state.autoHideTimer = null;
-        }
-
         // Remove video click listener
         if (videoElement && state.videoClickHandler) {
           videoElement.removeEventListener(
@@ -244,19 +219,8 @@ const useVideoControls = vlens.declareHook(
       },
     };
 
-    // Set up video click handler to toggle controls
-    const handleVideoClick = (e: MouseEvent) => {
-      // Only toggle if clicking directly on video, not controls
-      if ((e.target as HTMLElement).tagName === "VIDEO") {
-        if (state.visible) {
-          state.hideControls();
-        } else {
-          state.showControls();
-        }
-      }
-    };
-
-    state.videoClickHandler = handleVideoClick;
+    // Video click handler is set up in parent (stream.tsx)
+    // Parent manages visibility state and auto-hide timer
 
     // Check PiP support when video element changes
     if (videoElement) {
@@ -265,9 +229,6 @@ const useVideoControls = vlens.declareHook(
       // Apply volume settings from state
       videoElement.volume = state.volume / 100;
       videoElement.muted = state.isMuted;
-
-      // Attach click handler to video element
-      videoElement.addEventListener("click", state.videoClickHandler as any);
 
       // Listen for PiP events
       const handleEnterPiP = () => {
@@ -314,13 +275,15 @@ export function VideoControls(props: VideoControlsProps) {
     props.id,
     props.videoElement,
     props.containerElement,
+    props.onShowControls,
+    props.onHideControls,
   );
 
   if (!props.videoElement) return null;
 
   return (
     <div
-      className={`video-controls-container ${state.visible ? "visible" : "hidden"}`}
+      className={`video-controls-container ${props.visible ? "visible" : "hidden"}`}
     >
       <div
         className="video-controls-overlay"

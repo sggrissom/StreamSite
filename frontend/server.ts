@@ -378,6 +378,14 @@ export interface RecalculateViewerCountsResponse {
     message: string
 }
 
+export interface SendEmoteRequest {
+    roomId: number
+    emote: string
+}
+
+export interface SendEmoteResponse {
+}
+
 export interface SRSAuthCallback {
     server_id: string
     action: string
@@ -690,6 +698,10 @@ export async function GetStudioAnalytics(data: GetStudioAnalyticsRequest): Promi
 
 export async function RecalculateViewerCounts(data: RecalculateViewerCountsRequest): Promise<rpc.Response<RecalculateViewerCountsResponse>> {
     return await rpc.call<RecalculateViewerCountsResponse>('RecalculateViewerCounts', JSON.stringify(data));
+}
+
+export async function SendEmote(data: SendEmoteRequest): Promise<rpc.Response<SendEmoteResponse>> {
+    return await rpc.call<SendEmoteResponse>('SendEmote', JSON.stringify(data));
 }
 
 export async function ValidateStreamKey(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {

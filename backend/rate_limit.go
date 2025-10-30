@@ -229,6 +229,12 @@ func (rl *RateLimiter) CheckCodeGeneration(userID int) error {
 	return rl.CheckLimit("code_generation", fmt.Sprintf("%d", userID), 10, 1*time.Hour)
 }
 
+// CheckEmoteSend checks rate limit for sending emote reactions
+// Limit: 1 emote per 2 seconds per identifier (user/session/IP)
+func (rl *RateLimiter) CheckEmoteSend(identifier string) error {
+	return rl.CheckLimit("emote_send", identifier, 1, 2*time.Second)
+}
+
 // cleanupLoop runs periodically to remove expired entries and free memory
 func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)

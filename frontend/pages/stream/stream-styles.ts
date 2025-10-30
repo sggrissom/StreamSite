@@ -749,3 +749,210 @@ block(`
   }
 }
 `);
+
+// Emote picker styles
+block(`
+.emote-picker {
+  position: absolute;
+  bottom: 80px;
+  right: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 12px;
+  z-index: 15;
+  pointer-events: auto;
+  backdrop-filter: blur(4px);
+  transition: opacity 0.3s ease;
+}
+`);
+
+block(`
+.emote-picker.hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+`);
+
+block(`
+.emote-picker.visible {
+  opacity: 1;
+}
+`);
+
+block(`
+.emote-buttons {
+  display: flex;
+  gap: 0.5rem;
+}
+`);
+
+block(`
+.emote-cooldown-bar {
+  width: 100%;
+  height: 3px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 2px;
+  overflow: hidden;
+  margin-bottom: 0.25rem;
+}
+`);
+
+block(`
+.emote-cooldown-progress {
+  height: 100%;
+  background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
+  transition: width 0.1s linear;
+}
+`);
+
+block(`
+.emote-queue-indicator {
+  position: absolute;
+  top: -28px;
+  right: 0;
+  background: rgba(102, 126, 234, 0.9);
+  color: white;
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 0.25rem 0.5rem;
+  border-radius: 6px;
+  white-space: nowrap;
+  pointer-events: none;
+}
+`);
+
+block(`
+.emote-btn {
+  width: 44px;
+  height: 44px;
+  font-size: 1.5rem;
+  background: rgba(255, 255, 255, 0.1);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+`);
+
+block(`
+.emote-btn:hover {
+  background: rgba(255, 255, 255, 0.2);
+  border-color: rgba(255, 255, 255, 0.5);
+  transform: scale(1.1);
+}
+`);
+
+block(`
+.emote-btn:active {
+  transform: scale(0.95);
+}
+`);
+
+block(`
+.emote-btn-cooldown {
+  opacity: 0.6;
+}
+`);
+
+block(`
+.emote-btn-cooldown:hover {
+  opacity: 0.7;
+}
+`);
+
+block(`
+.emote-btn-clicked {
+  animation: emote-click 0.3s ease;
+}
+`);
+
+block(`
+@keyframes emote-click {
+  0% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+`);
+
+// Floating emote overlay
+block(`
+.emote-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  pointer-events: none;
+  z-index: 5;
+  overflow: hidden;
+}
+`);
+
+block(`
+.floating-emote {
+  position: absolute;
+  bottom: 0;
+  font-size: 2.5rem;
+  animation: float-up 3s ease-out forwards;
+  pointer-events: none;
+  user-select: none;
+}
+`);
+
+block(`
+@keyframes float-up {
+  0% {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-400px);
+    opacity: 0;
+  }
+}
+`);
+
+// Mobile responsive styles for emotes
+block(`
+@media (max-width: 768px) {
+  .emote-picker {
+    bottom: 60px;
+    right: 0.5rem;
+    padding: 0.5rem;
+  }
+
+  .emote-buttons {
+    gap: 0.375rem;
+  }
+
+  .emote-btn {
+    width: 36px;
+    height: 36px;
+    font-size: 1.25rem;
+  }
+
+  .floating-emote {
+    font-size: 2rem;
+  }
+
+  .emote-queue-indicator {
+    font-size: 0.6875rem;
+    padding: 0.2rem 0.4rem;
+    top: -24px;
+  }
+}
+`);

@@ -298,6 +298,44 @@ func (m *SSEManager) BroadcastViewerCount(roomID int, count int) {
 	}
 }
 
+// BroadcastEmote sends an emote reaction to all clients watching a room
+func (m *SSEManager) BroadcastEmote(roomID int, emote string) {
+	m.mu.RLock()
+	clients := m.clients[roomID]
+	m.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return // No one watching
+	}
+
+	event := map[string]interface{}{
+		"emote":     emote,
+		"timestamp": time.Now().Unix(),
+	}
+
+	data, _ := json.Marshal(event)
+	message := fmt.Sprintf("event: emote\ndata: %s\n\n", data)
+
+	LogDebug(LogCategorySystem, "Broadcasting emote", map[string]interface{}{
+		"roomId":  roomID,
+		"emote":   emote,
+		"clients": len(clients),
+	})
+
+	// Send to all connected clients
+	for _, client := range clients {
+		select {
+		case <-client.Done:
+			// Client already disconnected
+			continue
+		default:
+			if _, err := fmt.Fprint(client.Writer, message); err == nil {
+				flushSSE(client.Writer)
+			}
+		}
+	}
+}
+
 // MakeStreamRoomEventsHandler creates an HTTP handler for SSE connections
 // Note: This is a special handler that doesn't follow the normal vbeam RPC pattern
 // because SSE requires keeping the connection open
