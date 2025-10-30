@@ -1,13 +1,9 @@
 import * as preact from "preact";
 import * as vlens from "vlens";
 
-// Detect iOS/Mobile Safari
-function isMobileSafari(): boolean {
-  const ua = navigator.userAgent;
-  const iOS = /iPad|iPhone|iPod/.test(ua);
-  const webkit = /WebKit/.test(ua);
-  const notChrome = !/CriOS|Chrome/.test(ua);
-  return iOS && webkit && notChrome;
+// Detect iOS devices (all browsers on iOS use WebKit)
+function isIOS(): boolean {
+  return /iPhone|iPad|iPod/.test(navigator.userAgent);
 }
 
 type VideoControlsProps = {
@@ -28,16 +24,23 @@ type ControlsState = {
   isPiPSupported: boolean;
   isPiPActive: boolean;
   isFullscreen: boolean;
-  isMobileSafari: boolean;
+  isIOS: boolean;
+  canUseNativeFullscreen: boolean;
+  originalScrollY: number;
+  wakeLock: any | null;
   volume: number;
   isMuted: boolean;
   videoClickHandler: ((e: MouseEvent) => void) | null;
+  fullscreenChangeHandler: (() => void) | null;
+  keydownHandler: ((e: KeyboardEvent) => void) | null;
   onControlsClick: (e: Event) => void;
   onPlayPauseClick: () => void;
   onFullscreenClick: () => void;
   onPiPClick: () => void;
   onMuteClick: () => void;
   onVolumeChange: (value: number) => void;
+  enableWakeLock: () => Promise<void>;
+  disableWakeLock: () => void;
   checkPiPSupport: () => void;
   checkFullscreenState: () => void;
   cleanup: () => void;
@@ -70,14 +73,25 @@ const useVideoControls = vlens.declareHook(
 
     const volumePrefs = loadVolumePrefs();
 
+    const iosDevice = isIOS();
+    const doc = document as any;
+    const canFullscreen = !!(
+      doc.fullscreenEnabled || doc.webkitFullscreenEnabled
+    );
+
     const state: ControlsState = {
       isPiPSupported: false,
       isPiPActive: false,
       isFullscreen: false,
-      isMobileSafari: isMobileSafari(),
+      isIOS: iosDevice,
+      canUseNativeFullscreen: canFullscreen && !iosDevice,
+      originalScrollY: 0,
+      wakeLock: null,
       volume: volumePrefs.volume,
       isMuted: volumePrefs.isMuted,
       videoClickHandler: null,
+      fullscreenChangeHandler: null,
+      keydownHandler: null,
       onControlsClick: (e: Event) => {
         // Prevent click from bubbling to video element
         e.stopPropagation();
@@ -92,29 +106,45 @@ const useVideoControls = vlens.declareHook(
         onShowControls();
       },
       onFullscreenClick: () => {
-        // Mobile Safari: Use CSS-based fullscreen
-        if (state.isMobileSafari) {
-          if (!containerElement) return;
+        if (!containerElement) return;
 
+        // iOS: Use CSS theater mode
+        if (state.isIOS) {
           if (state.isFullscreen) {
-            // Exit CSS fullscreen
+            // Exit theater mode
             containerElement.classList.remove("video-container-fullscreen-ios");
             state.isFullscreen = false;
-            // Re-enable page scrolling
-            document.body.style.overflow = "";
+
+            // Restore scroll position without jump
+            const scrollY = state.originalScrollY;
+            document.body.style.position = "";
+            document.body.style.top = "";
+            window.scrollTo(0, scrollY);
+
+            // Disable wake lock
+            state.disableWakeLock();
           } else {
-            // Enter CSS fullscreen
+            // Enter theater mode
+            // Store current scroll position
+            state.originalScrollY = window.scrollY;
+
+            // Lock scroll without jump
+            document.body.style.position = "fixed";
+            document.body.style.top = `-${state.originalScrollY}px`;
+            document.body.style.width = "100%";
+
             containerElement.classList.add("video-container-fullscreen-ios");
             state.isFullscreen = true;
-            // Prevent page scrolling when in fullscreen
-            document.body.style.overflow = "hidden";
+
+            // Enable wake lock
+            state.enableWakeLock();
           }
           vlens.scheduleRedraw();
           onShowControls();
           return;
         }
 
-        // Desktop/non-Safari: Use standard Fullscreen API
+        // Desktop: Use native Fullscreen API
         const doc = document as any;
 
         if (state.isFullscreen) {
@@ -126,24 +156,11 @@ const useVideoControls = vlens.declareHook(
           }
         } else {
           // Enter fullscreen on container (includes video + controls)
-          if (containerElement) {
-            const elem = containerElement as any;
-            if (elem.requestFullscreen) {
-              elem.requestFullscreen();
-            } else if (elem.webkitRequestFullscreen) {
-              elem.webkitRequestFullscreen();
-            }
-          } else if (videoElement) {
-            // Fallback to video-only fullscreen if container not available
-            const elem = videoElement as any;
-            if (elem.requestFullscreen) {
-              elem.requestFullscreen();
-            } else if (elem.webkitRequestFullscreen) {
-              elem.webkitRequestFullscreen();
-            } else if (elem.webkitEnterFullscreen) {
-              // iOS Safari native player (last resort)
-              elem.webkitEnterFullscreen();
-            }
+          const elem = containerElement as any;
+          if (elem.requestFullscreen) {
+            elem.requestFullscreen();
+          } else if (elem.webkitRequestFullscreen) {
+            elem.webkitRequestFullscreen();
           }
         }
         onShowControls();
@@ -221,6 +238,24 @@ const useVideoControls = vlens.declareHook(
         vlens.scheduleRedraw();
         onShowControls();
       },
+      enableWakeLock: async () => {
+        if (!("wakeLock" in navigator)) return;
+        try {
+          const nav = navigator as any;
+          state.wakeLock = await nav.wakeLock.request("screen");
+        } catch (e) {
+          console.warn("Wake lock request failed:", e);
+        }
+      },
+      disableWakeLock: () => {
+        if (!state.wakeLock) return;
+        try {
+          state.wakeLock.release();
+          state.wakeLock = null;
+        } catch (e) {
+          console.warn("Wake lock release failed:", e);
+        }
+      },
       checkPiPSupport: () => {
         const doc = document as any;
         const elem = videoElement as any;
@@ -242,10 +277,36 @@ const useVideoControls = vlens.declareHook(
         }
       },
       cleanup: () => {
-        // Clean up CSS fullscreen if active
-        if (state.isMobileSafari && state.isFullscreen && containerElement) {
+        // Clean up iOS theater mode if active
+        if (state.isIOS && state.isFullscreen && containerElement) {
           containerElement.classList.remove("video-container-fullscreen-ios");
-          document.body.style.overflow = "";
+          const scrollY = state.originalScrollY;
+          document.body.style.position = "";
+          document.body.style.top = "";
+          document.body.style.width = "";
+          window.scrollTo(0, scrollY);
+        }
+
+        // Release wake lock
+        state.disableWakeLock();
+
+        // Remove fullscreen change listeners
+        if (state.fullscreenChangeHandler) {
+          document.removeEventListener(
+            "fullscreenchange",
+            state.fullscreenChangeHandler,
+          );
+          document.removeEventListener(
+            "webkitfullscreenchange",
+            state.fullscreenChangeHandler,
+          );
+          state.fullscreenChangeHandler = null;
+        }
+
+        // Remove keydown listener
+        if (state.keydownHandler) {
+          document.removeEventListener("keydown", state.keydownHandler);
+          state.keydownHandler = null;
         }
 
         // Remove video click listener
@@ -295,28 +356,41 @@ const useVideoControls = vlens.declareHook(
         handleWebkitPresentationModeChanged,
       );
 
-      // Listen for fullscreen changes
-      const handleFullscreenChange = () => {
-        state.checkFullscreenState();
-      };
-      document.addEventListener("fullscreenchange", handleFullscreenChange);
-      document.addEventListener(
-        "webkitfullscreenchange",
-        handleFullscreenChange,
-      );
+      // Listen for fullscreen changes (only for desktop fullscreen API)
+      if (!state.isIOS) {
+        state.fullscreenChangeHandler = () => {
+          state.checkFullscreenState();
+        };
+        document.addEventListener(
+          "fullscreenchange",
+          state.fullscreenChangeHandler,
+        );
+        document.addEventListener(
+          "webkitfullscreenchange",
+          state.fullscreenChangeHandler,
+        );
+      }
 
-      // Handle escape key for CSS fullscreen on mobile Safari
-      const handleKeyDown = (e: KeyboardEvent) => {
-        if (state.isMobileSafari && state.isFullscreen && e.key === "Escape") {
-          if (containerElement) {
-            containerElement.classList.remove("video-container-fullscreen-ios");
-            state.isFullscreen = false;
-            document.body.style.overflow = "";
-            vlens.scheduleRedraw();
+      // Handle escape key for CSS fullscreen on iOS (for iPad with keyboard)
+      if (state.isIOS) {
+        state.keydownHandler = (e: KeyboardEvent) => {
+          if (state.isFullscreen && e.key === "Escape") {
+            if (containerElement) {
+              containerElement.classList.remove(
+                "video-container-fullscreen-ios",
+              );
+              state.isFullscreen = false;
+              const scrollY = state.originalScrollY;
+              document.body.style.position = "";
+              document.body.style.top = "";
+              window.scrollTo(0, scrollY);
+              state.disableWakeLock();
+              vlens.scheduleRedraw();
+            }
           }
-        }
-      };
-      document.addEventListener("keydown", handleKeyDown);
+        };
+        document.addEventListener("keydown", state.keydownHandler);
+      }
     }
 
     return state;
@@ -342,6 +416,17 @@ export function VideoControls(props: VideoControlsProps) {
         className="video-controls-overlay"
         onClick={(e) => state.onControlsClick(e)}
       >
+        {/* iOS Theater Mode Exit Button */}
+        {state.isIOS && state.isFullscreen && (
+          <button
+            className="ios-theater-exit-btn"
+            onClick={state.onFullscreenClick}
+            aria-label="Exit theater mode"
+          >
+            ✕
+          </button>
+        )}
+
         {/* Center play/pause button */}
         <div className="control-center">
           <button
