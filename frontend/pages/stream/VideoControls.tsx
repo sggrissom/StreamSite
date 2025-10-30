@@ -1,6 +1,15 @@
 import * as preact from "preact";
 import * as vlens from "vlens";
 
+// Detect iOS/Mobile Safari
+function isMobileSafari(): boolean {
+  const ua = navigator.userAgent;
+  const iOS = /iPad|iPhone|iPod/.test(ua);
+  const webkit = /WebKit/.test(ua);
+  const notChrome = !/CriOS|Chrome/.test(ua);
+  return iOS && webkit && notChrome;
+}
+
 type VideoControlsProps = {
   id: string;
   videoElement: HTMLVideoElement | null;
@@ -19,6 +28,7 @@ type ControlsState = {
   isPiPSupported: boolean;
   isPiPActive: boolean;
   isFullscreen: boolean;
+  isMobileSafari: boolean;
   volume: number;
   isMuted: boolean;
   videoClickHandler: ((e: MouseEvent) => void) | null;
@@ -64,6 +74,7 @@ const useVideoControls = vlens.declareHook(
       isPiPSupported: false,
       isPiPActive: false,
       isFullscreen: false,
+      isMobileSafari: isMobileSafari(),
       volume: volumePrefs.volume,
       isMuted: volumePrefs.isMuted,
       videoClickHandler: null,
@@ -81,6 +92,29 @@ const useVideoControls = vlens.declareHook(
         onShowControls();
       },
       onFullscreenClick: () => {
+        // Mobile Safari: Use CSS-based fullscreen
+        if (state.isMobileSafari) {
+          if (!containerElement) return;
+
+          if (state.isFullscreen) {
+            // Exit CSS fullscreen
+            containerElement.classList.remove("video-container-fullscreen-ios");
+            state.isFullscreen = false;
+            // Re-enable page scrolling
+            document.body.style.overflow = "";
+          } else {
+            // Enter CSS fullscreen
+            containerElement.classList.add("video-container-fullscreen-ios");
+            state.isFullscreen = true;
+            // Prevent page scrolling when in fullscreen
+            document.body.style.overflow = "hidden";
+          }
+          vlens.scheduleRedraw();
+          onShowControls();
+          return;
+        }
+
+        // Desktop/non-Safari: Use standard Fullscreen API
         const doc = document as any;
 
         if (state.isFullscreen) {
@@ -107,7 +141,7 @@ const useVideoControls = vlens.declareHook(
             } else if (elem.webkitRequestFullscreen) {
               elem.webkitRequestFullscreen();
             } else if (elem.webkitEnterFullscreen) {
-              // iOS Safari
+              // iOS Safari native player (last resort)
               elem.webkitEnterFullscreen();
             }
           }
@@ -208,6 +242,12 @@ const useVideoControls = vlens.declareHook(
         }
       },
       cleanup: () => {
+        // Clean up CSS fullscreen if active
+        if (state.isMobileSafari && state.isFullscreen && containerElement) {
+          containerElement.classList.remove("video-container-fullscreen-ios");
+          document.body.style.overflow = "";
+        }
+
         // Remove video click listener
         if (videoElement && state.videoClickHandler) {
           videoElement.removeEventListener(
@@ -264,6 +304,19 @@ const useVideoControls = vlens.declareHook(
         "webkitfullscreenchange",
         handleFullscreenChange,
       );
+
+      // Handle escape key for CSS fullscreen on mobile Safari
+      const handleKeyDown = (e: KeyboardEvent) => {
+        if (state.isMobileSafari && state.isFullscreen && e.key === "Escape") {
+          if (containerElement) {
+            containerElement.classList.remove("video-container-fullscreen-ios");
+            state.isFullscreen = false;
+            document.body.style.overflow = "";
+            vlens.scheduleRedraw();
+          }
+        }
+      };
+      document.addEventListener("keydown", handleKeyDown);
     }
 
     return state;
