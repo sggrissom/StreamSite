@@ -84,6 +84,7 @@ const useCountdown = vlens.declareHook((expiresAt: string): CountdownState => {
 
 type StreamState = {
   videoElement: HTMLVideoElement | null;
+  containerElement: HTMLDivElement | null;
   hlsInstance: any;
   streamUrl: string;
   isStreamLive: boolean;
@@ -101,6 +102,7 @@ type StreamState = {
   isInOfflineGrace: boolean;
   viewerCount: number;
   onVideoRef: (el: HTMLVideoElement | null) => void;
+  onContainerRef: (el: HTMLDivElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
   setViewerCount: (count: number) => void;
@@ -188,6 +190,7 @@ registerCleanupFunction(() => {
 const useStreamPlayer = vlens.declareHook((): StreamState => {
   const state: StreamState = {
     videoElement: null,
+    containerElement: null,
     hlsInstance: null,
     streamUrl: "",
     isStreamLive: false,
@@ -206,6 +209,9 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     viewerCount: 0,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
+    },
+    onContainerRef: (el: HTMLDivElement | null) => {
+      state.containerElement = el;
     },
     setStreamUrl: (url: string) => {
       if (state.streamUrl !== url) {
@@ -754,7 +760,7 @@ export function view(
         )}
 
         {state.isStreamLive || state.isInOfflineGrace ? (
-          <div className="video-container">
+          <div className="video-container" ref={state.onContainerRef}>
             <video
               ref={state.onVideoRef}
               autoPlay
@@ -766,6 +772,7 @@ export function view(
             <VideoControls
               id={`video-controls-${data.room?.id || 0}`}
               videoElement={state.videoElement}
+              containerElement={state.containerElement}
               isPlaying={state.isPlaying}
               isBehindLive={state.isBehindLive}
               secondsBehindLive={state.secondsBehindLive}

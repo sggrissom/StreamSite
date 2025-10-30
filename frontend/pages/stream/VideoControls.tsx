@@ -4,6 +4,7 @@ import * as vlens from "vlens";
 type VideoControlsProps = {
   id: string;
   videoElement: HTMLVideoElement | null;
+  containerElement: HTMLDivElement | null;
   isPlaying: boolean;
   isBehindLive: boolean;
   secondsBehindLive: number;
@@ -16,12 +17,16 @@ type ControlsState = {
   isPiPSupported: boolean;
   isPiPActive: boolean;
   isFullscreen: boolean;
+  volume: number;
+  isMuted: boolean;
   autoHideTimer: number | null;
   videoClickHandler: ((e: MouseEvent) => void) | null;
   onControlsClick: (e: Event) => void;
   onPlayPauseClick: () => void;
   onFullscreenClick: () => void;
   onPiPClick: () => void;
+  onMuteClick: () => void;
+  onVolumeChange: (value: number) => void;
   showControls: () => void;
   hideControls: () => void;
   checkPiPSupport: () => void;
@@ -30,12 +35,37 @@ type ControlsState = {
 };
 
 const useVideoControls = vlens.declareHook(
-  (id: string, videoElement: HTMLVideoElement | null): ControlsState => {
+  (
+    id: string,
+    videoElement: HTMLVideoElement | null,
+    containerElement: HTMLDivElement | null,
+  ): ControlsState => {
+    // Load volume preferences from localStorage
+    const loadVolumePrefs = () => {
+      try {
+        const saved = localStorage.getItem("streamsite_volume");
+        if (saved) {
+          const prefs = JSON.parse(saved);
+          return {
+            volume: prefs.volume || 100,
+            isMuted: prefs.isMuted || false,
+          };
+        }
+      } catch (e) {
+        console.warn("Failed to load volume preferences:", e);
+      }
+      return { volume: 100, isMuted: false };
+    };
+
+    const volumePrefs = loadVolumePrefs();
+
     const state: ControlsState = {
       visible: true,
       isPiPSupported: false,
       isPiPActive: false,
       isFullscreen: false,
+      volume: volumePrefs.volume,
+      isMuted: volumePrefs.isMuted,
       autoHideTimer: null,
       videoClickHandler: null,
       onControlsClick: (e: Event) => {
@@ -52,10 +82,7 @@ const useVideoControls = vlens.declareHook(
         state.showControls();
       },
       onFullscreenClick: () => {
-        if (!videoElement) return;
-
         const doc = document as any;
-        const elem = videoElement as any;
 
         if (state.isFullscreen) {
           // Exit fullscreen
@@ -63,18 +90,27 @@ const useVideoControls = vlens.declareHook(
             doc.exitFullscreen();
           } else if (doc.webkitExitFullscreen) {
             doc.webkitExitFullscreen();
-          } else if (elem.webkitExitFullscreen) {
-            elem.webkitExitFullscreen();
           }
         } else {
-          // Enter fullscreen
-          if (elem.requestFullscreen) {
-            elem.requestFullscreen();
-          } else if (elem.webkitRequestFullscreen) {
-            elem.webkitRequestFullscreen();
-          } else if (elem.webkitEnterFullscreen) {
-            // iOS Safari
-            elem.webkitEnterFullscreen();
+          // Enter fullscreen on container (includes video + controls)
+          if (containerElement) {
+            const elem = containerElement as any;
+            if (elem.requestFullscreen) {
+              elem.requestFullscreen();
+            } else if (elem.webkitRequestFullscreen) {
+              elem.webkitRequestFullscreen();
+            }
+          } else if (videoElement) {
+            // Fallback to video-only fullscreen if container not available
+            const elem = videoElement as any;
+            if (elem.requestFullscreen) {
+              elem.requestFullscreen();
+            } else if (elem.webkitRequestFullscreen) {
+              elem.webkitRequestFullscreen();
+            } else if (elem.webkitEnterFullscreen) {
+              // iOS Safari
+              elem.webkitEnterFullscreen();
+            }
           }
         }
         state.showControls();
@@ -102,6 +138,54 @@ const useVideoControls = vlens.declareHook(
         } catch (e) {
           console.warn("PiP failed:", e);
         }
+        state.showControls();
+      },
+      onMuteClick: () => {
+        if (!videoElement) return;
+        state.isMuted = !state.isMuted;
+        videoElement.muted = state.isMuted;
+
+        // Save to localStorage
+        try {
+          localStorage.setItem(
+            "streamsite_volume",
+            JSON.stringify({
+              volume: state.volume,
+              isMuted: state.isMuted,
+            }),
+          );
+        } catch (e) {
+          console.warn("Failed to save volume preferences:", e);
+        }
+
+        vlens.scheduleRedraw();
+        state.showControls();
+      },
+      onVolumeChange: (value: number) => {
+        if (!videoElement) return;
+        state.volume = value;
+        videoElement.volume = value / 100; // Convert 0-100 to 0.0-1.0
+
+        // Unmute if user adjusts volume
+        if (state.isMuted && value > 0) {
+          state.isMuted = false;
+          videoElement.muted = false;
+        }
+
+        // Save to localStorage
+        try {
+          localStorage.setItem(
+            "streamsite_volume",
+            JSON.stringify({
+              volume: state.volume,
+              isMuted: state.isMuted,
+            }),
+          );
+        } catch (e) {
+          console.warn("Failed to save volume preferences:", e);
+        }
+
+        vlens.scheduleRedraw();
         state.showControls();
       },
       showControls: () => {
@@ -178,6 +262,10 @@ const useVideoControls = vlens.declareHook(
     if (videoElement) {
       state.checkPiPSupport();
 
+      // Apply volume settings from state
+      videoElement.volume = state.volume / 100;
+      videoElement.muted = state.isMuted;
+
       // Attach click handler to video element
       videoElement.addEventListener("click", state.videoClickHandler as any);
 
@@ -222,7 +310,11 @@ const useVideoControls = vlens.declareHook(
 );
 
 export function VideoControls(props: VideoControlsProps) {
-  const state = useVideoControls(props.id, props.videoElement);
+  const state = useVideoControls(
+    props.id,
+    props.videoElement,
+    props.containerElement,
+  );
 
   if (!props.videoElement) return null;
 
@@ -276,6 +368,28 @@ export function VideoControls(props: VideoControlsProps) {
           )}
 
           <div className="control-spacer"></div>
+
+          {/* Mute/unmute button */}
+          <button
+            className="control-btn control-mute"
+            onClick={state.onMuteClick}
+            aria-label={state.isMuted ? "Unmute" : "Mute"}
+          >
+            {state.isMuted ? "🔇" : "🔊"}
+          </button>
+
+          {/* Volume slider */}
+          <input
+            type="range"
+            className="volume-slider"
+            min="0"
+            max="100"
+            value={state.volume}
+            onInput={(e) =>
+              state.onVolumeChange(parseInt(e.currentTarget.value))
+            }
+            aria-label="Volume"
+          />
 
           {/* Picture-in-Picture button (only show if supported) */}
           {state.isPiPSupported && (
