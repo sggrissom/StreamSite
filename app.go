@@ -41,6 +41,12 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.ResetAllCurrentViewers(db)
 	backend.ResetAllRoomStreaming(db)
 
+	// Initialize transcoder for ABR HLS
+	backend.InitTranscoder(backend.TranscoderConfig{
+		HLSBaseDir:  cfg.HLSBaseDir,
+		SRSRTMPBase: cfg.SRSRTMPBase,
+	})
+
 	// Start background jobs
 	backend.StartOldCodeCleanup(db)
 	backend.StartExpiredCodeHandler(db)
@@ -61,6 +67,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.RegisterAdminMethods(app)
 	backend.RegisterEmoteMethods(app)
 	backend.RegisterRoomStreamProxy(app)
+	backend.RegisterHLSFileServer(app)
 
 	// SRS HTTP callbacks (no auth required - SRS makes these calls)
 	vbeam.RegisterProc(app, backend.ValidateStreamKey)

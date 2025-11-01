@@ -7,12 +7,66 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strconv"
+	"stream/cfg"
 	"strings"
 
 	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 )
+
+// authenticateRoomRequest checks if the user is authenticated and has access to the room.
+// Returns the auth context and room ID, or writes an error response and returns false.
+func authenticateRoomRequest(w http.ResponseWriter, r *http.Request, db *vbolt.DB, roomId int, logContext string) (*AuthContext, bool) {
+	// Check authentication
+	authCtx, authErr := GetAuthFromRequest(r, db)
+	if authErr != nil {
+		LogWarnWithRequest(r, LogCategoryAuth, "Unauthorized "+logContext+" access attempt", map[string]interface{}{
+			"roomId": roomId,
+			"path":   r.URL.Path,
+		})
+		http.Error(w, "Authentication required", http.StatusForbidden)
+		return nil, false
+	}
+
+	// Verify user has access to this room
+	var anonymousSessionToken string
+	if authCtx.User.Id == -1 && authCtx.CodeSession != nil {
+		anonymousSessionToken = authCtx.CodeSession.Token
+	}
+
+	var hasAccess bool
+	vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+		access := CheckRoomAccess(tx, authCtx.User, roomId, anonymousSessionToken)
+		hasAccess = access.Allowed
+	})
+
+	if !hasAccess {
+		LogWarnWithRequest(r, LogCategoryAuth, "Access denied to "+logContext, map[string]interface{}{
+			"roomId": roomId,
+			"userId": authCtx.User.Id,
+		})
+		http.Error(w, "Access denied to this room", http.StatusForbidden)
+		return nil, false
+	}
+
+	// Log successful access
+	logData := map[string]interface{}{
+		"roomId": roomId,
+		"userId": authCtx.User.Id,
+	}
+	if authCtx.IsCodeAuth && authCtx.AccessCode != nil {
+		logData["code"] = authCtx.AccessCode.Code
+		LogInfo(LogCategoryAuth, "Code session accessing "+logContext, logData)
+	} else {
+		logData["email"] = authCtx.User.Email
+		LogInfo(LogCategoryAuth, "User accessing "+logContext, logData)
+	}
+
+	return &authCtx, true
+}
 
 // extractRoomIdFromPath parses a path like "/streams/room/{roomId}{suffix}"
 // and extracts the room ID and suffix portion.
@@ -180,49 +234,9 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 			return
 		}
 
-		// Check authentication
-		authCtx, authErr := GetAuthFromRequest(r, db)
-		if authErr != nil {
-			LogWarnWithRequest(r, LogCategoryAuth, "Unauthorized stream access attempt", map[string]interface{}{
-				"roomId": roomId,
-				"path":   r.URL.Path,
-			})
-			http.Error(w, "Authentication required", http.StatusForbidden)
-			return
-		}
-
-		// Verify user has access to this room using unified access control
-		var anonymousSessionToken string
-		if authCtx.User.Id == -1 && authCtx.CodeSession != nil {
-			anonymousSessionToken = authCtx.CodeSession.Token
-		}
-
-		var hasAccess bool
-		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
-			access := CheckRoomAccess(tx, authCtx.User, roomId, anonymousSessionToken)
-			hasAccess = access.Allowed
-		})
-
-		if !hasAccess {
-			LogWarnWithRequest(r, LogCategoryAuth, "Access denied to room", map[string]interface{}{
-				"roomId": roomId,
-				"userId": authCtx.User.Id,
-			})
-			http.Error(w, "Access denied to this room", http.StatusForbidden)
-			return
-		}
-
-		// Log successful access
-		logData := map[string]interface{}{
-			"roomId": roomId,
-			"userId": authCtx.User.Id,
-		}
-		if authCtx.IsCodeAuth && authCtx.AccessCode != nil {
-			logData["code"] = authCtx.AccessCode.Code
-			LogInfo(LogCategoryAuth, "Code session accessing stream", logData)
-		} else {
-			logData["email"] = authCtx.User.Email
-			LogInfo(LogCategoryAuth, "User accessing stream", logData)
+		// Authenticate and check room access
+		if _, ok := authenticateRoomRequest(w, r, db, roomId, "stream"); !ok {
+			return // Response already written by helper
 		}
 
 		// Authentication successful - proxy the request
@@ -231,4 +245,90 @@ func RegisterRoomStreamProxy(app *vbeam.Application) {
 
 	// Register the authenticated handler for room-based streams
 	app.HandleFunc("/streams/room/", authenticatedHandler)
+}
+
+// RegisterHLSFileServer sets up a file server for ABR HLS content
+// Serves files from the HLS directory at /hls/<roomId>/
+func RegisterHLSFileServer(app *vbeam.Application) {
+	hlsRoot := cfg.HLSBaseDir
+
+	// Ensure HLS directory exists
+	if err := os.MkdirAll(hlsRoot, 0o755); err != nil {
+		LogErrorSimple(LogCategorySystem, "Failed to create HLS directory", map[string]interface{}{
+			"path":  hlsRoot,
+			"error": err.Error(),
+		})
+	}
+
+	// Create file server
+	fileServer := http.FileServer(http.Dir(hlsRoot))
+
+	// Create handler with proper headers and authentication
+	hlsHandler := func(w http.ResponseWriter, r *http.Request) {
+		// Strip /hls/ prefix to get room path
+		path := strings.TrimPrefix(r.URL.Path, "/hls/")
+		if path == "" || path == "/" {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+
+		// Extract room ID from path (e.g., "123/master.m3u8" -> roomId=123)
+		pathParts := strings.SplitN(path, "/", 2)
+		if len(pathParts) < 1 {
+			http.Error(w, "Invalid HLS path", http.StatusBadRequest)
+			return
+		}
+
+		roomIdStr := pathParts[0]
+		roomId, err := strconv.Atoi(roomIdStr)
+		if err != nil {
+			http.Error(w, "Invalid room ID", http.StatusBadRequest)
+			return
+		}
+
+		// Authenticate and check room access
+		if _, ok := authenticateRoomRequest(w, r, app.DB, roomId, "HLS stream"); !ok {
+			return // Response already written by helper
+		}
+
+		// Set appropriate headers based on file type
+		if strings.HasSuffix(r.URL.Path, ".m3u8") {
+			// Playlists: no cache, must revalidate
+			w.Header().Set("Cache-Control", "no-store, must-revalidate")
+			w.Header().Set("Content-Type", "application/vnd.apple.mpegurl")
+		} else if strings.HasSuffix(r.URL.Path, ".ts") {
+			// Segments: cache for 60 seconds
+			w.Header().Set("Cache-Control", "public, max-age=60")
+			w.Header().Set("Content-Type", "video/mp2t")
+		}
+
+		// CORS headers for HLS.js compatibility
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+
+		// Handle OPTIONS for CORS preflight
+		if r.Method == "OPTIONS" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+
+		// Verify file exists before serving
+		fullPath := filepath.Join(hlsRoot, path)
+		if _, err := os.Stat(fullPath); os.IsNotExist(err) {
+			http.Error(w, "Not found", http.StatusNotFound)
+			return
+		}
+
+		// Serve the file
+		http.StripPrefix("/hls/", fileServer).ServeHTTP(w, r)
+	}
+
+	// Register handler
+	app.HandleFunc("/hls/", hlsHandler)
+
+	LogInfo(LogCategorySystem, "Registered HLS file server", map[string]interface{}{
+		"path":    "/hls/",
+		"hlsRoot": hlsRoot,
+	})
 }

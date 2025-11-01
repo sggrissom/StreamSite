@@ -769,9 +769,10 @@ export function view(
   }
 
   // Build stream URL from room data
-  // Pattern: /streams/room/{roomId}.m3u8
-  // Backend will rewrite to: /streams/live/{streamKey}.m3u8
-  const roomStreamUrl = `/streams/room/${data.room.id}.m3u8`;
+  // ABR HLS pattern: /hls/{roomId}/master.m3u8
+  // Backend serves adaptive bitrate HLS with 720p and 480p variants
+  // HLS.js and native iOS HLS will automatically switch quality
+  const roomStreamUrl = `/hls/${data.room.id}/master.m3u8`;
   state.setStreamUrl(roomStreamUrl);
 
   return (
