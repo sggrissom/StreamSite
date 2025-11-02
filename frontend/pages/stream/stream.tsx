@@ -278,7 +278,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       if (state.streamUrl !== url) {
         state.streamUrl = url;
         // Reinitialize player with new URL if already attached
-        if (state.videoElement && state.isStreamLive) {
+        if (state.videoElement && state.isStreamLive && state.isHlsReady) {
           initializePlayer(state, state.videoElement);
         }
       }
@@ -316,7 +316,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
           }, 30000);
         }
 
-        if (state.videoElement && state.streamUrl) {
+        if (state.videoElement && state.streamUrl && state.isHlsReady) {
           initializePlayer(state, state.videoElement);
         }
         // Start checking live edge
@@ -348,6 +348,11 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
           state.hlsReadyTimeout = null;
         }
         state.hlsReadyTimedOut = false;
+
+        // Initialize player now that HLS is ready
+        if (state.isStreamLive && state.videoElement && state.streamUrl) {
+          initializePlayer(state, state.videoElement);
+        }
       }
 
       vlens.scheduleRedraw();
