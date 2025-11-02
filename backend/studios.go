@@ -1291,13 +1291,15 @@ func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthRes
 	RecordStreamStart(appDb, room.Id, room.StudioId)
 
 	// Start ABR transcoder for multi-quality HLS
-	roomIDStr := fmt.Sprintf("%d", room.Id)
-	if err := transcoderManager.Start(roomIDStr, streamKey); err != nil {
-		// Log error but don't fail the stream - it can still work via SRS HLS
-		LogErrorSimple(LogCategorySystem, "Failed to start transcoder", map[string]interface{}{
-			"room_id": room.Id,
-			"error":   err.Error(),
-		})
+	if transcoderManager != nil {
+		roomIDStr := fmt.Sprintf("%d", room.Id)
+		if err := transcoderManager.Start(roomIDStr, streamKey); err != nil {
+			// Log error but don't fail the stream - it can still work via SRS HLS
+			LogErrorSimple(LogCategorySystem, "Failed to start transcoder", map[string]interface{}{
+				"room_id": room.Id,
+				"error":   err.Error(),
+			})
+		}
 	}
 
 	// Broadcast SSE update to all connected viewers
@@ -1334,8 +1336,10 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 		RecordStreamStop(appDb, room.Id, room.StudioId)
 
 		// Stop ABR transcoder
-		roomIDStr := fmt.Sprintf("%d", room.Id)
-		transcoderManager.Stop(roomIDStr)
+		if transcoderManager != nil {
+			roomIDStr := fmt.Sprintf("%d", room.Id)
+			transcoderManager.Stop(roomIDStr)
+		}
 
 		// Broadcast SSE update to all connected viewers
 		sseManager.BroadcastRoomStatus(room.Id, false)

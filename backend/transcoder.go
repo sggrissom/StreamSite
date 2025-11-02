@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -17,16 +18,30 @@ import (
 // Global transcoder manager instance
 var transcoderManager *TranscoderManager
 
-// Maximum number of concurrent transcoding sessions
-const MaxConcurrentTranscoders = 10
+// Maximum number of concurrent transcoding sessions (configurable via MAX_CONCURRENT_TRANSCODERS env var)
+var MaxConcurrentTranscoders = 10
+
+func init() {
+	// Allow override via environment variable
+	if envVal := os.Getenv("MAX_CONCURRENT_TRANSCODERS"); envVal != "" {
+		if val, err := strconv.Atoi(envVal); err == nil && val > 0 && val <= 100 {
+			MaxConcurrentTranscoders = val
+			log.Printf("[Transcoder] Using MAX_CONCURRENT_TRANSCODERS=%d from environment", val)
+		} else {
+			log.Printf("[Transcoder] Warning: Invalid MAX_CONCURRENT_TRANSCODERS value '%s', using default %d",
+				envVal, MaxConcurrentTranscoders)
+		}
+	}
+}
 
 // InitTranscoder initializes the global transcoder manager
 func InitTranscoder(cfg TranscoderConfig) {
 	transcoderManager = NewTranscoderManager(cfg)
-	log.Printf("[Transcoder] Initialized with HLS dir: %s, RTMP base: %s",
-		cfg.HLSBaseDir, cfg.SRSRTMPBase)
+	log.Printf("[Transcoder] Initialized with HLS dir: %s, RTMP base: %s, max transcoders: %d",
+		cfg.HLSBaseDir, cfg.SRSRTMPBase, MaxConcurrentTranscoders)
 
-	// Clean up any orphaned HLS directories from previous runs
+	// Clean up any orphaned resources from previous runs
+	transcoderManager.CleanupOrphanedProcesses()
 	transcoderManager.CleanupOrphanedDirectories()
 }
 
@@ -49,6 +64,29 @@ type Transcoder struct {
 	startedAt time.Time
 }
 
+// validateStreamKey checks if a stream key is safe for use in shell commands
+func validateStreamKey(key string) error {
+	if key == "" {
+		return fmt.Errorf("stream key cannot be empty")
+	}
+
+	// Stream keys should be alphanumeric with hyphens/underscores only
+	// Reject any shell metacharacters or path separators
+	dangerousChars := []string{
+		";", "&", "|", "`", "$", "(", ")", "{", "}", "[", "]",
+		"<", ">", "'", "\"", "\\", "/", " ", "\n", "\r", "\t",
+		"*", "?", "!", "#", "~", "^",
+	}
+
+	for _, char := range dangerousChars {
+		if strings.Contains(key, char) {
+			return fmt.Errorf("stream key contains invalid character: %s", char)
+		}
+	}
+
+	return nil
+}
+
 // NewTranscoder creates a new transcoder instance for a room
 func NewTranscoder(roomID, streamKey string, cfg TranscoderConfig) *Transcoder {
 	return &Transcoder{
@@ -57,6 +95,43 @@ func NewTranscoder(roomID, streamKey string, cfg TranscoderConfig) *Transcoder {
 		outDir:    filepath.Join(cfg.HLSBaseDir, roomID),
 		inputRTMP: fmt.Sprintf("%s/%s", cfg.SRSRTMPBase, streamKey),
 	}
+}
+
+// StartWithRetry attempts to start FFmpeg with exponential backoff retries
+// This handles race conditions where FFmpeg starts before SRS has buffered data
+func (t *Transcoder) StartWithRetry(maxRetries int) error {
+	var lastErr error
+
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			// Exponential backoff: 1s, 2s, 4s, 8s...
+			delay := time.Duration(1<<uint(attempt-1)) * time.Second
+			log.Printf("[Transcoder] Retry attempt %d/%d for room=%s after %v",
+				attempt, maxRetries, t.roomID, delay)
+			time.Sleep(delay)
+		}
+
+		err := t.Start()
+		if err == nil {
+			if attempt > 0 {
+				log.Printf("[Transcoder] Successfully started on retry %d for room=%s",
+					attempt, t.roomID)
+			}
+			return nil
+		}
+
+		lastErr = err
+		log.Printf("[Transcoder] Start attempt %d failed for room=%s: %v",
+			attempt+1, t.roomID, err)
+
+		// If it's not a connection error, don't retry
+		if !strings.Contains(err.Error(), "Connection refused") &&
+			!strings.Contains(err.Error(), "No such file") {
+			break
+		}
+	}
+
+	return fmt.Errorf("failed to start after %d attempts: %w", maxRetries+1, lastErr)
 }
 
 // Start begins the FFmpeg transcoding process
@@ -136,6 +211,12 @@ func (t *Transcoder) Start() error {
 			duration := time.Since(t.startedAt)
 			log.Printf("[Transcoder] FFmpeg died unexpectedly for room=%s after %v: %v",
 				t.roomID, duration, err)
+
+			// Notify viewers via SSE
+			if roomID, parseErr := strconv.Atoi(t.roomID); parseErr == nil {
+				errorMsg := fmt.Sprintf("Transcoding failed after %v", duration.Round(time.Second))
+				sseManager.BroadcastTranscoderError(roomID, errorMsg)
+			}
 		}
 	}()
 
@@ -210,15 +291,20 @@ func (m *TranscoderManager) Start(roomID, streamKey string) error {
 		return fmt.Errorf("invalid room ID: %s", roomID)
 	}
 
+	// Validate stream key is safe for shell commands
+	if err := validateStreamKey(streamKey); err != nil {
+		return fmt.Errorf("invalid stream key: %w", err)
+	}
+
 	// Don't start duplicate transcoder
 	if _, exists := m.transcoders[roomID]; exists {
 		log.Printf("[Transcoder] Transcoder already running for room %s", roomID)
 		return nil // Not an error, just ignore
 	}
 
-	// Create and start transcoder
+	// Create and start transcoder with retry logic
 	tc := NewTranscoder(roomID, streamKey, m.config)
-	if err := tc.Start(); err != nil {
+	if err := tc.StartWithRetry(3); err != nil {
 		return fmt.Errorf("failed to start transcoder for room %s: %w", roomID, err)
 	}
 
@@ -256,6 +342,26 @@ func (m *TranscoderManager) IsRunning(roomID string) bool {
 		return tc.IsRunning()
 	}
 	return false
+}
+
+// CleanupOrphanedProcesses kills any leftover FFmpeg processes from previous runs
+func (m *TranscoderManager) CleanupOrphanedProcesses() {
+	// Use pkill to find and kill FFmpeg processes that match our HLS output pattern
+	// This is safer than killing all ffmpeg processes
+	pattern := fmt.Sprintf("ffmpeg.*%s", m.config.HLSBaseDir)
+	cmd := exec.Command("pkill", "-f", pattern)
+
+	if err := cmd.Run(); err != nil {
+		// Exit code 1 means no processes found, which is fine
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			log.Printf("[Transcoder] No orphaned FFmpeg processes found")
+			return
+		}
+		log.Printf("[Transcoder] Warning: Failed to cleanup orphaned FFmpeg processes: %v", err)
+		return
+	}
+
+	log.Printf("[Transcoder] Cleaned up orphaned FFmpeg processes")
 }
 
 // CleanupOrphanedDirectories removes leftover HLS directories from previous runs
