@@ -5,6 +5,7 @@ import * as server from "../../server";
 import { Header, Footer } from "../../layout";
 import { VideoControls } from "./VideoControls";
 import { EmotePicker } from "./EmotePicker";
+import { StatsOverlay, type StreamStats } from "./StatsOverlay";
 import "./stream-styles";
 
 type Data = server.GetRoomDetailsResponse;
@@ -114,6 +115,12 @@ type StreamState = {
   emoteCounter: number; // Counter for unique emote IDs
   controlsVisible: boolean;
   controlsAutoHideTimer: number | null;
+  statsVisible: boolean;
+  streamStats: StreamStats | null;
+  statsUpdateInterval: number | null;
+  connectionStartTime: number | null;
+  streamStartTime: number | null;
+  keydownHandler: ((e: KeyboardEvent) => void) | null;
   onVideoRef: (el: HTMLVideoElement | null) => void;
   onContainerRef: (el: HTMLDivElement | null) => void;
   setStreamUrl: (url: string) => void;
@@ -132,6 +139,10 @@ type StreamState = {
   checkLiveEdge: () => void;
   startLiveEdgeChecking: () => void;
   stopLiveEdgeChecking: () => void;
+  toggleStats: () => void;
+  updateStats: () => void;
+  startStatsUpdating: () => void;
+  stopStatsUpdating: () => void;
 };
 
 type OrientationState = {
@@ -229,6 +240,12 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     emoteCounter: 0,
     controlsVisible: true,
     controlsAutoHideTimer: null,
+    statsVisible: false,
+    streamStats: null,
+    statsUpdateInterval: null,
+    connectionStartTime: null,
+    streamStartTime: null,
+    keydownHandler: null,
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
 
@@ -272,6 +289,16 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
         }
         state.isInOfflineGrace = false;
 
+        // Track stream start time for stats
+        if (!state.streamStartTime) {
+          state.streamStartTime = Date.now();
+        }
+
+        // Track connection start time
+        if (!state.connectionStartTime) {
+          state.connectionStartTime = Date.now();
+        }
+
         if (state.videoElement && state.streamUrl) {
           initializePlayer(state, state.videoElement);
         }
@@ -284,6 +311,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
           // Grace period expired - cleanup player and show offline message
           state.isInOfflineGrace = false;
           state.offlineGraceTimer = null;
+          state.streamStartTime = null; // Reset stream start time
           cleanupPlayer(state);
           vlens.scheduleRedraw();
         }, 30000); // 30 seconds
@@ -516,7 +544,152 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       state.isBehindLive = false;
       state.secondsBehindLive = 0;
     },
+    toggleStats: () => {
+      state.statsVisible = !state.statsVisible;
+      if (state.statsVisible) {
+        state.startStatsUpdating();
+      } else {
+        state.stopStatsUpdating();
+      }
+      vlens.scheduleRedraw();
+    },
+    updateStats: () => {
+      if (!state.videoElement) return;
+
+      // Helper to format time duration
+      const formatDuration = (seconds: number): string => {
+        if (seconds < 60) return `${Math.floor(seconds)}s`;
+        const mins = Math.floor(seconds / 60);
+        if (mins < 60) return `${mins}m ${Math.floor(seconds % 60)}s`;
+        const hours = Math.floor(mins / 60);
+        return `${hours}h ${mins % 60}m`;
+      };
+
+      // Default stats
+      let currentResolution = "N/A";
+      let currentBitrate = "N/A";
+      let bandwidthEstimate = "N/A";
+      let bufferHealth = "N/A";
+      let isAutoQuality = true;
+      let droppedFrames = "N/A";
+
+      // HLS.js stats
+      if (state.hlsInstance) {
+        try {
+          const currentLevel = state.hlsInstance.currentLevel;
+          const levels = state.hlsInstance.levels;
+          const autoLevelEnabled = state.hlsInstance.autoLevelEnabled;
+
+          if (currentLevel >= 0 && levels && levels[currentLevel]) {
+            // Read actual resolution from level metadata instead of assuming order
+            const level = levels[currentLevel];
+            const height = level.height;
+            if (height) {
+              currentResolution = `${height}p`;
+            } else {
+              currentResolution = `Level ${currentLevel}`;
+            }
+            const bitrateKbps = Math.round(level.bitrate / 1000);
+            currentBitrate = `${bitrateKbps} Kbps`;
+          }
+
+          isAutoQuality = autoLevelEnabled !== false;
+
+          const bandwidth = state.hlsInstance.bandwidthEstimate;
+          if (bandwidth) {
+            const bandwidthMbps = (bandwidth / 1000000).toFixed(2);
+            bandwidthEstimate = `${bandwidthMbps} Mbps`;
+          }
+        } catch (e) {
+          // Ignore errors reading HLS.js state
+        }
+      }
+
+      // Buffer health
+      try {
+        const buffered = state.videoElement.buffered;
+        if (buffered.length > 0) {
+          const bufferSeconds =
+            buffered.end(buffered.length - 1) - state.videoElement.currentTime;
+          bufferHealth = `${bufferSeconds.toFixed(1)}s`;
+        }
+      } catch (e) {
+        // Ignore errors
+      }
+
+      // Dropped frames (browser-specific)
+      try {
+        const videoElement = state.videoElement as any;
+        if (videoElement.getVideoPlaybackQuality) {
+          const quality = videoElement.getVideoPlaybackQuality();
+          const dropped = quality.droppedVideoFrames || 0;
+          const total = quality.totalVideoFrames || 0;
+          if (total > 0) {
+            const dropRate = ((dropped / total) * 100).toFixed(2);
+            droppedFrames = `${dropped} (${dropRate}%)`;
+          }
+        }
+      } catch (e) {
+        // Not supported in this browser
+      }
+
+      // Video resolution
+      const videoResolution = `${state.videoElement.videoWidth}x${state.videoElement.videoHeight}`;
+
+      // Connection time
+      let connectionTime = "N/A";
+      if (state.connectionStartTime) {
+        const elapsedSeconds = (Date.now() - state.connectionStartTime) / 1000;
+        connectionTime = formatDuration(elapsedSeconds);
+      }
+
+      // Stream uptime
+      let streamUptime = "N/A";
+      if (state.streamStartTime) {
+        const elapsedSeconds = (Date.now() - state.streamStartTime) / 1000;
+        streamUptime = formatDuration(elapsedSeconds);
+      }
+
+      state.streamStats = {
+        currentResolution,
+        currentBitrate,
+        bandwidthEstimate,
+        bufferHealth,
+        isAutoQuality,
+        droppedFrames,
+        videoResolution,
+        connectionTime,
+        streamUptime,
+      };
+
+      vlens.scheduleRedraw();
+    },
+    startStatsUpdating: () => {
+      if (state.statsUpdateInterval !== null) return; // Already running
+
+      // Update immediately
+      state.updateStats();
+
+      // Update every 1 second
+      state.statsUpdateInterval = window.setInterval(() => {
+        state.updateStats();
+      }, 1000);
+    },
+    stopStatsUpdating: () => {
+      if (state.statsUpdateInterval !== null) {
+        clearInterval(state.statsUpdateInterval);
+        state.statsUpdateInterval = null;
+      }
+    },
   };
+
+  // Set up keyboard listener for 'i' key to toggle stats
+  state.keydownHandler = (e: KeyboardEvent) => {
+    if (e.key === "i" || e.key === "I") {
+      state.toggleStats();
+    }
+  };
+  document.addEventListener("keydown", state.keydownHandler);
 
   // Update module-level reference for cleanup during navigation
   streamStateRef = state;
@@ -529,6 +702,9 @@ function cleanupPlayer(state: StreamState) {
   // Stop live edge checking
   state.stopLiveEdgeChecking();
 
+  // Stop stats updating
+  state.stopStatsUpdating();
+
   // Clear offline grace timer if active
   if (state.offlineGraceTimer !== null) {
     clearTimeout(state.offlineGraceTimer);
@@ -540,6 +716,12 @@ function cleanupPlayer(state: StreamState) {
   if (state.controlsAutoHideTimer !== null) {
     clearTimeout(state.controlsAutoHideTimer);
     state.controlsAutoHideTimer = null;
+  }
+
+  // Remove keyboard listener
+  if (state.keydownHandler) {
+    document.removeEventListener("keydown", state.keydownHandler);
+    state.keydownHandler = null;
   }
 
   if (state.hlsInstance?.destroy) {
@@ -910,6 +1092,12 @@ export function view(
               controlsVisible={state.controlsVisible}
               onLocalEmote={state.addEmote}
               onSendEmote={state.sendEmote}
+            />
+
+            {/* Stats overlay */}
+            <StatsOverlay
+              stats={state.streamStats}
+              visible={state.statsVisible}
             />
           </div>
         ) : (

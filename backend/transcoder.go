@@ -146,8 +146,8 @@ func (t *Transcoder) Start() error {
 		"-hide_banner", "-loglevel", "info",
 		"-i", t.inputRTMP,
 
-		// Map input streams: video twice, audio twice (once for each variant)
-		"-map", "0:v:0", "-map", "0:v:0", "-map", "0:a:0", "-map", "0:a:0",
+		// Map input streams: video 3x, audio 3x (once for each variant)
+		"-map", "0:v:0", "-map", "0:v:0", "-map", "0:v:0", "-map", "0:a:0", "-map", "0:a:0", "-map", "0:a:0",
 
 		// Base encoders
 		"-c:v", "libx264", "-preset", "veryfast",
@@ -156,23 +156,27 @@ func (t *Transcoder) Start() error {
 		// GOP alignment for smooth quality switching (60 frames = 2s at 30fps)
 		"-x264-params", "keyint=60:min-keyint=60:scenecut=0:nal-hrd=cbr:force-cfr=1",
 
-		// Variant 0: 720p @ 2.5 Mbps
-		"-filter:v:0", "scale=w=1280:h=720:flags=bicubic",
-		"-b:v:0", "2500k", "-maxrate:v:0", "2700k", "-bufsize:v:0", "5000k",
+		// Variant 0: 1080p @ 5 Mbps
+		"-filter:v:0", "scale=w=1920:h=1080:flags=bicubic",
+		"-b:v:0", "5000k", "-maxrate:v:0", "5500k", "-bufsize:v:0", "10000k",
 
-		// Variant 1: 480p @ 1.2 Mbps
-		"-filter:v:1", "scale=w=854:h=480:flags=bicubic",
-		"-b:v:1", "1200k", "-maxrate:v:1", "1300k", "-bufsize:v:1", "2400k",
+		// Variant 1: 720p @ 2.5 Mbps
+		"-filter:v:1", "scale=w=1280:h=720:flags=bicubic",
+		"-b:v:1", "2500k", "-maxrate:v:1", "2700k", "-bufsize:v:1", "5000k",
 
-		// Map variants: v:0 with a:0 (720p), v:1 with a:1 (480p)
-		"-var_stream_map", "v:0,a:0 v:1,a:1",
+		// Variant 2: 480p @ 1.2 Mbps
+		"-filter:v:2", "scale=w=854:h=480:flags=bicubic",
+		"-b:v:2", "1200k", "-maxrate:v:2", "1300k", "-bufsize:v:2", "2400k",
+
+		// Map variants: v:0 with a:0 (1080p), v:1 with a:1 (720p), v:2 with a:2 (480p)
+		"-var_stream_map", "v:0,a:0 v:1,a:1 v:2,a:2",
 
 		// HLS settings
 		"-hls_time", "2",
 		"-hls_list_size", "5",
 		"-hls_flags", "independent_segments+delete_segments+append_list+program_date_time",
 
-		// %v is the variant index (0 for 720p, 1 for 480p)
+		// %v is the variant index (0 for 1080p, 1 for 720p, 2 for 480p)
 		"-hls_segment_filename", filepath.Join(t.outDir, "%v", "seg_%06d.ts"),
 		"-master_pl_name", "master.m3u8",
 

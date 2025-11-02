@@ -386,6 +386,16 @@ export interface SendEmoteRequest {
 export interface SendEmoteResponse {
 }
 
+export interface GetTranscoderHealthRequest {
+}
+
+export interface TranscoderHealthResponse {
+    active: number
+    maxCapacity: number
+    healthy: boolean
+    transcoders: TranscoderStatus[]
+}
+
 export interface SRSAuthCallback {
     server_id: string
     action: string
@@ -548,6 +558,14 @@ export interface StudioAnalytics {
     totalStreamMinutes: number
 }
 
+export interface TranscoderStatus {
+    roomId: string
+    streamKey: string
+    running: boolean
+    startedAt: string
+    duration: string
+}
+
 export async function CreateAccount(data: CreateAccountRequest): Promise<rpc.Response<CreateAccountResponse>> {
     return await rpc.call<CreateAccountResponse>('CreateAccount', JSON.stringify(data));
 }
@@ -702,6 +720,10 @@ export async function RecalculateViewerCounts(data: RecalculateViewerCountsReque
 
 export async function SendEmote(data: SendEmoteRequest): Promise<rpc.Response<SendEmoteResponse>> {
     return await rpc.call<SendEmoteResponse>('SendEmote', JSON.stringify(data));
+}
+
+export async function GetTranscoderHealth(data: GetTranscoderHealthRequest): Promise<rpc.Response<TranscoderHealthResponse>> {
+    return await rpc.call<TranscoderHealthResponse>('GetTranscoderHealth', JSON.stringify(data));
 }
 
 export async function ValidateStreamKey(data: SRSAuthCallback): Promise<rpc.Response<SRSAuthResponse>> {
