@@ -1,5 +1,6 @@
 import * as preact from "preact";
 import * as vlens from "vlens";
+import { registerCleanupFunction } from "vlens/core";
 import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
 import { Dropdown, DropdownItem } from "../../../components/Dropdown";
@@ -74,6 +75,18 @@ const useActiveCodesListState = vlens.declareHook(
     },
   }),
 );
+
+// Module-level reference for cleanup during navigation
+let activeCodesStateRef: ActiveCodesListState | null = null;
+
+// Register cleanup function with vlens
+// This will be called automatically during navigation
+registerCleanupFunction(() => {
+  if (activeCodesStateRef && activeCodesStateRef.refreshTimerId !== null) {
+    clearInterval(activeCodesStateRef.refreshTimerId);
+    activeCodesStateRef.refreshTimerId = null;
+  }
+});
 
 // ===== Helper Functions =====
 async function loadCodes(
@@ -300,6 +313,9 @@ function copyToClipboard(text: string) {
 export function ActiveCodesList(props: ActiveCodesListProps) {
   const state = useActiveCodesListState();
 
+  // Update module-level reference for cleanup
+  activeCodesStateRef = state;
+
   // Initial load - only trigger once
   if (!state.hasInitiallyLoaded && !state.isLoading) {
     state.hasInitiallyLoaded = true;
@@ -313,9 +329,6 @@ export function ActiveCodesList(props: ActiveCodesListProps) {
     }, 30000);
     state.refreshTimerId = timerId;
   }
-
-  // Cleanup timer on unmount would require a different pattern in vlens
-  // For now, the timer will refresh as long as the component is mounted
 
   // Filter codes based on filter setting
   const displayCodes = state.filterShowAll

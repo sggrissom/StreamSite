@@ -1,5 +1,6 @@
 import * as preact from "preact";
 import * as vlens from "vlens";
+import { registerCleanupFunction } from "vlens/core";
 import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
 import { Dropdown, DropdownItem } from "../../../components/Dropdown";
@@ -444,9 +445,31 @@ const useCameraIngestManager = vlens.declareHook((): CameraIngestManager => {
     }
   };
 
+  // Store handler for cleanup
+  visibilityChangeHandler = handleVisibilityChange;
   document.addEventListener("visibilitychange", handleVisibilityChange);
 
   return manager;
+});
+
+// Module-level references for cleanup during navigation
+let cameraManagerRef: CameraIngestManager | null = null;
+let visibilityChangeHandler: (() => void) | null = null;
+
+// Register cleanup function with vlens
+// This will be called automatically during navigation
+registerCleanupFunction(() => {
+  // Clear camera polling interval
+  if (cameraManagerRef && cameraManagerRef.pollInterval !== null) {
+    clearInterval(cameraManagerRef.pollInterval);
+    cameraManagerRef.pollInterval = null;
+  }
+
+  // Remove visibility change event listener
+  if (visibilityChangeHandler) {
+    document.removeEventListener("visibilitychange", visibilityChangeHandler);
+    visibilityChangeHandler = null;
+  }
 });
 
 function getCameraStatus(
@@ -596,6 +619,9 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const generateCodeModal = useGenerateCodeModalState();
   const analyticsModal = useViewAnalyticsModal();
   const cameraIngest = useCameraIngestManager();
+
+  // Update module-level reference for cleanup
+  cameraManagerRef = cameraIngest;
 
   // Start camera status polling when rooms change
   if (rooms.length > 0) {
