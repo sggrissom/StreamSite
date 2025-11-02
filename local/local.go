@@ -55,6 +55,7 @@ func main() {
 	os.MkdirAll(".serve", 0755)
 	os.MkdirAll(".serve/static", 0755)
 	os.MkdirAll(".serve/frontend", 0755)
+	os.MkdirAll(".serve/hls", 0755) // For ABR HLS transcoding output
 
 	var args local_ui.LocalServerArgs
 	args.Domain = Domain

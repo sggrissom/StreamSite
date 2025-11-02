@@ -69,6 +69,9 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.RegisterRoomStreamProxy(app)
 	backend.RegisterHLSFileServer(app)
 
+	// Transcoder health check
+	vbeam.RegisterProc(app, backend.GetTranscoderHealth)
+
 	// SRS HTTP callbacks (no auth required - SRS makes these calls)
 	vbeam.RegisterProc(app, backend.ValidateStreamKey)
 	vbeam.RegisterProc(app, backend.HandleStreamUnpublish)

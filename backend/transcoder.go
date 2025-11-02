@@ -7,18 +7,27 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
+
+	"go.hasen.dev/vbeam"
 )
 
 // Global transcoder manager instance
 var transcoderManager *TranscoderManager
+
+// Maximum number of concurrent transcoding sessions
+const MaxConcurrentTranscoders = 10
 
 // InitTranscoder initializes the global transcoder manager
 func InitTranscoder(cfg TranscoderConfig) {
 	transcoderManager = NewTranscoderManager(cfg)
 	log.Printf("[Transcoder] Initialized with HLS dir: %s, RTMP base: %s",
 		cfg.HLSBaseDir, cfg.SRSRTMPBase)
+
+	// Clean up any orphaned HLS directories from previous runs
+	transcoderManager.CleanupOrphanedDirectories()
 }
 
 // TranscoderConfig holds configuration for the transcoding system
@@ -188,9 +197,16 @@ func (m *TranscoderManager) Start(roomID, streamKey string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Validate room ID is safe for filesystem
+	// Check resource limits
+	if len(m.transcoders) >= MaxConcurrentTranscoders {
+		return fmt.Errorf("transcoder limit reached: %d active (max %d)",
+			len(m.transcoders), MaxConcurrentTranscoders)
+	}
+
+	// Validate room ID is safe for filesystem - prevent path traversal
 	roomID = filepath.Clean(roomID)
-	if roomID == "." || roomID == ".." {
+	if roomID == "." || roomID == ".." || strings.Contains(roomID, "..") ||
+		filepath.IsAbs(roomID) || strings.ContainsAny(roomID, "/\\") {
 		return fmt.Errorf("invalid room ID: %s", roomID)
 	}
 
@@ -240,4 +256,92 @@ func (m *TranscoderManager) IsRunning(roomID string) bool {
 		return tc.IsRunning()
 	}
 	return false
+}
+
+// CleanupOrphanedDirectories removes leftover HLS directories from previous runs
+func (m *TranscoderManager) CleanupOrphanedDirectories() {
+	entries, err := os.ReadDir(m.config.HLSBaseDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return // Directory doesn't exist yet, nothing to clean
+		}
+		log.Printf("[Transcoder] Warning: Failed to read HLS directory for cleanup: %v", err)
+		return
+	}
+
+	cleaned := 0
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		dirPath := filepath.Join(m.config.HLSBaseDir, entry.Name())
+		if err := os.RemoveAll(dirPath); err != nil {
+			log.Printf("[Transcoder] Warning: Failed to remove orphaned directory %s: %v",
+				dirPath, err)
+		} else {
+			cleaned++
+		}
+	}
+
+	if cleaned > 0 {
+		log.Printf("[Transcoder] Cleaned up %d orphaned HLS directories from previous run", cleaned)
+	}
+}
+
+// TranscoderStatus represents the status of a single transcoder
+type TranscoderStatus struct {
+	RoomID    string    `json:"roomId"`
+	StreamKey string    `json:"streamKey"`
+	Running   bool      `json:"running"`
+	StartedAt time.Time `json:"startedAt"`
+	Duration  string    `json:"duration"`
+}
+
+// TranscoderHealthResponse contains health check information
+type TranscoderHealthResponse struct {
+	Active      int                `json:"active"`
+	MaxCapacity int                `json:"maxCapacity"`
+	Healthy     bool               `json:"healthy"`
+	Transcoders []TranscoderStatus `json:"transcoders"`
+}
+
+// GetHealth returns health status of all transcoders
+func (m *TranscoderManager) GetHealth() TranscoderHealthResponse {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	statuses := make([]TranscoderStatus, 0, len(m.transcoders))
+	for roomID, tc := range m.transcoders {
+		statuses = append(statuses, TranscoderStatus{
+			RoomID:    roomID,
+			StreamKey: tc.streamKey,
+			Running:   tc.IsRunning(),
+			StartedAt: tc.startedAt,
+			Duration:  time.Since(tc.startedAt).Round(time.Second).String(),
+		})
+	}
+
+	return TranscoderHealthResponse{
+		Active:      len(m.transcoders),
+		MaxCapacity: MaxConcurrentTranscoders,
+		Healthy:     len(m.transcoders) < MaxConcurrentTranscoders,
+		Transcoders: statuses,
+	}
+}
+
+// GetTranscoderHealth API procedure
+type GetTranscoderHealthRequest struct{}
+
+func GetTranscoderHealth(ctx *vbeam.Context, req GetTranscoderHealthRequest) (TranscoderHealthResponse, error) {
+	if transcoderManager == nil {
+		return TranscoderHealthResponse{
+			Active:      0,
+			MaxCapacity: MaxConcurrentTranscoders,
+			Healthy:     true,
+			Transcoders: []TranscoderStatus{},
+		}, nil
+	}
+
+	return transcoderManager.GetHealth(), nil
 }
