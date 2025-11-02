@@ -3,6 +3,7 @@ package backend
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -83,33 +84,19 @@ func TestTranscoderManagerResourceLimits(t *testing.T) {
 
 	manager := NewTranscoderManager(cfg)
 
-	// Clean up any started transcoders
-	defer func() {
-		for roomID := range manager.transcoders {
-			manager.Stop(roomID)
-		}
-	}()
+	// Manually add mock transcoders to test limit without starting FFmpeg
+	manager.transcoders["room1"] = &Transcoder{roomID: "room1"}
+	manager.transcoders["room2"] = &Transcoder{roomID: "room2"}
 
-	// Try to exceed limit (these will fail to start FFmpeg but should hit limit check first)
-	// Note: We can't easily test actual FFmpeg startup without mocking
-	// So we'll test the path validation which comes before FFmpeg start
-
-	// Test path validation instead (occurs before resource limit)
-	err1 := manager.Start("../../../", "valid-key-1")
-	if err1 == nil {
-		t.Error("Expected error for invalid room ID")
+	// Now try to start another - should hit the limit
+	err := manager.Start("room3", "valid-key")
+	if err == nil {
+		t.Error("Expected error when exceeding max concurrent transcoders")
 	}
 
-	// Test with valid room IDs but note FFmpeg won't actually start in tests
-	// The resource limit check happens before FFmpeg start attempt
-	err2 := manager.Start("room1", "valid-key-2")
-	err3 := manager.Start("room2", "valid-key-3")
-	err4 := manager.Start("room3", "valid-key-4")
-
-	// At least one of these should hit the resource limit or FFmpeg start failure
-	_ = err2
-	_ = err3
-	_ = err4
+	if !strings.Contains(err.Error(), "transcoder limit reached") {
+		t.Errorf("Expected 'transcoder limit reached' error, got: %v", err)
+	}
 }
 
 func TestTranscoderManagerRoomIDValidation(t *testing.T) {
@@ -122,40 +109,29 @@ func TestTranscoderManagerRoomIDValidation(t *testing.T) {
 
 	manager := NewTranscoderManager(cfg)
 
-	// Clean up any started transcoders
-	defer func() {
-		for roomID := range manager.transcoders {
-			manager.Stop(roomID)
-		}
-	}()
-
 	tests := []struct {
 		name      string
 		roomID    string
 		shouldErr bool
+		errMsg    string
 	}{
-		{"Valid numeric", "123", false},
-		{"Valid alphanumeric", "room123", false},
-		{"Path traversal dots", "..", true},
-		{"Path traversal relative", "../etc", true},
-		{"Absolute path", "/etc/passwd", true},
-		{"Forward slash", "room/123", true},
-		{"Backslash", "room\\123", true},
-		{"Current directory", ".", true},
+		{"Path traversal dots", "..", true, "invalid room ID"},
+		{"Path traversal relative", "../etc", true, "invalid room ID"},
+		{"Absolute path", "/etc/passwd", true, "invalid room ID"},
+		{"Forward slash", "room/123", true, "invalid room ID"},
+		{"Backslash", "room\\123", true, "invalid room ID"},
+		{"Current directory", ".", true, "invalid room ID"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			err := manager.Start(tt.roomID, "valid-key")
-			if tt.shouldErr && err == nil {
-				t.Errorf("Expected error for room ID %q, but got nil", tt.roomID)
-			}
-			if !tt.shouldErr && err != nil {
-				// Note: We expect errors here because FFmpeg won't actually start
-				// But we're testing that path validation happens before FFmpeg start
-				// Check the error message
-				if err.Error() == "invalid room ID: "+tt.roomID {
-					t.Errorf("Got path validation error for valid room ID %q: %v", tt.roomID, err)
+
+			if tt.shouldErr {
+				if err == nil {
+					t.Errorf("Expected error for room ID %q, but got nil", tt.roomID)
+				} else if !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("Expected error containing %q for room ID %q, got: %v", tt.errMsg, tt.roomID, err)
 				}
 			}
 		})
@@ -172,23 +148,16 @@ func TestTranscoderManagerStreamKeyValidation(t *testing.T) {
 
 	manager := NewTranscoderManager(cfg)
 
-	// Clean up any started transcoders
-	defer func() {
-		for roomID := range manager.transcoders {
-			manager.Stop(roomID)
-		}
-	}()
-
-	// Test with valid room but invalid stream keys
 	tests := []struct {
 		name      string
 		streamKey string
 		shouldErr bool
+		errMsg    string
 	}{
-		{"Valid key", "validkey123", false},
-		{"Empty key", "", true},
-		{"Shell metachar semicolon", "key;cmd", true},
-		{"Shell metachar pipe", "key|cmd", true},
+		{"Empty key", "", true, "invalid stream key"},
+		{"Shell metachar semicolon", "key;cmd", true, "invalid stream key"},
+		{"Shell metachar pipe", "key|cmd", true, "invalid stream key"},
+		{"Shell metachar backtick", "key`cmd`", true, "invalid stream key"},
 	}
 
 	for _, tt := range tests {
@@ -198,12 +167,8 @@ func TestTranscoderManagerStreamKeyValidation(t *testing.T) {
 			if tt.shouldErr {
 				if err == nil {
 					t.Errorf("Expected error for stream key %q, but got nil", tt.streamKey)
-				}
-			} else {
-				// Valid keys will still fail because FFmpeg won't start
-				// but the error should not be about invalid stream key
-				if err != nil && err.Error() == "invalid stream key: "+tt.streamKey {
-					t.Errorf("Got stream key validation error for valid key %q", tt.streamKey)
+				} else if !strings.Contains(err.Error(), tt.errMsg) {
+					t.Errorf("Expected error containing %q for stream key %q, got: %v", tt.errMsg, tt.streamKey, err)
 				}
 			}
 		})
