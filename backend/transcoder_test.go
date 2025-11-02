@@ -83,6 +83,13 @@ func TestTranscoderManagerResourceLimits(t *testing.T) {
 
 	manager := NewTranscoderManager(cfg)
 
+	// Clean up any started transcoders
+	defer func() {
+		for roomID := range manager.transcoders {
+			manager.Stop(roomID)
+		}
+	}()
+
 	// Try to exceed limit (these will fail to start FFmpeg but should hit limit check first)
 	// Note: We can't easily test actual FFmpeg startup without mocking
 	// So we'll test the path validation which comes before FFmpeg start
@@ -114,6 +121,13 @@ func TestTranscoderManagerRoomIDValidation(t *testing.T) {
 	}
 
 	manager := NewTranscoderManager(cfg)
+
+	// Clean up any started transcoders
+	defer func() {
+		for roomID := range manager.transcoders {
+			manager.Stop(roomID)
+		}
+	}()
 
 	tests := []struct {
 		name      string
@@ -157,6 +171,13 @@ func TestTranscoderManagerStreamKeyValidation(t *testing.T) {
 	}
 
 	manager := NewTranscoderManager(cfg)
+
+	// Clean up any started transcoders
+	defer func() {
+		for roomID := range manager.transcoders {
+			manager.Stop(roomID)
+		}
+	}()
 
 	// Test with valid room but invalid stream keys
 	tests := []struct {
