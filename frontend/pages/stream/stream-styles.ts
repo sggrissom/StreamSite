@@ -1030,3 +1030,63 @@ block(`
   }
 }
 `);
+
+// Loading overlay for stream startup
+block(`
+.stream-loading-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.85);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1.5rem;
+  z-index: 100;
+}
+`);
+
+block(`
+.loading-spinner {
+  width: 48px;
+  height: 48px;
+  border: 4px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+`);
+
+block(`
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+`);
+
+block(`
+.loading-message {
+  font-size: 1.125rem;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.9);
+  text-align: center;
+}
+`);
+
+block(`
+.loading-error-icon {
+  font-size: 3rem;
+}
+`);
+
+block(`
+.loading-hint {
+  font-size: 0.9375rem;
+  color: rgba(255, 255, 255, 0.7);
+  text-align: center;
+}
+`);

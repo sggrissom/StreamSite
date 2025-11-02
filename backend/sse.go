@@ -123,7 +123,7 @@ func flushSSE(w http.ResponseWriter) {
 }
 
 // BroadcastRoomStatus sends a status update to all clients watching a room
-func (m *SSEManager) BroadcastRoomStatus(roomID int, isActive bool) {
+func (m *SSEManager) BroadcastRoomStatus(roomID int, isActive bool, isHlsReady bool) {
 	m.mu.RLock()
 	clients := m.clients[roomID]
 	m.mu.RUnlock()
@@ -133,17 +133,57 @@ func (m *SSEManager) BroadcastRoomStatus(roomID int, isActive bool) {
 	}
 
 	event := map[string]interface{}{
-		"isActive":  isActive,
-		"timestamp": time.Now().Unix(),
+		"isActive":   isActive,
+		"isHlsReady": isHlsReady,
+		"timestamp":  time.Now().Unix(),
 	}
 
 	data, _ := json.Marshal(event)
 	message := fmt.Sprintf("event: status\ndata: %s\n\n", data)
 
 	LogDebug(LogCategorySystem, "Broadcasting SSE update", map[string]interface{}{
-		"roomId":   roomID,
-		"isActive": isActive,
-		"clients":  len(clients),
+		"roomId":     roomID,
+		"isActive":   isActive,
+		"isHlsReady": isHlsReady,
+		"clients":    len(clients),
+	})
+
+	// Send to all connected clients
+	for _, client := range clients {
+		select {
+		case <-client.Done:
+			// Client already disconnected
+			continue
+		default:
+			if _, err := fmt.Fprint(client.Writer, message); err == nil {
+				flushSSE(client.Writer)
+			}
+		}
+	}
+}
+
+// BroadcastStreamReady notifies clients that HLS segments are ready for playback
+func (m *SSEManager) BroadcastStreamReady(roomID int, studioID int) {
+	m.mu.RLock()
+	clients := m.clients[roomID]
+	m.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return // No one watching
+	}
+
+	event := map[string]interface{}{
+		"roomId":    roomID,
+		"studioId":  studioID,
+		"timestamp": time.Now().Unix(),
+	}
+
+	data, _ := json.Marshal(event)
+	message := fmt.Sprintf("event: stream_ready\ndata: %s\n\n", data)
+
+	LogDebug(LogCategorySystem, "Broadcasting stream_ready event", map[string]interface{}{
+		"roomId":  roomID,
+		"clients": len(clients),
 	})
 
 	// Send to all connected clients
@@ -501,8 +541,9 @@ func MakeStreamRoomEventsHandler(db *vbolt.DB) http.HandlerFunc {
 
 		// Send initial status immediately
 		initialEvent := map[string]interface{}{
-			"isActive":  room.IsActive,
-			"timestamp": time.Now().Unix(),
+			"isActive":   room.IsActive,
+			"isHlsReady": room.IsHlsReady,
+			"timestamp":  time.Now().Unix(),
 		}
 		initialData, _ := json.Marshal(initialEvent)
 		fmt.Fprintf(w, "event: status\ndata: %s\n\n", initialData)

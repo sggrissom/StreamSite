@@ -98,6 +98,7 @@ type StreamState = {
   hlsInstance: any;
   streamUrl: string;
   isStreamLive: boolean;
+  isHlsReady: boolean;
   isPlaying: boolean;
   isBehindLive: boolean;
   secondsBehindLive: number;
@@ -110,6 +111,8 @@ type StreamState = {
   liveEdgeCheckInterval: number | null;
   offlineGraceTimer: number | null;
   isInOfflineGrace: boolean;
+  hlsReadyTimeout: number | null;
+  hlsReadyTimedOut: boolean;
   viewerCount: number;
   activeEmotes: EmoteAnimation[];
   emoteCounter: number; // Counter for unique emote IDs
@@ -125,6 +128,7 @@ type StreamState = {
   onContainerRef: (el: HTMLDivElement | null) => void;
   setStreamUrl: (url: string) => void;
   setStreamLive: (live: boolean) => void;
+  setHlsReady: (ready: boolean) => void;
   setViewerCount: (count: number) => void;
   addEmote: (emote: string) => void;
   removeEmote: (id: string) => void;
@@ -223,6 +227,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     hlsInstance: null,
     streamUrl: "",
     isStreamLive: false,
+    isHlsReady: false,
     isPlaying: false,
     isBehindLive: false,
     secondsBehindLive: 0,
@@ -235,6 +240,8 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     liveEdgeCheckInterval: null,
     offlineGraceTimer: null,
     isInOfflineGrace: false,
+    hlsReadyTimeout: null,
+    hlsReadyTimedOut: false,
     viewerCount: 0,
     activeEmotes: [],
     emoteCounter: 0,
@@ -299,6 +306,16 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
           state.connectionStartTime = Date.now();
         }
 
+        // Start HLS ready timeout (30 seconds)
+        if (!state.isHlsReady && state.hlsReadyTimeout === null) {
+          state.hlsReadyTimedOut = false;
+          state.hlsReadyTimeout = window.setTimeout(() => {
+            state.hlsReadyTimedOut = true;
+            state.hlsReadyTimeout = null;
+            vlens.scheduleRedraw();
+          }, 30000);
+        }
+
         if (state.videoElement && state.streamUrl) {
           initializePlayer(state, state.videoElement);
         }
@@ -315,6 +332,22 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
           cleanupPlayer(state);
           vlens.scheduleRedraw();
         }, 30000); // 30 seconds
+      }
+
+      vlens.scheduleRedraw();
+    },
+    setHlsReady: (ready: boolean) => {
+      if (state.isHlsReady === ready) return;
+
+      state.isHlsReady = ready;
+
+      if (ready) {
+        // HLS became ready - clear timeout
+        if (state.hlsReadyTimeout !== null) {
+          clearTimeout(state.hlsReadyTimeout);
+          state.hlsReadyTimeout = null;
+        }
+        state.hlsReadyTimedOut = false;
       }
 
       vlens.scheduleRedraw();
@@ -404,6 +437,13 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       state.eventSource.addEventListener("status", (e) => {
         const data = JSON.parse(e.data);
         state.setStreamLive(data.isActive);
+        if (data.isHlsReady !== undefined) {
+          state.setHlsReady(data.isHlsReady);
+        }
+      });
+
+      state.eventSource.addEventListener("stream_ready", (e) => {
+        state.setHlsReady(true);
       });
 
       state.eventSource.addEventListener("code_revoked", (e) => {
@@ -946,6 +986,7 @@ export function view(
     // Sync initial state from backend BEFORE connecting SSE
     // After SSE connects, it becomes the source of truth
     state.setStreamLive(data.room.isActive);
+    state.setHlsReady(data.room.isHlsReady || false);
 
     state.connectSSE();
   }
@@ -1058,6 +1099,28 @@ export function view(
               preload="auto"
               className="video-player"
             />
+
+            {/* Loading overlay when stream is starting */}
+            {state.isStreamLive && !state.isHlsReady && (
+              <div className="stream-loading-overlay">
+                {!state.hlsReadyTimedOut ? (
+                  <>
+                    <div className="loading-spinner"></div>
+                    <div className="loading-message">Preparing stream...</div>
+                  </>
+                ) : (
+                  <>
+                    <div className="loading-error-icon">⚠️</div>
+                    <div className="loading-message">
+                      Stream is taking longer than expected to start
+                    </div>
+                    <div className="loading-hint">
+                      Please check your streaming software and connection
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
             {/* Floating emote overlay */}
             <div className="emote-overlay">

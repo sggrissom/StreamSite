@@ -31,7 +31,8 @@ type Room struct {
 	RoomNumber int       `json:"roomNumber"`
 	Name       string    `json:"name"`
 	StreamKey  string    `json:"streamKey"`
-	IsActive   bool      `json:"isActive"` // Currently streaming
+	IsActive   bool      `json:"isActive"`   // RTMP connection active
+	IsHlsReady bool      `json:"isHlsReady"` // HLS segments available for playback
 	Creation   time.Time `json:"creation"`
 }
 
@@ -60,13 +61,16 @@ func PackStudio(self *Studio, buf *vpack.Buffer) {
 }
 
 func PackRoom(self *Room, buf *vpack.Buffer) {
-	vpack.Version(1, buf)
+	version := vpack.Version(2, buf)
 	vpack.Int(&self.Id, buf)
 	vpack.Int(&self.StudioId, buf)
 	vpack.Int(&self.RoomNumber, buf)
 	vpack.String(&self.Name, buf)
 	vpack.String(&self.StreamKey, buf)
 	vpack.Bool(&self.IsActive, buf)
+	if version >= 2 {
+		vpack.Bool(&self.IsHlsReady, buf)
+	}
 	vpack.Time(&self.Creation, buf)
 }
 
@@ -1249,6 +1253,52 @@ type SRSAuthResponse struct {
 	Code int `json:"code"` // 0 for success, non-zero for error
 }
 
+// pollAndBroadcastHlsReady polls for HLS availability and broadcasts when ready
+// This runs in a background goroutine to avoid blocking the stream authentication
+func pollAndBroadcastHlsReady(roomId int, studioId int) {
+	// Poll for up to 30 seconds (15 attempts * 2 seconds)
+	maxAttempts := 15
+	delayBetweenAttempts := 2 * time.Second
+
+	LogInfo(LogCategorySystem, "Starting HLS availability polling", map[string]interface{}{
+		"room_id":      roomId,
+		"hls_base_dir": cfg.HLSBaseDir,
+	})
+
+	hlsReady := PollForHlsAvailability(cfg.HLSBaseDir, int64(roomId), maxAttempts, delayBetweenAttempts)
+
+	if hlsReady {
+		// Update room in database
+		vbolt.WithWriteTx(appDb, func(tx *vbolt.Tx) {
+			var room Room
+			vbolt.Read(tx, RoomsBkt, roomId, &room)
+			if room.Id == 0 {
+				LogWarn(LogCategorySystem, "Room not found during HLS ready update", map[string]interface{}{
+					"room_id": roomId,
+				})
+				return
+			}
+
+			room.IsHlsReady = true
+			vbolt.Write(tx, RoomsBkt, room.Id, &room)
+			vbolt.TxCommit(tx)
+		})
+
+		// Broadcast stream_ready event
+		sseManager.BroadcastStreamReady(roomId, studioId)
+
+		LogInfo(LogCategorySystem, "HLS ready, broadcasted stream_ready event", map[string]interface{}{
+			"room_id": roomId,
+		})
+	} else {
+		LogWarn(LogCategorySystem, "HLS did not become available within timeout", map[string]interface{}{
+			"room_id":      roomId,
+			"max_attempts": maxAttempts,
+			"timeout_secs": maxAttempts * int(delayBetweenAttempts.Seconds()),
+		})
+	}
+}
+
 // ValidateStreamKey handles SRS on_publish callback to authenticate streams
 func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthResponse, err error) {
 	// Log the authentication attempt
@@ -1303,7 +1353,11 @@ func ValidateStreamKey(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAuthRes
 	}
 
 	// Broadcast SSE update to all connected viewers
-	sseManager.BroadcastRoomStatus(room.Id, true)
+	// Stream is active but HLS is not ready yet (will be set by pollAndBroadcastHlsReady)
+	sseManager.BroadcastRoomStatus(room.Id, true, false)
+
+	// Start background polling for HLS availability
+	go pollAndBroadcastHlsReady(room.Id, room.StudioId)
 
 	// Log successful authentication
 	LogInfo(LogCategorySystem, "SRS auth successful, room now live", map[string]interface{}{
@@ -1330,6 +1384,7 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 		// Mark room as inactive
 		vbeam.UseWriteTx(ctx)
 		room.IsActive = false
+		room.IsHlsReady = false
 		vbolt.Write(ctx.Tx, RoomsBkt, room.Id, &room)
 		vbolt.TxCommit(ctx.Tx)
 
@@ -1342,7 +1397,7 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 		}
 
 		// Broadcast SSE update to all connected viewers
-		sseManager.BroadcastRoomStatus(room.Id, false)
+		sseManager.BroadcastRoomStatus(room.Id, false, false)
 
 		LogInfo(LogCategorySystem, "SRS stream ended, room now offline", map[string]interface{}{
 			"room_id":    room.Id,

@@ -481,6 +481,7 @@ export interface Room {
     name: string
     streamKey: string
     isActive: boolean
+    isHlsReady: boolean
     creation: string
 }
 
@@ -501,6 +502,7 @@ export interface RoomWithStudio {
     name: string
     streamKey: string
     isActive: boolean
+    isHlsReady: boolean
     creation: string
     studioName: string
 }
