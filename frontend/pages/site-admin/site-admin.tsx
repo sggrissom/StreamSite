@@ -436,6 +436,15 @@ export function view(
             <p className="site-admin-description">
               Manage all studios, users, and system-wide settings
             </p>
+            <div style={{ marginTop: "1rem" }}>
+              <a
+                href="/site-admin/buckets"
+                className="btn btn-secondary btn-sm"
+                style={{ textDecoration: "none" }}
+              >
+                🗄️ Database Bucket Viewer
+              </a>
+            </div>
           </div>
 
           {/* Navigation Tabs */}

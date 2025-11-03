@@ -482,9 +482,268 @@ func GetSitePerformanceMetrics(ctx *vbeam.Context, req GetSitePerformanceMetrics
 	return
 }
 
+// BucketInfo describes a database bucket or index
+type BucketInfo struct {
+	Name        string `json:"name"`
+	Description string `json:"description"`
+	KeyType     string `json:"keyType"`   // "int" or "string"
+	ValueType   string `json:"valueType"` // e.g., "User", "Room", "[]byte"
+	IsIndex     bool   `json:"isIndex"`
+}
+
+// ListBucketsRequest is the request for ListBuckets
+type ListBucketsRequest struct{}
+
+// ListBucketsResponse is the response for ListBuckets
+type ListBucketsResponse struct {
+	Buckets []BucketInfo `json:"buckets"`
+}
+
+// ListBuckets returns a list of all database buckets and indexes.
+// Only accessible by site admins.
+func ListBuckets(ctx *vbeam.Context, req ListBucketsRequest) (resp ListBucketsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("Authentication required")
+	}
+
+	// Only site admins can access bucket viewer
+	if caller.Role != RoleSiteAdmin {
+		return resp, errors.New("Only site admins can access bucket viewer")
+	}
+
+	// Hardcoded list of all buckets and indexes
+	resp.Buckets = []BucketInfo{
+		// Studios & Rooms
+		{Name: "studios", Description: "Studios (organizations)", KeyType: "int", ValueType: "Studio", IsIndex: false},
+		{Name: "rooms", Description: "Streaming rooms", KeyType: "int", ValueType: "Room", IsIndex: false},
+		{Name: "streams", Description: "Stream history records", KeyType: "int", ValueType: "Stream", IsIndex: false},
+		{Name: "room_stream_keys", Description: "Stream key lookup", KeyType: "string", ValueType: "int (roomId)", IsIndex: false},
+
+		// Analytics
+		{Name: "room_analytics", Description: "Room viewing analytics", KeyType: "int", ValueType: "RoomAnalytics", IsIndex: false},
+		{Name: "studio_analytics", Description: "Studio aggregated analytics", KeyType: "int", ValueType: "StudioAnalytics", IsIndex: false},
+		{Name: "viewer_sessions", Description: "Active viewer sessions", KeyType: "string", ValueType: "ViewerSession", IsIndex: false},
+
+		// Camera & Membership
+		{Name: "camera_config", Description: "RTSP camera configurations", KeyType: "int", ValueType: "CameraConfig", IsIndex: false},
+		{Name: "memberships", Description: "Studio memberships", KeyType: "int", ValueType: "StudioMembership", IsIndex: false},
+
+		// Code Access System
+		{Name: "access_codes", Description: "Temporary access codes", KeyType: "string", ValueType: "AccessCode", IsIndex: false},
+		{Name: "code_sessions", Description: "Code-based sessions", KeyType: "string", ValueType: "CodeSession", IsIndex: false},
+		{Name: "code_analytics", Description: "Code usage analytics", KeyType: "string", ValueType: "CodeAnalytics", IsIndex: false},
+		{Name: "user_code_sessions", Description: "User code session mapping", KeyType: "int", ValueType: "string (token)", IsIndex: false},
+
+		// Users & Auth
+		{Name: "users", Description: "User accounts", KeyType: "int", ValueType: "User", IsIndex: false},
+		{Name: "emails", Description: "Email to userId lookup", KeyType: "string", ValueType: "int (userId)", IsIndex: false},
+		{Name: "refresh_tokens", Description: "User refresh tokens", KeyType: "int", ValueType: "RefreshToken", IsIndex: false},
+		{Name: "refresh_token_lookup", Description: "Token string to userId lookup", KeyType: "string", ValueType: "int (userId)", IsIndex: false},
+
+		// Indexes
+		{Name: "sessions_by_room", Description: "Index: roomId -> sessionKeys", KeyType: "int", ValueType: "[]string", IsIndex: true},
+		{Name: "sessions_by_code", Description: "Index: code -> sessionKeys", KeyType: "string", ValueType: "[]string", IsIndex: true},
+		{Name: "refresh_tokens_by_user", Description: "Index: userId -> tokenIds", KeyType: "int", ValueType: "[]int", IsIndex: true},
+		{Name: "rooms_by_studio", Description: "Index: studioId -> roomIds", KeyType: "int", ValueType: "[]int", IsIndex: true},
+		{Name: "streams_by_studio", Description: "Index: studioId -> streamIds", KeyType: "int", ValueType: "[]int", IsIndex: true},
+		{Name: "streams_by_room", Description: "Index: roomId -> streamIds", KeyType: "int", ValueType: "[]int", IsIndex: true},
+		{Name: "codes_by_room", Description: "Index: roomId -> codes", KeyType: "int", ValueType: "[]string", IsIndex: true},
+		{Name: "codes_by_studio", Description: "Index: studioId -> codes", KeyType: "int", ValueType: "[]string", IsIndex: true},
+		{Name: "codes_by_creator", Description: "Index: userId -> codes", KeyType: "int", ValueType: "[]string", IsIndex: true},
+		{Name: "memberships_by_user", Description: "Index: userId -> membershipIds", KeyType: "int", ValueType: "[]int", IsIndex: true},
+		{Name: "memberships_by_studio", Description: "Index: studioId -> membershipIds", KeyType: "int", ValueType: "[]int", IsIndex: true},
+	}
+
+	// Log the access
+	LogInfo(LogCategorySystem, "Bucket list accessed", map[string]interface{}{
+		"requestedBy": caller.Id,
+		"userEmail":   caller.Email,
+	})
+
+	return
+}
+
+// BucketEntry represents a key-value entry in a bucket
+type BucketEntry struct {
+	Key   interface{} `json:"key"`   // Can be int or string
+	Value interface{} `json:"value"` // JSON representation of the value
+}
+
+// GetBucketDataRequest is the request for GetBucketData
+type GetBucketDataRequest struct {
+	BucketName string `json:"bucketName"`
+}
+
+// GetBucketDataResponse is the response for GetBucketData
+type GetBucketDataResponse struct {
+	Entries []BucketEntry `json:"entries"`
+	Total   int           `json:"total"`
+}
+
+// GetBucketData retrieves all data from a specific bucket.
+// Only accessible by site admins.
+func GetBucketData(ctx *vbeam.Context, req GetBucketDataRequest) (resp GetBucketDataResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("Authentication required")
+	}
+
+	// Only site admins can access bucket data
+	if caller.Role != RoleSiteAdmin {
+		return resp, errors.New("Only site admins can access bucket data")
+	}
+
+	// Initialize response
+	resp.Entries = []BucketEntry{}
+
+	// Check if this is an index (indexes cannot be directly iterated)
+	switch req.BucketName {
+	case "sessions_by_room", "sessions_by_code", "refresh_tokens_by_user",
+		"rooms_by_studio", "streams_by_studio", "streams_by_room",
+		"codes_by_room", "codes_by_studio", "codes_by_creator",
+		"memberships_by_user", "memberships_by_studio":
+		return resp, errors.New("Indexes cannot be directly iterated. Use the corresponding bucket instead.")
+	}
+
+	// Use switch statement to handle different buckets
+	switch req.BucketName {
+	case "studios":
+		vbolt.IterateAll(ctx.Tx, StudiosBkt, func(id int, studio Studio) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: studio})
+			return true
+		})
+
+	case "rooms":
+		vbolt.IterateAll(ctx.Tx, RoomsBkt, func(id int, room Room) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: room})
+			return true
+		})
+
+	case "streams":
+		vbolt.IterateAll(ctx.Tx, StreamsBkt, func(id int, stream Stream) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: stream})
+			return true
+		})
+
+	case "room_stream_keys":
+		vbolt.IterateAll(ctx.Tx, RoomStreamKeyBkt, func(key string, roomId int) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: key, Value: roomId})
+			return true
+		})
+
+	case "room_analytics":
+		vbolt.IterateAll(ctx.Tx, RoomAnalyticsBkt, func(id int, analytics RoomAnalytics) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: analytics})
+			return true
+		})
+
+	case "studio_analytics":
+		vbolt.IterateAll(ctx.Tx, StudioAnalyticsBkt, func(id int, analytics StudioAnalytics) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: analytics})
+			return true
+		})
+
+	case "viewer_sessions":
+		vbolt.IterateAll(ctx.Tx, ViewerSessionsBkt, func(key string, session ViewerSession) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: key, Value: session})
+			return true
+		})
+
+	case "camera_config":
+		vbolt.IterateAll(ctx.Tx, CameraConfigBkt, func(id int, config CameraConfig) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: config})
+			return true
+		})
+
+	case "memberships":
+		vbolt.IterateAll(ctx.Tx, MembershipBkt, func(id int, membership StudioMembership) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: membership})
+			return true
+		})
+
+	case "access_codes":
+		vbolt.IterateAll(ctx.Tx, AccessCodesBkt, func(code string, accessCode AccessCode) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: code, Value: accessCode})
+			return true
+		})
+
+	case "code_sessions":
+		vbolt.IterateAll(ctx.Tx, CodeSessionsBkt, func(token string, session CodeSession) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: token, Value: session})
+			return true
+		})
+
+	case "code_analytics":
+		vbolt.IterateAll(ctx.Tx, CodeAnalyticsBkt, func(code string, analytics CodeAnalytics) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: code, Value: analytics})
+			return true
+		})
+
+	case "user_code_sessions":
+		vbolt.IterateAll(ctx.Tx, UserCodeSessionsBkt, func(userId int, token string) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: userId, Value: token})
+			return true
+		})
+
+	case "users":
+		vbolt.IterateAll(ctx.Tx, UsersBkt, func(id int, user User) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: user})
+			return true
+		})
+
+	case "emails":
+		vbolt.IterateAll(ctx.Tx, EmailBkt, func(email string, userId int) bool {
+			resp.Entries = append(resp.Entries, BucketEntry{Key: email, Value: userId})
+			return true
+		})
+
+	case "refresh_tokens":
+		vbolt.IterateAll(ctx.Tx, RefreshTokenBkt, func(id int, token RefreshToken) bool {
+			// Mask sensitive token strings
+			maskedToken := token
+			if len(maskedToken.Token) > 8 {
+				maskedToken.Token = maskedToken.Token[:8] + "..." + maskedToken.Token[len(maskedToken.Token)-8:]
+			}
+			resp.Entries = append(resp.Entries, BucketEntry{Key: id, Value: maskedToken})
+			return true
+		})
+
+	case "refresh_token_lookup":
+		vbolt.IterateAll(ctx.Tx, RefreshTokenByTokenBkt, func(token string, userId int) bool {
+			// Mask token in key
+			maskedKey := token
+			if len(maskedKey) > 16 {
+				maskedKey = maskedKey[:8] + "..." + maskedKey[len(maskedKey)-8:]
+			}
+			resp.Entries = append(resp.Entries, BucketEntry{Key: maskedKey, Value: userId})
+			return true
+		})
+
+	default:
+		return resp, errors.New("Unknown bucket: " + req.BucketName)
+	}
+
+	resp.Total = len(resp.Entries)
+
+	// Log the access
+	LogInfo(LogCategorySystem, "Bucket data accessed", map[string]interface{}{
+		"requestedBy": caller.Id,
+		"userEmail":   caller.Email,
+		"bucketName":  req.BucketName,
+		"entryCount":  resp.Total,
+	})
+
+	return
+}
+
 // RegisterAdminMethods registers all admin-related API procedures
 func RegisterAdminMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, RecalculateViewerCounts)
 	vbeam.RegisterProc(app, GetSystemLogs)
 	vbeam.RegisterProc(app, GetSitePerformanceMetrics)
+	vbeam.RegisterProc(app, ListBuckets)
+	vbeam.RegisterProc(app, GetBucketData)
 }

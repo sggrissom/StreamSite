@@ -404,6 +404,22 @@ export interface GetSitePerformanceMetricsResponse {
     perStudio: StudioPerformanceMetrics[]
 }
 
+export interface ListBucketsRequest {
+}
+
+export interface ListBucketsResponse {
+    buckets: BucketInfo[]
+}
+
+export interface GetBucketDataRequest {
+    bucketName: string
+}
+
+export interface GetBucketDataResponse {
+    entries: BucketEntry[]
+    total: number
+}
+
 export interface SendEmoteRequest {
     roomId: number
     emote: string
@@ -672,6 +688,19 @@ export interface StudioPerformanceMetrics {
     avgErrorsPerSession: number
 }
 
+export interface BucketInfo {
+    name: string
+    description: string
+    keyType: string
+    valueType: string
+    isIndex: boolean
+}
+
+export interface BucketEntry {
+    key: any
+    value: any
+}
+
 export interface TranscoderStatus {
     roomId: string
     streamKey: string
@@ -842,6 +871,14 @@ export async function GetSystemLogs(data: GetSystemLogsRequest): Promise<rpc.Res
 
 export async function GetSitePerformanceMetrics(data: GetSitePerformanceMetricsRequest): Promise<rpc.Response<GetSitePerformanceMetricsResponse>> {
     return await rpc.call<GetSitePerformanceMetricsResponse>('GetSitePerformanceMetrics', JSON.stringify(data));
+}
+
+export async function ListBuckets(data: ListBucketsRequest): Promise<rpc.Response<ListBucketsResponse>> {
+    return await rpc.call<ListBucketsResponse>('ListBuckets', JSON.stringify(data));
+}
+
+export async function GetBucketData(data: GetBucketDataRequest): Promise<rpc.Response<GetBucketDataResponse>> {
+    return await rpc.call<GetBucketDataResponse>('GetBucketData', JSON.stringify(data));
 }
 
 export async function SendEmote(data: SendEmoteRequest): Promise<rpc.Response<SendEmoteResponse>> {
