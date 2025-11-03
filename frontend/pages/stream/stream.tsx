@@ -116,6 +116,7 @@ type StreamState = {
   viewerCount: number;
   activeEmotes: EmoteAnimation[];
   emoteCounter: number; // Counter for unique emote IDs
+  ignoreNextEmote: string | null; // Ignore next SSE emote matching this (our own emote coming back)
   controlsVisible: boolean;
   controlsAutoHideTimer: number | null;
   statsVisible: boolean;
@@ -245,6 +246,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     viewerCount: 0,
     activeEmotes: [],
     emoteCounter: 0,
+    ignoreNextEmote: null,
     controlsVisible: true,
     controlsAutoHideTimer: null,
     statsVisible: false,
@@ -391,6 +393,9 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       vlens.scheduleRedraw();
     },
     sendEmote: (emote: string) => {
+      // Mark this emote to be ignored when it comes back via SSE
+      state.ignoreNextEmote = emote;
+
       // Call API to broadcast emote
       server
         .SendEmote({
@@ -466,7 +471,16 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
       state.eventSource.addEventListener("emote", (e) => {
         const data = JSON.parse(e.data);
-        state.addEmote(data.emote);
+        const emote = data.emote;
+
+        // Check if this is our own emote coming back
+        if (emote === state.ignoreNextEmote) {
+          state.ignoreNextEmote = null; // Clear the flag
+          return; // Skip display (already shown locally)
+        }
+
+        // This is an emote from another viewer - display it
+        state.addEmote(emote);
       });
 
       state.eventSource.onerror = (err) => {
