@@ -367,6 +367,13 @@ export interface GetStudioAnalyticsResponse {
     studioName: string
 }
 
+export interface ReportStreamMetricsRequest {
+    metrics: StreamMetrics
+}
+
+export interface ReportStreamMetricsResponse {
+}
+
 export interface RecalculateViewerCountsRequest {
     studioId: number
 }
@@ -557,6 +564,19 @@ export interface RoomAnalytics {
     lastStreamAt: string
     streamStartedAt: string
     totalStreamMinutes: number
+    avgTimeToFirstFrame: number
+    startupAttempts: number
+    startupFailures: number
+    avgRebufferRatio: number
+    totalRebufferEvents: number
+    totalRebufferSeconds: number
+    avgBitrateMbps: number
+    quality480pSeconds: number
+    quality720pSeconds: number
+    quality1080pSeconds: number
+    totalErrors: number
+    networkErrors: number
+    mediaErrors: number
 }
 
 export interface StudioAnalytics {
@@ -569,6 +589,34 @@ export interface StudioAnalytics {
     totalRooms: number
     activeRooms: number
     totalStreamMinutes: number
+    avgTimeToFirstFrame: number
+    startupAttempts: number
+    startupFailures: number
+    avgRebufferRatio: number
+    totalRebufferEvents: number
+    totalRebufferSeconds: number
+    avgBitrateMbps: number
+    quality480pSeconds: number
+    quality720pSeconds: number
+    quality1080pSeconds: number
+    totalErrors: number
+    networkErrors: number
+    mediaErrors: number
+}
+
+export interface StreamMetrics {
+    roomId: number
+    timeToFirstFrame: number
+    startupSucceeded: boolean
+    rebufferEvents: number
+    rebufferSeconds: number
+    watchSeconds: number
+    seconds480p: number
+    seconds720p: number
+    seconds1080p: number
+    avgBitrate: number
+    networkErrors: number
+    mediaErrors: number
 }
 
 export interface LogEntry {
@@ -736,6 +784,10 @@ export async function GetRoomAnalytics(data: GetRoomAnalyticsRequest): Promise<r
 
 export async function GetStudioAnalytics(data: GetStudioAnalyticsRequest): Promise<rpc.Response<GetStudioAnalyticsResponse>> {
     return await rpc.call<GetStudioAnalyticsResponse>('GetStudioAnalytics', JSON.stringify(data));
+}
+
+export async function ReportStreamMetrics(data: ReportStreamMetricsRequest): Promise<rpc.Response<ReportStreamMetricsResponse>> {
+    return await rpc.call<ReportStreamMetricsResponse>('ReportStreamMetrics', JSON.stringify(data));
 }
 
 export async function RecalculateViewerCounts(data: RecalculateViewerCountsRequest): Promise<rpc.Response<RecalculateViewerCountsResponse>> {

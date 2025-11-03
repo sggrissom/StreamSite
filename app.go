@@ -64,6 +64,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.RegisterCameraConfigMethods(app)
 	backend.RegisterIngestMethods(app)
 	backend.RegisterAnalyticsMethods(app)
+	backend.RegisterStreamMetricsMethods(app)
 	backend.RegisterAdminMethods(app)
 	backend.RegisterEmoteMethods(app)
 	backend.RegisterRoomStreamProxy(app)

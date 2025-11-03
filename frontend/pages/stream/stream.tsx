@@ -125,6 +125,22 @@ type StreamState = {
   connectionStartTime: number | null;
   streamStartTime: number | null;
   keydownHandler: ((e: KeyboardEvent) => void) | null;
+
+  // Performance Metrics Tracking
+  metricsPlayAttemptStart: number | null; // When play() was called
+  metricsTimeToFirstFrame: number; // Milliseconds to first frame (-1 if failed)
+  metricsStartupSucceeded: boolean; // Whether playback started
+  metricsRebufferEvents: number; // Count of buffering interruptions
+  metricsLastBufferStart: number | null; // When current buffer started
+  metricsTotalRebufferMs: number; // Total time spent buffering
+  metricsWatchStartTime: number | null; // When viewing started
+  metricsQualitySeconds: { [key: string]: number }; // Seconds at each quality
+  metricsLastQualitySwitch: number | null; // When last quality change happened
+  metricsCurrentQuality: string; // Current quality level (480p/720p/1080p)
+  metricsNetworkErrors: number; // Network/loading errors
+  metricsMediaErrors: number; // Decoding/format errors
+  metricsReportInterval: number | null; // Periodic metrics reporting timer
+  metricsReported: boolean; // Whether metrics have been sent
   onVideoRef: (el: HTMLVideoElement | null) => void;
   onContainerRef: (el: HTMLDivElement | null) => void;
   setStreamUrl: (url: string) => void;
@@ -255,6 +271,23 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     connectionStartTime: null,
     streamStartTime: null,
     keydownHandler: null,
+
+    // Performance Metrics Tracking - Initialize
+    metricsPlayAttemptStart: null,
+    metricsTimeToFirstFrame: -1,
+    metricsStartupSucceeded: false,
+    metricsRebufferEvents: 0,
+    metricsLastBufferStart: null,
+    metricsTotalRebufferMs: 0,
+    metricsWatchStartTime: null,
+    metricsQualitySeconds: {},
+    metricsLastQualitySwitch: null,
+    metricsCurrentQuality: "unknown",
+    metricsNetworkErrors: 0,
+    metricsMediaErrors: 0,
+    metricsReportInterval: null,
+    metricsReported: false,
+
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
 
@@ -783,6 +816,15 @@ function cleanupPlayer(state: StreamState) {
     state.keydownHandler = null;
   }
 
+  // Report final metrics before cleanup
+  reportMetrics(state);
+
+  // Clear metrics reporting interval
+  if (state.metricsReportInterval !== null) {
+    clearInterval(state.metricsReportInterval);
+    state.metricsReportInterval = null;
+  }
+
   if (state.hlsInstance?.destroy) {
     try {
       state.hlsInstance.destroy();
@@ -813,6 +855,89 @@ function loadHlsOnce(): Promise<any> {
   return w.__hlsPromise;
 }
 
+// Helper: Update quality tracking (accumulate seconds at each quality level)
+function updateQualityTracking(state: StreamState) {
+  if (
+    state.metricsLastQualitySwitch !== null &&
+    state.metricsCurrentQuality !== "unknown"
+  ) {
+    const now = Date.now();
+    const secondsAtQuality = (now - state.metricsLastQualitySwitch) / 1000;
+    const qualityKey = state.metricsCurrentQuality;
+    state.metricsQualitySeconds[qualityKey] =
+      (state.metricsQualitySeconds[qualityKey] || 0) + secondsAtQuality;
+  }
+  state.metricsLastQualitySwitch = Date.now();
+}
+
+// Helper: Map HLS level height to quality string
+function getQualityString(height: number): string {
+  if (height >= 1080) return "1080p";
+  if (height >= 720) return "720p";
+  if (height >= 480) return "480p";
+  return "unknown";
+}
+
+// Helper: Report metrics to backend
+function reportMetrics(state: StreamState) {
+  if (state.metricsReported || state.roomId === 0) return;
+
+  // Update final quality tracking
+  updateQualityTracking(state);
+
+  // Calculate total watch time
+  const watchSeconds = state.metricsWatchStartTime
+    ? Math.floor((Date.now() - state.metricsWatchStartTime) / 1000)
+    : 0;
+
+  // Calculate rebuffer time in seconds
+  const rebufferSeconds = Math.floor(state.metricsTotalRebufferMs / 1000);
+
+  // Calculate average bitrate from quality distribution
+  const totalQualitySeconds =
+    (state.metricsQualitySeconds["480p"] || 0) +
+    (state.metricsQualitySeconds["720p"] || 0) +
+    (state.metricsQualitySeconds["1080p"] || 0);
+
+  let avgBitrate = 0;
+  if (totalQualitySeconds > 0) {
+    // Weighted average based on nominal bitrates
+    avgBitrate =
+      ((state.metricsQualitySeconds["480p"] || 0) * 1.2 +
+        (state.metricsQualitySeconds["720p"] || 0) * 2.5 +
+        (state.metricsQualitySeconds["1080p"] || 0) * 5.0) /
+      totalQualitySeconds;
+  }
+
+  const metrics = {
+    roomId: state.roomId,
+    timeToFirstFrame: state.metricsTimeToFirstFrame,
+    startupSucceeded: state.metricsStartupSucceeded,
+    rebufferEvents: state.metricsRebufferEvents,
+    rebufferSeconds: rebufferSeconds,
+    watchSeconds: watchSeconds,
+    seconds480p: Math.floor(state.metricsQualitySeconds["480p"] || 0),
+    seconds720p: Math.floor(state.metricsQualitySeconds["720p"] || 0),
+    seconds1080p: Math.floor(state.metricsQualitySeconds["1080p"] || 0),
+    avgBitrate: avgBitrate,
+    networkErrors: state.metricsNetworkErrors,
+    mediaErrors: state.metricsMediaErrors,
+  };
+
+  // Only report if we have meaningful data
+  if (watchSeconds > 5 || state.metricsStartupSucceeded) {
+    server
+      .ReportStreamMetrics({ metrics })
+      .then(() => {
+        console.log("Metrics reported successfully", metrics);
+        state.metricsReported = true;
+      })
+      .catch((err: any) => {
+        console.warn("Failed to report metrics:", err);
+      });
+  }
+}
+
 function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   const url = state.streamUrl;
 
@@ -840,9 +965,47 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   // if unmounting, we're done
   if (!el) return;
 
-  // Add play/pause event listeners to track playing state
+  // Add play/pause event listeners to track playing state and metrics
   const handlePlay = () => {
     state.isPlaying = true;
+    vlens.scheduleRedraw();
+  };
+  const handlePlaying = () => {
+    state.isPlaying = true;
+
+    // Track Time To First Frame (TTFF)
+    if (
+      state.metricsPlayAttemptStart !== null &&
+      !state.metricsStartupSucceeded
+    ) {
+      const ttff = Date.now() - state.metricsPlayAttemptStart;
+      state.metricsTimeToFirstFrame = ttff;
+      state.metricsStartupSucceeded = true;
+      state.metricsWatchStartTime = Date.now();
+      console.log(`TTFF: ${ttff}ms`);
+    }
+
+    // Track end of buffering event
+    if (state.metricsLastBufferStart !== null) {
+      const bufferDuration = Date.now() - state.metricsLastBufferStart;
+      state.metricsTotalRebufferMs += bufferDuration;
+      state.metricsLastBufferStart = null;
+    }
+
+    vlens.scheduleRedraw();
+  };
+  const handleWaiting = () => {
+    state.isPlaying = false;
+
+    // Track start of buffering event (only if playback has started)
+    if (
+      state.metricsStartupSucceeded &&
+      state.metricsLastBufferStart === null
+    ) {
+      state.metricsLastBufferStart = Date.now();
+      state.metricsRebufferEvents++;
+    }
+
     vlens.scheduleRedraw();
   };
   const handlePause = () => {
@@ -863,14 +1026,18 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   };
   el.addEventListener("play", handlePlay);
   el.addEventListener("pause", handlePause);
-  el.addEventListener("playing", handlePlay);
-  el.addEventListener("waiting", handlePause);
+  el.addEventListener("playing", handlePlaying);
+  el.addEventListener("waiting", handleWaiting);
   el.addEventListener("ended", handleEnded);
 
   // init exactly once for this element
   if (el.canPlayType("application/vnd.apple.mpegurl")) {
     // Safari native HLS
     el.src = url;
+
+    // Track play attempt start (for TTFF measurement)
+    state.metricsPlayAttemptStart = Date.now();
+
     el.play().catch((e) => console.warn("Autoplay blocked:", e));
     return;
   }
@@ -890,16 +1057,46 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
         // Reset retry counter on successful load
         state.retryCount = 0;
 
+        // Track play attempt start (for TTFF measurement)
+        state.metricsPlayAttemptStart = Date.now();
+
         el.play().catch((e) => {
           // Autoplay might be blocked by browser policy
           console.warn("Autoplay blocked:", e);
         });
       });
 
+      // Track quality level switches
+      state.hlsInstance.on(Hls.Events.LEVEL_SWITCHED, (_e: any, data: any) => {
+        if (data.level >= 0 && state.hlsInstance.levels[data.level]) {
+          const level = state.hlsInstance.levels[data.level];
+          const quality = getQualityString(level.height);
+
+          // Update tracking for previous quality
+          if (state.metricsCurrentQuality !== "unknown") {
+            updateQualityTracking(state);
+          }
+
+          state.metricsCurrentQuality = quality;
+          state.metricsLastQualitySwitch = Date.now();
+
+          console.log(`Quality switched to ${quality} (${level.height}p)`);
+        }
+      });
+
       state.hlsInstance.loadSource(url);
 
       // optional: mild error recovery (prevents rapid reload storms)
       state.hlsInstance.on(Hls.Events.ERROR, (_e: any, data: any) => {
+        // Track errors for metrics
+        if (data?.fatal) {
+          if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+            state.metricsNetworkErrors++;
+          } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+            state.metricsMediaErrors++;
+          }
+        }
+
         if (!data?.fatal) return;
         switch (data.type) {
           case Hls.ErrorTypes.NETWORK_ERROR:
@@ -1008,6 +1205,23 @@ export function view(
     state.setHlsReady(data.room.isHlsReady || false);
 
     state.connectSSE();
+
+    // Setup metrics reporting
+    // Report metrics when user leaves page
+    const handleBeforeUnload = () => {
+      reportMetrics(state);
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
+    // Report metrics periodically (every 5 minutes) for long sessions
+    if (state.metricsReportInterval === null) {
+      state.metricsReportInterval = window.setInterval(
+        () => {
+          reportMetrics(state);
+        },
+        5 * 60 * 1000,
+      ); // 5 minutes
+    }
   }
 
   // Build stream URL from room data

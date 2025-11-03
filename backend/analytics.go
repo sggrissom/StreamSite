@@ -31,6 +31,21 @@ type RoomAnalytics struct {
 	LastStreamAt           time.Time `json:"lastStreamAt"`       // Last IsActive=true
 	StreamStartedAt        time.Time `json:"streamStartedAt"`    // When current stream began
 	TotalStreamMinutes     int       `json:"totalStreamMinutes"` // Lifetime streaming duration
+
+	// Performance Metrics (QoE - Quality of Experience)
+	AvgTimeToFirstFrame  int     `json:"avgTimeToFirstFrame"`  // Milliseconds (weighted average)
+	StartupAttempts      int     `json:"startupAttempts"`      // Total playback attempts
+	StartupFailures      int     `json:"startupFailures"`      // Failed playback starts
+	AvgRebufferRatio     float64 `json:"avgRebufferRatio"`     // Percentage (0-100, weighted average)
+	TotalRebufferEvents  int     `json:"totalRebufferEvents"`  // Cumulative buffering interruptions
+	TotalRebufferSeconds int     `json:"totalRebufferSeconds"` // Cumulative time spent buffering
+	AvgBitrateMbps       float64 `json:"avgBitrateMbps"`       // Average bitrate delivered (weighted average)
+	Quality480pSeconds   int     `json:"quality480pSeconds"`   // Time spent at 480p
+	Quality720pSeconds   int     `json:"quality720pSeconds"`   // Time spent at 720p
+	Quality1080pSeconds  int     `json:"quality1080pSeconds"`  // Time spent at 1080p
+	TotalErrors          int     `json:"totalErrors"`          // All playback errors
+	NetworkErrors        int     `json:"networkErrors"`        // Network/loading errors
+	MediaErrors          int     `json:"mediaErrors"`          // Decoding/format errors
 }
 
 // StudioAnalytics tracks aggregated statistics across all rooms in a studio
@@ -44,6 +59,21 @@ type StudioAnalytics struct {
 	TotalRooms             int `json:"totalRooms"`
 	ActiveRooms            int `json:"activeRooms"` // Currently streaming
 	TotalStreamMinutes     int `json:"totalStreamMinutes"`
+
+	// Performance Metrics (aggregated from all rooms)
+	AvgTimeToFirstFrame  int     `json:"avgTimeToFirstFrame"`  // Milliseconds (weighted average)
+	StartupAttempts      int     `json:"startupAttempts"`      // Total playback attempts
+	StartupFailures      int     `json:"startupFailures"`      // Failed playback starts
+	AvgRebufferRatio     float64 `json:"avgRebufferRatio"`     // Percentage (0-100, weighted average)
+	TotalRebufferEvents  int     `json:"totalRebufferEvents"`  // Cumulative buffering interruptions
+	TotalRebufferSeconds int     `json:"totalRebufferSeconds"` // Cumulative time spent buffering
+	AvgBitrateMbps       float64 `json:"avgBitrateMbps"`       // Average bitrate delivered (weighted average)
+	Quality480pSeconds   int     `json:"quality480pSeconds"`   // Time spent at 480p
+	Quality720pSeconds   int     `json:"quality720pSeconds"`   // Time spent at 720p
+	Quality1080pSeconds  int     `json:"quality1080pSeconds"`  // Time spent at 1080p
+	TotalErrors          int     `json:"totalErrors"`          // All playback errors
+	NetworkErrors        int     `json:"networkErrors"`        // Network/loading errors
+	MediaErrors          int     `json:"mediaErrors"`          // Decoding/format errors
 }
 
 // ViewerSession tracks individual viewer sessions for smart view counting
@@ -59,7 +89,7 @@ type ViewerSession struct {
 // Packing functions for vbolt serialization
 
 func PackRoomAnalytics(self *RoomAnalytics, buf *vpack.Buffer) {
-	vpack.Version(1, buf)
+	version := vpack.Version(2, buf)
 	vpack.Int(&self.RoomId, buf)
 	vpack.Int(&self.TotalViewsAllTime, buf)
 	vpack.Int(&self.TotalViewsThisMonth, buf)
@@ -71,10 +101,27 @@ func PackRoomAnalytics(self *RoomAnalytics, buf *vpack.Buffer) {
 	vpack.Time(&self.LastStreamAt, buf)
 	vpack.Time(&self.StreamStartedAt, buf)
 	vpack.Int(&self.TotalStreamMinutes, buf)
+
+	// Version 2: Performance metrics
+	if version >= 2 {
+		vpack.Int(&self.AvgTimeToFirstFrame, buf)
+		vpack.Int(&self.StartupAttempts, buf)
+		vpack.Int(&self.StartupFailures, buf)
+		vpack.Float64(&self.AvgRebufferRatio, buf)
+		vpack.Int(&self.TotalRebufferEvents, buf)
+		vpack.Int(&self.TotalRebufferSeconds, buf)
+		vpack.Float64(&self.AvgBitrateMbps, buf)
+		vpack.Int(&self.Quality480pSeconds, buf)
+		vpack.Int(&self.Quality720pSeconds, buf)
+		vpack.Int(&self.Quality1080pSeconds, buf)
+		vpack.Int(&self.TotalErrors, buf)
+		vpack.Int(&self.NetworkErrors, buf)
+		vpack.Int(&self.MediaErrors, buf)
+	}
 }
 
 func PackStudioAnalytics(self *StudioAnalytics, buf *vpack.Buffer) {
-	vpack.Version(1, buf)
+	version := vpack.Version(2, buf)
 	vpack.Int(&self.StudioId, buf)
 	vpack.Int(&self.TotalViewsAllTime, buf)
 	vpack.Int(&self.TotalViewsThisMonth, buf)
@@ -84,6 +131,23 @@ func PackStudioAnalytics(self *StudioAnalytics, buf *vpack.Buffer) {
 	vpack.Int(&self.TotalRooms, buf)
 	vpack.Int(&self.ActiveRooms, buf)
 	vpack.Int(&self.TotalStreamMinutes, buf)
+
+	// Version 2: Performance metrics
+	if version >= 2 {
+		vpack.Int(&self.AvgTimeToFirstFrame, buf)
+		vpack.Int(&self.StartupAttempts, buf)
+		vpack.Int(&self.StartupFailures, buf)
+		vpack.Float64(&self.AvgRebufferRatio, buf)
+		vpack.Int(&self.TotalRebufferEvents, buf)
+		vpack.Int(&self.TotalRebufferSeconds, buf)
+		vpack.Float64(&self.AvgBitrateMbps, buf)
+		vpack.Int(&self.Quality480pSeconds, buf)
+		vpack.Int(&self.Quality720pSeconds, buf)
+		vpack.Int(&self.Quality1080pSeconds, buf)
+		vpack.Int(&self.TotalErrors, buf)
+		vpack.Int(&self.NetworkErrors, buf)
+		vpack.Int(&self.MediaErrors, buf)
+	}
 }
 
 func PackViewerSession(self *ViewerSession, buf *vpack.Buffer) {
@@ -274,12 +338,17 @@ func UpdateStudioAnalyticsFromRoom(tx *vbolt.Tx, studioId int) {
 	studioAnalytics.StudioId = studioId
 	studioAnalytics.TotalRooms = len(rooms)
 
+	var totalStartupAttempts int
+	var weightedTTFF float64
+	var weightedRebufferRatio float64
+	var weightedBitrate float64
+
 	for _, room := range rooms {
 		// Load room analytics
 		var roomAnalytics RoomAnalytics
 		vbolt.Read(tx, RoomAnalyticsBkt, room.Id, &roomAnalytics)
 
-		// Aggregate
+		// Aggregate viewership stats
 		studioAnalytics.TotalViewsAllTime += roomAnalytics.TotalViewsAllTime
 		studioAnalytics.TotalViewsThisMonth += roomAnalytics.TotalViewsThisMonth
 		studioAnalytics.UniqueViewersAllTime += roomAnalytics.UniqueViewersAllTime
@@ -291,6 +360,34 @@ func UpdateStudioAnalyticsFromRoom(tx *vbolt.Tx, studioId int) {
 		if room.IsActive {
 			studioAnalytics.ActiveRooms++
 		}
+
+		// Aggregate performance metrics (weighted by number of startup attempts)
+		if roomAnalytics.StartupAttempts > 0 {
+			weight := float64(roomAnalytics.StartupAttempts)
+			weightedTTFF += float64(roomAnalytics.AvgTimeToFirstFrame) * weight
+			weightedRebufferRatio += roomAnalytics.AvgRebufferRatio * weight
+			weightedBitrate += roomAnalytics.AvgBitrateMbps * weight
+			totalStartupAttempts += roomAnalytics.StartupAttempts
+		}
+
+		// Sum cumulative performance metrics
+		studioAnalytics.StartupAttempts += roomAnalytics.StartupAttempts
+		studioAnalytics.StartupFailures += roomAnalytics.StartupFailures
+		studioAnalytics.TotalRebufferEvents += roomAnalytics.TotalRebufferEvents
+		studioAnalytics.TotalRebufferSeconds += roomAnalytics.TotalRebufferSeconds
+		studioAnalytics.Quality480pSeconds += roomAnalytics.Quality480pSeconds
+		studioAnalytics.Quality720pSeconds += roomAnalytics.Quality720pSeconds
+		studioAnalytics.Quality1080pSeconds += roomAnalytics.Quality1080pSeconds
+		studioAnalytics.TotalErrors += roomAnalytics.TotalErrors
+		studioAnalytics.NetworkErrors += roomAnalytics.NetworkErrors
+		studioAnalytics.MediaErrors += roomAnalytics.MediaErrors
+	}
+
+	// Calculate weighted averages for performance metrics
+	if totalStartupAttempts > 0 {
+		studioAnalytics.AvgTimeToFirstFrame = int(weightedTTFF / float64(totalStartupAttempts))
+		studioAnalytics.AvgRebufferRatio = weightedRebufferRatio / float64(totalStartupAttempts)
+		studioAnalytics.AvgBitrateMbps = weightedBitrate / float64(totalStartupAttempts)
 	}
 
 	// Save
