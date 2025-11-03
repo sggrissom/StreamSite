@@ -316,9 +316,9 @@ type StudioPerformanceMetrics struct {
 	AvgTimeToFirstFrame int     `json:"avgTimeToFirstFrame"` // ms
 	StartupSuccessRate  float64 `json:"startupSuccessRate"`  // percentage
 	AvgRebufferRatio    float64 `json:"avgRebufferRatio"`    // percentage
-	AvgBitrateMbps      float64 `json:"avgBitrateMbps"`      // Mbps
-	TotalErrors         int     `json:"totalErrors"`
-	ErrorRate           float64 `json:"errorRate"` // percentage
+	AvgBitrateMbps       float64 `json:"avgBitrateMbps"`       // Mbps
+	TotalErrors          int     `json:"totalErrors"`
+	AvgErrorsPerSession  float64 `json:"avgErrorsPerSession"`  // average errors per viewing session
 }
 
 // SitePerformanceMetrics contains aggregated performance metrics across the entire site
@@ -335,7 +335,7 @@ type SitePerformanceMetrics struct {
 	TotalErrors          int     `json:"totalErrors"`
 	NetworkErrors        int     `json:"networkErrors"`
 	MediaErrors          int     `json:"mediaErrors"`
-	ErrorRate            float64 `json:"errorRate"` // percentage
+	AvgErrorsPerSession  float64 `json:"avgErrorsPerSession"` // average errors per viewing session
 
 	// Quality distribution
 	Quality480pSeconds  int     `json:"quality480pSeconds"`
@@ -438,7 +438,7 @@ func GetSitePerformanceMetrics(ctx *vbeam.Context, req GetSitePerformanceMetrics
 		siteWide.AvgRebufferRatio = totalWeightedRebuffer / float64(totalStartupAttempts)
 		siteWide.AvgBitrateMbps = totalWeightedBitrate / float64(totalStartupAttempts)
 		siteWide.StartupSuccessRate = float64(siteWide.TotalStartupAttempts-siteWide.TotalStartupFailures) / float64(siteWide.TotalStartupAttempts) * 100
-		siteWide.ErrorRate = float64(siteWide.TotalErrors) / float64(siteWide.TotalStartupAttempts) * 100
+		siteWide.AvgErrorsPerSession = float64(siteWide.TotalErrors) / float64(siteWide.TotalStartupAttempts)
 	}
 
 	// Calculate quality distribution percentages
@@ -460,7 +460,7 @@ func GetSitePerformanceMetrics(ctx *vbeam.Context, req GetSitePerformanceMetrics
 			studioMetrics.AvgBitrateMbps = studioAnalytics.AvgBitrateMbps
 			studioMetrics.TotalErrors = studioAnalytics.TotalErrors
 			studioMetrics.StartupSuccessRate = float64(studioAnalytics.StartupAttempts-studioAnalytics.StartupFailures) / float64(studioAnalytics.StartupAttempts) * 100
-			studioMetrics.ErrorRate = float64(studioAnalytics.TotalErrors) / float64(studioAnalytics.StartupAttempts) * 100
+			studioMetrics.AvgErrorsPerSession = float64(studioAnalytics.TotalErrors) / float64(studioAnalytics.StartupAttempts)
 		}
 	}
 

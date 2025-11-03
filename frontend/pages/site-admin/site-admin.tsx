@@ -256,7 +256,7 @@ type PerformanceState = {
   perStudio: server.StudioPerformanceMetrics[];
   loading: boolean;
   error: string;
-  sortColumn: "studioName" | "ttff" | "rebuffer" | "bitrate" | "errorRate";
+  sortColumn: "studioName" | "ttff" | "rebuffer" | "bitrate" | "avgErrors";
   sortDirection: "asc" | "desc";
 };
 
@@ -293,7 +293,7 @@ async function loadPerformanceMetrics(state: PerformanceState) {
 
 function setSortColumn(
   state: PerformanceState,
-  column: "studioName" | "ttff" | "rebuffer" | "bitrate" | "errorRate",
+  column: "studioName" | "ttff" | "rebuffer" | "bitrate" | "avgErrors",
 ) {
   if (state.sortColumn === column) {
     state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
@@ -329,9 +329,9 @@ function getSortedStudios(
         aVal = a.avgBitrateMbps;
         bVal = b.avgBitrateMbps;
         break;
-      case "errorRate":
-        aVal = a.errorRate;
-        bVal = b.errorRate;
+      case "avgErrors":
+        aVal = a.avgErrorsPerSession;
+        bVal = b.avgErrorsPerSession;
         break;
       default:
         return 0;
@@ -355,6 +355,10 @@ function formatMilliseconds(value: number): string {
 
 function formatMbps(value: number): string {
   return value.toFixed(2) + " Mbps";
+}
+
+function formatNumber(value: number, decimals: number = 1): string {
+  return value.toFixed(decimals);
 }
 
 function getPerformanceClass(
@@ -894,11 +898,9 @@ export function view(
                     </div>
 
                     <div className="perf-metric-card">
-                      <div className="metric-label">Error Rate</div>
-                      <div
-                        className={`metric-value ${getPerformanceClass("errorRate", performanceState.siteWide.errorRate)}`}
-                      >
-                        {formatPercentage(performanceState.siteWide.errorRate)}
+                      <div className="metric-label">Avg Errors Per Session</div>
+                      <div className="metric-value">
+                        {formatNumber(performanceState.siteWide.avgErrorsPerSession)}
                       </div>
                       <div className="metric-context">
                         {performanceState.siteWide.totalErrors} errors total
@@ -1016,11 +1018,11 @@ export function view(
                               <th
                                 className="sortable"
                                 onClick={() =>
-                                  setSortColumn(performanceState, "errorRate")
+                                  setSortColumn(performanceState, "avgErrors")
                                 }
                               >
-                                Error Rate{" "}
-                                {performanceState.sortColumn === "errorRate" &&
+                                Avg Errors{" "}
+                                {performanceState.sortColumn === "avgErrors" &&
                                   (performanceState.sortDirection === "asc"
                                     ? "↑"
                                     : "↓")}
@@ -1065,13 +1067,8 @@ export function view(
                                     {formatPercentage(studio.avgRebufferRatio)}
                                   </td>
                                   <td>{formatMbps(studio.avgBitrateMbps)}</td>
-                                  <td
-                                    className={getPerformanceClass(
-                                      "errorRate",
-                                      studio.errorRate,
-                                    )}
-                                  >
-                                    {formatPercentage(studio.errorRate)}
+                                  <td>
+                                    {formatNumber(studio.avgErrorsPerSession)}
                                   </td>
                                   <td>{studio.totalErrors}</td>
                                 </tr>

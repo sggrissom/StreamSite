@@ -650,7 +650,7 @@ export interface SitePerformanceMetrics {
     totalErrors: number
     networkErrors: number
     mediaErrors: number
-    errorRate: number
+    avgErrorsPerSession: number
     quality480pSeconds: number
     quality720pSeconds: number
     quality1080pSeconds: number
@@ -669,7 +669,7 @@ export interface StudioPerformanceMetrics {
     avgRebufferRatio: number
     avgBitrateMbps: number
     totalErrors: number
-    errorRate: number
+    avgErrorsPerSession: number
 }
 
 export interface TranscoderStatus {
