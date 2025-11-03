@@ -396,6 +396,14 @@ export interface GetSystemLogsResponse {
     totalCount: number
 }
 
+export interface GetSitePerformanceMetricsRequest {
+}
+
+export interface GetSitePerformanceMetricsResponse {
+    siteWide: SitePerformanceMetrics
+    perStudio: StudioPerformanceMetrics[]
+}
+
 export interface SendEmoteRequest {
     roomId: number
     emote: string
@@ -630,6 +638,40 @@ export interface LogEntry {
     userAgent: string
 }
 
+export interface SitePerformanceMetrics {
+    avgTimeToFirstFrame: number
+    startupSuccessRate: number
+    avgRebufferRatio: number
+    avgBitrateMbps: number
+    totalStartupAttempts: number
+    totalStartupFailures: number
+    totalRebufferEvents: number
+    totalRebufferSeconds: number
+    totalErrors: number
+    networkErrors: number
+    mediaErrors: number
+    errorRate: number
+    quality480pSeconds: number
+    quality720pSeconds: number
+    quality1080pSeconds: number
+    quality480pPercent: number
+    quality720pPercent: number
+    quality1080pPercent: number
+    totalRoomsWithData: number
+}
+
+export interface StudioPerformanceMetrics {
+    studioId: number
+    studioName: string
+    totalRooms: number
+    avgTimeToFirstFrame: number
+    startupSuccessRate: number
+    avgRebufferRatio: number
+    avgBitrateMbps: number
+    totalErrors: number
+    errorRate: number
+}
+
 export interface TranscoderStatus {
     roomId: string
     streamKey: string
@@ -796,6 +838,10 @@ export async function RecalculateViewerCounts(data: RecalculateViewerCountsReque
 
 export async function GetSystemLogs(data: GetSystemLogsRequest): Promise<rpc.Response<GetSystemLogsResponse>> {
     return await rpc.call<GetSystemLogsResponse>('GetSystemLogs', JSON.stringify(data));
+}
+
+export async function GetSitePerformanceMetrics(data: GetSitePerformanceMetricsRequest): Promise<rpc.Response<GetSitePerformanceMetricsResponse>> {
+    return await rpc.call<GetSitePerformanceMetricsResponse>('GetSitePerformanceMetrics', JSON.stringify(data));
 }
 
 export async function SendEmote(data: SendEmoteRequest): Promise<rpc.Response<SendEmoteResponse>> {

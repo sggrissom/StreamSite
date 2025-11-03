@@ -308,8 +308,183 @@ func GetSystemLogs(ctx *vbeam.Context, req GetSystemLogsRequest) (resp GetSystem
 	return
 }
 
+// StudioPerformanceMetrics contains performance metrics for a single studio
+type StudioPerformanceMetrics struct {
+	StudioId            int     `json:"studioId"`
+	StudioName          string  `json:"studioName"`
+	TotalRooms          int     `json:"totalRooms"`
+	AvgTimeToFirstFrame int     `json:"avgTimeToFirstFrame"` // ms
+	StartupSuccessRate  float64 `json:"startupSuccessRate"`  // percentage
+	AvgRebufferRatio    float64 `json:"avgRebufferRatio"`    // percentage
+	AvgBitrateMbps      float64 `json:"avgBitrateMbps"`      // Mbps
+	TotalErrors         int     `json:"totalErrors"`
+	ErrorRate           float64 `json:"errorRate"` // percentage
+}
+
+// SitePerformanceMetrics contains aggregated performance metrics across the entire site
+type SitePerformanceMetrics struct {
+	// Site-wide aggregated metrics
+	AvgTimeToFirstFrame  int     `json:"avgTimeToFirstFrame"` // ms
+	StartupSuccessRate   float64 `json:"startupSuccessRate"`  // percentage
+	AvgRebufferRatio     float64 `json:"avgRebufferRatio"`    // percentage
+	AvgBitrateMbps       float64 `json:"avgBitrateMbps"`      // Mbps
+	TotalStartupAttempts int     `json:"totalStartupAttempts"`
+	TotalStartupFailures int     `json:"totalStartupFailures"`
+	TotalRebufferEvents  int     `json:"totalRebufferEvents"`
+	TotalRebufferSeconds int     `json:"totalRebufferSeconds"`
+	TotalErrors          int     `json:"totalErrors"`
+	NetworkErrors        int     `json:"networkErrors"`
+	MediaErrors          int     `json:"mediaErrors"`
+	ErrorRate            float64 `json:"errorRate"` // percentage
+
+	// Quality distribution
+	Quality480pSeconds  int     `json:"quality480pSeconds"`
+	Quality720pSeconds  int     `json:"quality720pSeconds"`
+	Quality1080pSeconds int     `json:"quality1080pSeconds"`
+	Quality480pPercent  float64 `json:"quality480pPercent"`
+	Quality720pPercent  float64 `json:"quality720pPercent"`
+	Quality1080pPercent float64 `json:"quality1080pPercent"`
+
+	// Count of rooms with data
+	TotalRoomsWithData int `json:"totalRoomsWithData"`
+}
+
+// GetSitePerformanceMetricsRequest is the request for GetSitePerformanceMetrics
+type GetSitePerformanceMetricsRequest struct {
+	// Empty for now, could add date range filters in future
+}
+
+// GetSitePerformanceMetricsResponse is the response for GetSitePerformanceMetrics
+type GetSitePerformanceMetricsResponse struct {
+	SiteWide  SitePerformanceMetrics     `json:"siteWide"`
+	PerStudio []StudioPerformanceMetrics `json:"perStudio"`
+}
+
+// GetSitePerformanceMetrics retrieves aggregated performance metrics across the entire site.
+// Only accessible by site admins.
+func GetSitePerformanceMetrics(ctx *vbeam.Context, req GetSitePerformanceMetricsRequest) (resp GetSitePerformanceMetricsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("Authentication required")
+	}
+
+	// Only site admins can access site-wide performance metrics
+	if caller.Role != RoleSiteAdmin {
+		return resp, errors.New("Only site admins can access site-wide performance metrics")
+	}
+
+	// Aggregate site-wide metrics
+	var siteWide SitePerformanceMetrics
+	var totalWeightedTTFF, totalWeightedRebuffer, totalWeightedBitrate float64
+	var totalStartupAttempts int
+
+	// Map to accumulate per-studio metrics
+	studioMetricsMap := make(map[int]*StudioPerformanceMetrics)
+
+	// Iterate through all room analytics
+	vbolt.IterateAll(ctx.Tx, RoomAnalyticsBkt, func(roomId int, analytics RoomAnalytics) bool {
+		// Skip rooms with no performance data
+		if analytics.StartupAttempts == 0 {
+			return true
+		}
+
+		// Get room to find studio
+		room := GetRoom(ctx.Tx, roomId)
+		if room.Id == 0 {
+			return true
+		}
+
+		// Accumulate site-wide metrics (weighted averages)
+		weight := float64(analytics.StartupAttempts)
+		totalWeightedTTFF += float64(analytics.AvgTimeToFirstFrame) * weight
+		totalWeightedRebuffer += analytics.AvgRebufferRatio * weight
+		totalWeightedBitrate += analytics.AvgBitrateMbps * weight
+		totalStartupAttempts += analytics.StartupAttempts
+
+		// Accumulate totals
+		siteWide.TotalStartupAttempts += analytics.StartupAttempts
+		siteWide.TotalStartupFailures += analytics.StartupFailures
+		siteWide.TotalRebufferEvents += analytics.TotalRebufferEvents
+		siteWide.TotalRebufferSeconds += analytics.TotalRebufferSeconds
+		siteWide.TotalErrors += analytics.TotalErrors
+		siteWide.NetworkErrors += analytics.NetworkErrors
+		siteWide.MediaErrors += analytics.MediaErrors
+		siteWide.Quality480pSeconds += analytics.Quality480pSeconds
+		siteWide.Quality720pSeconds += analytics.Quality720pSeconds
+		siteWide.Quality1080pSeconds += analytics.Quality1080pSeconds
+		siteWide.TotalRoomsWithData++
+
+		// Accumulate per-studio metrics
+		studioMetrics, exists := studioMetricsMap[room.StudioId]
+		if !exists {
+			studio := GetStudioById(ctx.Tx, room.StudioId)
+			studioMetrics = &StudioPerformanceMetrics{
+				StudioId:   room.StudioId,
+				StudioName: studio.Name,
+			}
+			studioMetricsMap[room.StudioId] = studioMetrics
+		}
+
+		studioMetrics.TotalRooms++
+		// We'll calculate averages after the loop using studio analytics
+
+		return true // continue
+	})
+
+	// Calculate site-wide weighted averages
+	if totalStartupAttempts > 0 {
+		siteWide.AvgTimeToFirstFrame = int(totalWeightedTTFF / float64(totalStartupAttempts))
+		siteWide.AvgRebufferRatio = totalWeightedRebuffer / float64(totalStartupAttempts)
+		siteWide.AvgBitrateMbps = totalWeightedBitrate / float64(totalStartupAttempts)
+		siteWide.StartupSuccessRate = float64(siteWide.TotalStartupAttempts-siteWide.TotalStartupFailures) / float64(siteWide.TotalStartupAttempts) * 100
+		siteWide.ErrorRate = float64(siteWide.TotalErrors) / float64(siteWide.TotalStartupAttempts) * 100
+	}
+
+	// Calculate quality distribution percentages
+	totalQualitySeconds := siteWide.Quality480pSeconds + siteWide.Quality720pSeconds + siteWide.Quality1080pSeconds
+	if totalQualitySeconds > 0 {
+		siteWide.Quality480pPercent = float64(siteWide.Quality480pSeconds) / float64(totalQualitySeconds) * 100
+		siteWide.Quality720pPercent = float64(siteWide.Quality720pSeconds) / float64(totalQualitySeconds) * 100
+		siteWide.Quality1080pPercent = float64(siteWide.Quality1080pSeconds) / float64(totalQualitySeconds) * 100
+	}
+
+	// Fill in per-studio metrics from studio analytics
+	for studioId, studioMetrics := range studioMetricsMap {
+		var studioAnalytics StudioAnalytics
+		vbolt.Read(ctx.Tx, StudioAnalyticsBkt, studioId, &studioAnalytics)
+
+		if studioAnalytics.StartupAttempts > 0 {
+			studioMetrics.AvgTimeToFirstFrame = studioAnalytics.AvgTimeToFirstFrame
+			studioMetrics.AvgRebufferRatio = studioAnalytics.AvgRebufferRatio
+			studioMetrics.AvgBitrateMbps = studioAnalytics.AvgBitrateMbps
+			studioMetrics.TotalErrors = studioAnalytics.TotalErrors
+			studioMetrics.StartupSuccessRate = float64(studioAnalytics.StartupAttempts-studioAnalytics.StartupFailures) / float64(studioAnalytics.StartupAttempts) * 100
+			studioMetrics.ErrorRate = float64(studioAnalytics.TotalErrors) / float64(studioAnalytics.StartupAttempts) * 100
+		}
+	}
+
+	// Convert map to slice for response
+	resp.SiteWide = siteWide
+	resp.PerStudio = make([]StudioPerformanceMetrics, 0, len(studioMetricsMap))
+	for _, studioMetrics := range studioMetricsMap {
+		resp.PerStudio = append(resp.PerStudio, *studioMetrics)
+	}
+
+	// Log the access
+	LogInfo(LogCategorySystem, "Site performance metrics accessed", map[string]interface{}{
+		"requestedBy": caller.Id,
+		"userEmail":   caller.Email,
+		"studioCount": len(resp.PerStudio),
+		"roomCount":   siteWide.TotalRoomsWithData,
+	})
+
+	return
+}
+
 // RegisterAdminMethods registers all admin-related API procedures
 func RegisterAdminMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, RecalculateViewerCounts)
 	vbeam.RegisterProc(app, GetSystemLogs)
+	vbeam.RegisterProc(app, GetSitePerformanceMetrics)
 }

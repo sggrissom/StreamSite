@@ -38,6 +38,10 @@ build/
 .stdout
 .stderr
 
+# Data directory - ignore database files but keep directory structure
+data/*.bolt
+data/*.db
+
 node_modules/
 
 release/dist/

@@ -636,3 +636,202 @@ block(`
   }
 }
 `);
+
+// ===== Performance Metrics Styles =====
+
+block(`
+.perf-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 1.5rem;
+  margin-bottom: 2rem;
+}
+`);
+
+block(`
+.perf-metric-card {
+  background: var(--background);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+`);
+
+block(`
+.perf-metric-card .metric-label {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+`);
+
+block(`
+.perf-metric-card .metric-value {
+  font-size: 2rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.2;
+}
+`);
+
+block(`
+.perf-metric-card .metric-context {
+  font-size: 0.875rem;
+  color: var(--text-secondary);
+}
+`);
+
+block(`
+.perf-good {
+  color: #10b981;
+}
+`);
+
+block(`
+.perf-warning {
+  color: #f59e0b;
+}
+`);
+
+block(`
+.perf-bad {
+  color: #ef4444;
+}
+`);
+
+block(`
+.quality-bar {
+  display: flex;
+  width: 100%;
+  height: 32px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--border);
+  margin: 0.5rem 0;
+}
+`);
+
+block(`
+.quality-segment {
+  height: 100%;
+  transition: width 0.3s ease;
+}
+`);
+
+block(`
+.quality-segment.q-480p {
+  background: #ef4444;
+}
+`);
+
+block(`
+.quality-segment.q-720p {
+  background: #f59e0b;
+}
+`);
+
+block(`
+.quality-segment.q-1080p {
+  background: #10b981;
+}
+`);
+
+block(`
+.quality-legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-top: 0.5rem;
+}
+`);
+
+block(`
+.legend-item {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8125rem;
+}
+`);
+
+block(`
+.legend-color {
+  display: inline-block;
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+`);
+
+block(`
+.legend-color.q-480p {
+  background: #ef4444;
+}
+`);
+
+block(`
+.legend-color.q-720p {
+  background: #f59e0b;
+}
+`);
+
+block(`
+.legend-color.q-1080p {
+  background: #10b981;
+}
+`);
+
+block(`
+.perf-table-section {
+  margin-top: 2rem;
+}
+`);
+
+block(`
+.subsection-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 1rem;
+  color: var(--text);
+}
+`);
+
+block(`
+.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+`);
+
+block(`
+.sortable:hover {
+  background: var(--background);
+}
+`);
+
+block(`
+@media (max-width: 768px) {
+  .perf-metrics-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .quality-legend {
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+
+  .perf-table-section .admin-table {
+    font-size: 0.8125rem;
+  }
+
+  .perf-table-section th,
+  .perf-table-section td {
+    padding: 0.5rem;
+  }
+}
+`);

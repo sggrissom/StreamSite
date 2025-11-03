@@ -73,7 +73,7 @@ async function confirmDeleteStudio(modal: DeleteStudioModal) {
 
 // ===== Page Navigation State =====
 type PageState = {
-  activeSection: "studios" | "users" | "logs";
+  activeSection: "studios" | "users" | "logs" | "performance";
 };
 
 const usePageState = vlens.declareHook(
@@ -84,7 +84,7 @@ const usePageState = vlens.declareHook(
 
 function setActiveSection(
   state: PageState,
-  section: "studios" | "users" | "logs",
+  section: "studios" | "users" | "logs" | "performance",
 ) {
   state.activeSection = section;
   vlens.scheduleRedraw();
@@ -250,6 +250,135 @@ function getLevelClass(level: string): string {
   }
 }
 
+// ===== Performance Metrics =====
+type PerformanceState = {
+  siteWide: server.SitePerformanceMetrics | null;
+  perStudio: server.StudioPerformanceMetrics[];
+  loading: boolean;
+  error: string;
+  sortColumn: "studioName" | "ttff" | "rebuffer" | "bitrate" | "errorRate";
+  sortDirection: "asc" | "desc";
+};
+
+const usePerformanceState = vlens.declareHook(
+  (): PerformanceState => ({
+    siteWide: null,
+    perStudio: [],
+    loading: false,
+    error: "",
+    sortColumn: "studioName",
+    sortDirection: "asc",
+  }),
+);
+
+async function loadPerformanceMetrics(state: PerformanceState) {
+  state.loading = true;
+  state.error = "";
+  vlens.scheduleRedraw();
+
+  const [resp, err] = await server.GetSitePerformanceMetrics({});
+
+  state.loading = false;
+
+  if (err || !resp) {
+    state.error = err || "Failed to load performance metrics";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  state.siteWide = resp.siteWide;
+  state.perStudio = resp.perStudio || [];
+  vlens.scheduleRedraw();
+}
+
+function setSortColumn(
+  state: PerformanceState,
+  column: "studioName" | "ttff" | "rebuffer" | "bitrate" | "errorRate",
+) {
+  if (state.sortColumn === column) {
+    state.sortDirection = state.sortDirection === "asc" ? "desc" : "asc";
+  } else {
+    state.sortColumn = column;
+    state.sortDirection = "asc";
+  }
+  vlens.scheduleRedraw();
+}
+
+function getSortedStudios(
+  state: PerformanceState,
+): server.StudioPerformanceMetrics[] {
+  const studios = [...state.perStudio];
+  studios.sort((a, b) => {
+    let aVal: number | string;
+    let bVal: number | string;
+
+    switch (state.sortColumn) {
+      case "studioName":
+        aVal = a.studioName.toLowerCase();
+        bVal = b.studioName.toLowerCase();
+        break;
+      case "ttff":
+        aVal = a.avgTimeToFirstFrame;
+        bVal = b.avgTimeToFirstFrame;
+        break;
+      case "rebuffer":
+        aVal = a.avgRebufferRatio;
+        bVal = b.avgRebufferRatio;
+        break;
+      case "bitrate":
+        aVal = a.avgBitrateMbps;
+        bVal = b.avgBitrateMbps;
+        break;
+      case "errorRate":
+        aVal = a.errorRate;
+        bVal = b.errorRate;
+        break;
+      default:
+        return 0;
+    }
+
+    if (aVal < bVal) return state.sortDirection === "asc" ? -1 : 1;
+    if (aVal > bVal) return state.sortDirection === "asc" ? 1 : -1;
+    return 0;
+  });
+
+  return studios;
+}
+
+function formatPercentage(value: number): string {
+  return value.toFixed(2) + "%";
+}
+
+function formatMilliseconds(value: number): string {
+  return value.toFixed(0) + "ms";
+}
+
+function formatMbps(value: number): string {
+  return value.toFixed(2) + " Mbps";
+}
+
+function getPerformanceClass(
+  metric: "ttff" | "rebuffer" | "errorRate",
+  value: number,
+): string {
+  switch (metric) {
+    case "ttff":
+      if (value < 1000) return "perf-good";
+      if (value < 2000) return "perf-warning";
+      return "perf-bad";
+    case "rebuffer":
+      if (value < 1) return "perf-good";
+      if (value < 3) return "perf-warning";
+      return "perf-bad";
+    case "errorRate":
+      if (value < 1) return "perf-good";
+      if (value < 5) return "perf-warning";
+      return "perf-bad";
+    default:
+      return "";
+  }
+}
+
 export function view(
   route: string,
   prefix: string,
@@ -257,6 +386,7 @@ export function view(
 ): preact.ComponentChild {
   const deleteStudioModal = useDeleteStudioModal();
   const usersState = useUsersState();
+  const performanceState = usePerformanceState();
   const logsState = useLogsState();
   const pageState = usePageState();
 
@@ -323,6 +453,12 @@ export function view(
               onClick={() => setActiveSection(pageState, "logs")}
             >
               System Logs
+            </button>
+            <button
+              className={`nav-tab ${pageState.activeSection === "performance" ? "active" : ""}`}
+              onClick={() => setActiveSection(pageState, "performance")}
+            >
+              Performance
             </button>
           </div>
 
@@ -678,6 +814,291 @@ export function view(
                       ))}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Performance Metrics Section */}
+          {pageState.activeSection === "performance" && (
+            <div className="admin-section">
+              <div className="section-header">
+                <h2 className="section-title">Site Performance Metrics</h2>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => loadPerformanceMetrics(performanceState)}
+                  disabled={performanceState.loading}
+                >
+                  {performanceState.loading ? "Loading..." : "Refresh Metrics"}
+                </button>
+              </div>
+
+              {performanceState.error && (
+                <div className="error-state">{performanceState.error}</div>
+              )}
+
+              {!performanceState.loading && performanceState.siteWide && (
+                <div>
+                  {/* Site-Wide Metrics Grid */}
+                  <div className="perf-metrics-grid">
+                    <div className="perf-metric-card">
+                      <div className="metric-label">
+                        Avg Time to First Frame
+                      </div>
+                      <div
+                        className={`metric-value ${getPerformanceClass("ttff", performanceState.siteWide.avgTimeToFirstFrame)}`}
+                      >
+                        {formatMilliseconds(
+                          performanceState.siteWide.avgTimeToFirstFrame,
+                        )}
+                      </div>
+                      <div className="metric-context">
+                        {performanceState.siteWide.totalStartupAttempts}{" "}
+                        attempts
+                      </div>
+                    </div>
+
+                    <div className="perf-metric-card">
+                      <div className="metric-label">Startup Success Rate</div>
+                      <div className="metric-value">
+                        {formatPercentage(
+                          performanceState.siteWide.startupSuccessRate,
+                        )}
+                      </div>
+                      <div className="metric-context">
+                        {performanceState.siteWide.totalStartupFailures}{" "}
+                        failures
+                      </div>
+                    </div>
+
+                    <div className="perf-metric-card">
+                      <div className="metric-label">Avg Rebuffer Ratio</div>
+                      <div
+                        className={`metric-value ${getPerformanceClass("rebuffer", performanceState.siteWide.avgRebufferRatio)}`}
+                      >
+                        {formatPercentage(
+                          performanceState.siteWide.avgRebufferRatio,
+                        )}
+                      </div>
+                      <div className="metric-context">
+                        {performanceState.siteWide.totalRebufferEvents} events
+                      </div>
+                    </div>
+
+                    <div className="perf-metric-card">
+                      <div className="metric-label">Avg Bitrate</div>
+                      <div className="metric-value">
+                        {formatMbps(performanceState.siteWide.avgBitrateMbps)}
+                      </div>
+                      <div className="metric-context">across all streams</div>
+                    </div>
+
+                    <div className="perf-metric-card">
+                      <div className="metric-label">Error Rate</div>
+                      <div
+                        className={`metric-value ${getPerformanceClass("errorRate", performanceState.siteWide.errorRate)}`}
+                      >
+                        {formatPercentage(performanceState.siteWide.errorRate)}
+                      </div>
+                      <div className="metric-context">
+                        {performanceState.siteWide.totalErrors} errors total
+                      </div>
+                    </div>
+
+                    <div className="perf-metric-card">
+                      <div className="metric-label">Quality Distribution</div>
+                      <div className="quality-bar">
+                        {performanceState.siteWide.quality480pPercent > 0 && (
+                          <div
+                            className="quality-segment q-480p"
+                            style={`width: ${performanceState.siteWide.quality480pPercent}%`}
+                            title={`480p: ${formatPercentage(performanceState.siteWide.quality480pPercent)}`}
+                          />
+                        )}
+                        {performanceState.siteWide.quality720pPercent > 0 && (
+                          <div
+                            className="quality-segment q-720p"
+                            style={`width: ${performanceState.siteWide.quality720pPercent}%`}
+                            title={`720p: ${formatPercentage(performanceState.siteWide.quality720pPercent)}`}
+                          />
+                        )}
+                        {performanceState.siteWide.quality1080pPercent > 0 && (
+                          <div
+                            className="quality-segment q-1080p"
+                            style={`width: ${performanceState.siteWide.quality1080pPercent}%`}
+                            title={`1080p: ${formatPercentage(performanceState.siteWide.quality1080pPercent)}`}
+                          />
+                        )}
+                      </div>
+                      <div className="metric-context quality-legend">
+                        <span className="legend-item">
+                          <span className="legend-color q-480p"></span> 480p:{" "}
+                          {formatPercentage(
+                            performanceState.siteWide.quality480pPercent,
+                          )}
+                        </span>
+                        <span className="legend-item">
+                          <span className="legend-color q-720p"></span> 720p:{" "}
+                          {formatPercentage(
+                            performanceState.siteWide.quality720pPercent,
+                          )}
+                        </span>
+                        <span className="legend-item">
+                          <span className="legend-color q-1080p"></span> 1080p:{" "}
+                          {formatPercentage(
+                            performanceState.siteWide.quality1080pPercent,
+                          )}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Per-Studio Performance Table */}
+                  {performanceState.perStudio.length > 0 && (
+                    <div className="perf-table-section">
+                      <h3 className="subsection-title">
+                        Performance by Studio
+                      </h3>
+                      <div className="table-responsive">
+                        <table className="admin-table">
+                          <thead>
+                            <tr>
+                              <th
+                                className="sortable"
+                                onClick={() =>
+                                  setSortColumn(performanceState, "studioName")
+                                }
+                              >
+                                Studio{" "}
+                                {performanceState.sortColumn === "studioName" &&
+                                  (performanceState.sortDirection === "asc"
+                                    ? "↑"
+                                    : "↓")}
+                              </th>
+                              <th>Rooms</th>
+                              <th
+                                className="sortable"
+                                onClick={() =>
+                                  setSortColumn(performanceState, "ttff")
+                                }
+                              >
+                                Avg TTFF{" "}
+                                {performanceState.sortColumn === "ttff" &&
+                                  (performanceState.sortDirection === "asc"
+                                    ? "↑"
+                                    : "↓")}
+                              </th>
+                              <th>Success Rate</th>
+                              <th
+                                className="sortable"
+                                onClick={() =>
+                                  setSortColumn(performanceState, "rebuffer")
+                                }
+                              >
+                                Rebuffer Ratio{" "}
+                                {performanceState.sortColumn === "rebuffer" &&
+                                  (performanceState.sortDirection === "asc"
+                                    ? "↑"
+                                    : "↓")}
+                              </th>
+                              <th
+                                className="sortable"
+                                onClick={() =>
+                                  setSortColumn(performanceState, "bitrate")
+                                }
+                              >
+                                Avg Bitrate{" "}
+                                {performanceState.sortColumn === "bitrate" &&
+                                  (performanceState.sortDirection === "asc"
+                                    ? "↑"
+                                    : "↓")}
+                              </th>
+                              <th
+                                className="sortable"
+                                onClick={() =>
+                                  setSortColumn(performanceState, "errorRate")
+                                }
+                              >
+                                Error Rate{" "}
+                                {performanceState.sortColumn === "errorRate" &&
+                                  (performanceState.sortDirection === "asc"
+                                    ? "↑"
+                                    : "↓")}
+                              </th>
+                              <th>Total Errors</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {getSortedStudios(performanceState).map(
+                              (studio) => (
+                                <tr key={studio.studioId}>
+                                  <td>
+                                    <a
+                                      href={`/studio/${studio.studioId}`}
+                                      className="studio-link"
+                                    >
+                                      {studio.studioName}
+                                    </a>
+                                  </td>
+                                  <td>{studio.totalRooms}</td>
+                                  <td
+                                    className={getPerformanceClass(
+                                      "ttff",
+                                      studio.avgTimeToFirstFrame,
+                                    )}
+                                  >
+                                    {formatMilliseconds(
+                                      studio.avgTimeToFirstFrame,
+                                    )}
+                                  </td>
+                                  <td>
+                                    {formatPercentage(
+                                      studio.startupSuccessRate,
+                                    )}
+                                  </td>
+                                  <td
+                                    className={getPerformanceClass(
+                                      "rebuffer",
+                                      studio.avgRebufferRatio,
+                                    )}
+                                  >
+                                    {formatPercentage(studio.avgRebufferRatio)}
+                                  </td>
+                                  <td>{formatMbps(studio.avgBitrateMbps)}</td>
+                                  <td
+                                    className={getPerformanceClass(
+                                      "errorRate",
+                                      studio.errorRate,
+                                    )}
+                                  >
+                                    {formatPercentage(studio.errorRate)}
+                                  </td>
+                                  <td>{studio.totalErrors}</td>
+                                </tr>
+                              ),
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  )}
+
+                  {performanceState.perStudio.length === 0 &&
+                    !performanceState.loading && (
+                      <div className="empty-state">
+                        <p>No performance data available yet.</p>
+                        <p className="empty-state-hint">
+                          Performance metrics will appear once viewers start
+                          watching streams.
+                        </p>
+                      </div>
+                    )}
+                </div>
+              )}
+
+              {performanceState.loading && (
+                <div className="loading-state">
+                  Loading performance metrics...
                 </div>
               )}
             </div>
