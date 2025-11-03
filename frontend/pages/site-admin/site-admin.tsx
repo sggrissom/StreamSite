@@ -71,6 +71,25 @@ async function confirmDeleteStudio(modal: DeleteStudioModal) {
   window.location.reload();
 }
 
+// ===== Page Navigation State =====
+type PageState = {
+  activeSection: "studios" | "users" | "logs";
+};
+
+const usePageState = vlens.declareHook(
+  (): PageState => ({
+    activeSection: "studios",
+  }),
+);
+
+function setActiveSection(
+  state: PageState,
+  section: "studios" | "users" | "logs",
+) {
+  state.activeSection = section;
+  vlens.scheduleRedraw();
+}
+
 // ===== Users Management =====
 type UsersState = {
   users: server.UserWithStats[];
@@ -151,6 +170,86 @@ function getRoleName(role: number): string {
   }
 }
 
+// ===== Logs Management =====
+type LogsState = {
+  logs: server.LogEntry[];
+  loading: boolean;
+  error: string;
+  totalCount: number;
+  filterLevel: string;
+  filterCategory: string;
+  filterSearch: string;
+  expandedLogIndex: number; // -1 means none expanded
+};
+
+const useLogsState = vlens.declareHook(
+  (): LogsState => ({
+    logs: [],
+    loading: false,
+    error: "",
+    totalCount: 0,
+    filterLevel: "",
+    filterCategory: "",
+    filterSearch: "",
+    expandedLogIndex: -1,
+  }),
+);
+
+async function loadLogs(state: LogsState) {
+  state.loading = true;
+  state.error = "";
+  vlens.scheduleRedraw();
+
+  const req: server.GetSystemLogsRequest = {
+    level: state.filterLevel || null,
+    category: state.filterCategory || null,
+    search: state.filterSearch || null,
+  };
+
+  const [resp, err] = await server.GetSystemLogs(req);
+
+  state.loading = false;
+
+  if (err || !resp) {
+    state.error = err || "Failed to load logs";
+    vlens.scheduleRedraw();
+    return;
+  }
+
+  state.logs = resp.logs || [];
+  state.totalCount = resp.totalCount;
+  vlens.scheduleRedraw();
+}
+
+function toggleLogExpansion(state: LogsState, index: number) {
+  state.expandedLogIndex = state.expandedLogIndex === index ? -1 : index;
+  vlens.scheduleRedraw();
+}
+
+function formatTimestamp(timestamp: string): string {
+  try {
+    const date = new Date(timestamp);
+    return date.toLocaleString();
+  } catch {
+    return timestamp;
+  }
+}
+
+function getLevelClass(level: string): string {
+  switch (level) {
+    case "INFO":
+      return "log-level-info";
+    case "WARN":
+      return "log-level-warn";
+    case "ERROR":
+      return "log-level-error";
+    case "DEBUG":
+      return "log-level-debug";
+    default:
+      return "log-level-unknown";
+  }
+}
+
 export function view(
   route: string,
   prefix: string,
@@ -158,6 +257,8 @@ export function view(
 ): preact.ComponentChild {
   const deleteStudioModal = useDeleteStudioModal();
   const usersState = useUsersState();
+  const logsState = useLogsState();
+  const pageState = usePageState();
 
   // Check permissions
   if (!data || !data.studios) {
@@ -203,159 +304,384 @@ export function view(
             </p>
           </div>
 
-          {/* Studios Management Section */}
-          <div className="admin-section">
-            <div className="section-header">
-              <h2 className="section-title">Studios Management</h2>
-              <a href="/studios" className="btn btn-primary btn-sm">
-                Create Studio
-              </a>
-            </div>
-
-            {studios.length === 0 ? (
-              <div className="empty-state">
-                <p>No studios have been created yet.</p>
-              </div>
-            ) : (
-              <div className="studios-table-container">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>Studio Name</th>
-                      <th>Owner</th>
-                      <th>Created</th>
-                      <th>Rooms</th>
-                      <th>Members</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {studios.map((studio) => (
-                      <tr key={studio.id}>
-                        <td>
-                          <div className="studio-name-cell">
-                            <strong>{studio.name}</strong>
-                            {studio.description && (
-                              <div className="studio-description-preview">
-                                {studio.description}
-                              </div>
-                            )}
-                          </div>
-                        </td>
-                        <td>
-                          <div className="owner-cell">
-                            <div>{studio.ownerName}</div>
-                            <div className="email-text">
-                              {studio.ownerEmail}
-                            </div>
-                          </div>
-                        </td>
-                        <td>
-                          {new Date(studio.creation).toLocaleDateString()}
-                        </td>
-                        <td>{studio.roomCount}</td>
-                        <td>{studio.memberCount}</td>
-                        <td className="actions-cell">
-                          <a
-                            href={`/studio/${studio.id}`}
-                            className="btn btn-secondary btn-sm"
-                          >
-                            View Studio
-                          </a>
-                          <button
-                            className="btn btn-danger btn-sm"
-                            onClick={() =>
-                              openDeleteStudioModal(
-                                deleteStudioModal,
-                                studio.id,
-                                studio.name,
-                              )
-                            }
-                          >
-                            Delete
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+          {/* Navigation Tabs */}
+          <div className="section-nav">
+            <button
+              className={`nav-tab ${pageState.activeSection === "studios" ? "active" : ""}`}
+              onClick={() => setActiveSection(pageState, "studios")}
+            >
+              Studios
+            </button>
+            <button
+              className={`nav-tab ${pageState.activeSection === "users" ? "active" : ""}`}
+              onClick={() => setActiveSection(pageState, "users")}
+            >
+              Users
+            </button>
+            <button
+              className={`nav-tab ${pageState.activeSection === "logs" ? "active" : ""}`}
+              onClick={() => setActiveSection(pageState, "logs")}
+            >
+              System Logs
+            </button>
           </div>
+
+          {/* Studios Management Section */}
+          {pageState.activeSection === "studios" && (
+            <div className="admin-section">
+              <div className="section-header">
+                <h2 className="section-title">Studios Management</h2>
+                <a href="/studios" className="btn btn-primary btn-sm">
+                  Create Studio
+                </a>
+              </div>
+
+              {studios.length === 0 ? (
+                <div className="empty-state">
+                  <p>No studios have been created yet.</p>
+                </div>
+              ) : (
+                <div className="studios-table-container">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Studio Name</th>
+                        <th>Owner</th>
+                        <th>Created</th>
+                        <th>Rooms</th>
+                        <th>Members</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {studios.map((studio) => (
+                        <tr key={studio.id}>
+                          <td>
+                            <div className="studio-name-cell">
+                              <strong>{studio.name}</strong>
+                              {studio.description && (
+                                <div className="studio-description-preview">
+                                  {studio.description}
+                                </div>
+                              )}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="owner-cell">
+                              <div>{studio.ownerName}</div>
+                              <div className="email-text">
+                                {studio.ownerEmail}
+                              </div>
+                            </div>
+                          </td>
+                          <td>
+                            {new Date(studio.creation).toLocaleDateString()}
+                          </td>
+                          <td>{studio.roomCount}</td>
+                          <td>{studio.memberCount}</td>
+                          <td className="actions-cell">
+                            <a
+                              href={`/studio/${studio.id}`}
+                              className="btn btn-secondary btn-sm"
+                            >
+                              View Studio
+                            </a>
+                            <button
+                              className="btn btn-danger btn-sm"
+                              onClick={() =>
+                                openDeleteStudioModal(
+                                  deleteStudioModal,
+                                  studio.id,
+                                  studio.name,
+                                )
+                              }
+                            >
+                              Delete
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Users Management Section */}
-          <div className="admin-section">
-            <div className="section-header">
-              <h2 className="section-title">Users Management</h2>
-            </div>
-
-            {usersState.error && (
-              <div className="error-message">{usersState.error}</div>
-            )}
-
-            {usersState.loading ? (
-              <div className="loading-state">Loading users...</div>
-            ) : usersState.users.length === 0 ? (
-              <div className="empty-state">
-                <p>No users found.</p>
+          {pageState.activeSection === "users" && (
+            <div className="admin-section">
+              <div className="section-header">
+                <h2 className="section-title">Users Management</h2>
               </div>
-            ) : (
-              <div className="users-table-container">
-                <table className="admin-table">
-                  <thead>
-                    <tr>
-                      <th>Name</th>
-                      <th>Email</th>
-                      <th>Role</th>
-                      <th>Studios</th>
-                      <th>Created</th>
-                      <th>Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {usersState.users.map((user) => (
-                      <tr key={user.id}>
-                        <td>{user.name}</td>
-                        <td>{user.email}</td>
-                        <td>
-                          <span className={`role-badge role-${user.role}`}>
-                            {getRoleName(user.role)}
-                          </span>
-                        </td>
-                        <td>{user.studioCount}</td>
-                        <td>{new Date(user.creation).toLocaleDateString()}</td>
-                        <td className="actions-cell">
-                          {/* Get current user ID from first user (yourself) - you're always the site admin loading this */}
-                          {user.id === 1 ? (
-                            <span className="text-muted">(You)</span>
-                          ) : (
-                            <select
-                              className="role-select"
-                              disabled={usersState.changingRoleFor === user.id}
-                              onChange={(e) => {
-                                const target = e.target as HTMLSelectElement;
-                                changeUserRole(
-                                  usersState,
-                                  user.id,
-                                  parseInt(target.value),
-                                  1, // Site admin is always user ID 1
-                                );
-                              }}
-                              value={user.role}
-                            >
-                              <option value={0}>User</option>
-                              <option value={1}>Stream Admin</option>
-                              <option value={2}>Site Admin</option>
-                            </select>
-                          )}
-                        </td>
+
+              {usersState.error && (
+                <div className="error-message">{usersState.error}</div>
+              )}
+
+              {usersState.loading ? (
+                <div className="loading-state">Loading users...</div>
+              ) : usersState.users.length === 0 ? (
+                <div className="empty-state">
+                  <p>No users found.</p>
+                </div>
+              ) : (
+                <div className="users-table-container">
+                  <table className="admin-table">
+                    <thead>
+                      <tr>
+                        <th>Name</th>
+                        <th>Email</th>
+                        <th>Role</th>
+                        <th>Studios</th>
+                        <th>Created</th>
+                        <th>Actions</th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
+                    </thead>
+                    <tbody>
+                      {usersState.users.map((user) => (
+                        <tr key={user.id}>
+                          <td>{user.name}</td>
+                          <td>{user.email}</td>
+                          <td>
+                            <span className={`role-badge role-${user.role}`}>
+                              {getRoleName(user.role)}
+                            </span>
+                          </td>
+                          <td>{user.studioCount}</td>
+                          <td>
+                            {new Date(user.creation).toLocaleDateString()}
+                          </td>
+                          <td className="actions-cell">
+                            {/* Get current user ID from first user (yourself) - you're always the site admin loading this */}
+                            {user.id === 1 ? (
+                              <span className="text-muted">(You)</span>
+                            ) : (
+                              <select
+                                className="role-select"
+                                disabled={
+                                  usersState.changingRoleFor === user.id
+                                }
+                                onChange={(e) => {
+                                  const target = e.target as HTMLSelectElement;
+                                  changeUserRole(
+                                    usersState,
+                                    user.id,
+                                    parseInt(target.value),
+                                    1, // Site admin is always user ID 1
+                                  );
+                                }}
+                                value={user.role}
+                              >
+                                <option value={0}>User</option>
+                                <option value={1}>Stream Admin</option>
+                                <option value={2}>Site Admin</option>
+                              </select>
+                            )}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Logs Management Section */}
+          {pageState.activeSection === "logs" && (
+            <div className="admin-section">
+              <div className="section-header">
+                <h2 className="section-title">System Logs</h2>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={() => loadLogs(logsState)}
+                  disabled={logsState.loading}
+                >
+                  {logsState.loading ? "Refreshing..." : "Refresh Logs"}
+                </button>
               </div>
-            )}
-          </div>
+
+              {/* Filter Controls */}
+              <div className="log-filters">
+                <div className="filter-row">
+                  <div className="filter-group">
+                    <label htmlFor="level-filter">Level:</label>
+                    <select
+                      id="level-filter"
+                      className="filter-select"
+                      value={logsState.filterLevel}
+                      onChange={(e) => {
+                        const target = e.target as HTMLSelectElement;
+                        logsState.filterLevel = target.value;
+                        vlens.scheduleRedraw();
+                      }}
+                    >
+                      <option value="">All</option>
+                      <option value="INFO">INFO</option>
+                      <option value="WARN">WARN</option>
+                      <option value="ERROR">ERROR</option>
+                      <option value="DEBUG">DEBUG</option>
+                    </select>
+                  </div>
+
+                  <div className="filter-group">
+                    <label htmlFor="category-filter">Category:</label>
+                    <select
+                      id="category-filter"
+                      className="filter-select"
+                      value={logsState.filterCategory}
+                      onChange={(e) => {
+                        const target = e.target as HTMLSelectElement;
+                        logsState.filterCategory = target.value;
+                        vlens.scheduleRedraw();
+                      }}
+                    >
+                      <option value="">All</option>
+                      <option value="AUTH">AUTH</option>
+                      <option value="STREAM">STREAM</option>
+                      <option value="API">API</option>
+                      <option value="SYSTEM">SYSTEM</option>
+                    </select>
+                  </div>
+
+                  <div className="filter-group filter-search-group">
+                    <label htmlFor="search-filter">Search:</label>
+                    <input
+                      id="search-filter"
+                      type="text"
+                      className="filter-input"
+                      placeholder="Search in messages..."
+                      value={logsState.filterSearch}
+                      onInput={(e) => {
+                        const target = e.target as HTMLInputElement;
+                        logsState.filterSearch = target.value;
+                        vlens.scheduleRedraw();
+                      }}
+                    />
+                  </div>
+
+                  <button
+                    className="btn btn-secondary btn-sm"
+                    onClick={() => loadLogs(logsState)}
+                    disabled={logsState.loading}
+                  >
+                    Apply Filters
+                  </button>
+                </div>
+
+                {logsState.totalCount > 0 && (
+                  <div className="log-count">
+                    Showing {logsState.logs.length} of {logsState.totalCount}{" "}
+                    logs
+                  </div>
+                )}
+              </div>
+
+              {logsState.error && (
+                <div className="error-message">{logsState.error}</div>
+              )}
+
+              {logsState.loading ? (
+                <div className="loading-state">Loading logs...</div>
+              ) : logsState.logs.length === 0 ? (
+                <div className="empty-state">
+                  <p>No logs found. Try adjusting your filters.</p>
+                </div>
+              ) : (
+                <div className="logs-table-container">
+                  <table className="admin-table logs-table">
+                    <thead>
+                      <tr>
+                        <th>Timestamp</th>
+                        <th>Level</th>
+                        <th>Category</th>
+                        <th>Message</th>
+                        <th>Details</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {logsState.logs.map((log, index) => (
+                        <>
+                          <tr key={index} className="log-row">
+                            <td className="log-timestamp">
+                              {formatTimestamp(log.timestamp)}
+                            </td>
+                            <td>
+                              <span
+                                className={`log-level-badge ${getLevelClass(log.level)}`}
+                              >
+                                {log.level}
+                              </span>
+                            </td>
+                            <td>
+                              <span className="log-category">
+                                {log.category}
+                              </span>
+                            </td>
+                            <td className="log-message">{log.message}</td>
+                            <td className="actions-cell">
+                              {(log.data ||
+                                log.userId ||
+                                log.ip ||
+                                log.userAgent) && (
+                                <button
+                                  className="btn btn-secondary btn-sm"
+                                  onClick={() =>
+                                    toggleLogExpansion(logsState, index)
+                                  }
+                                >
+                                  {logsState.expandedLogIndex === index
+                                    ? "Hide"
+                                    : "Details"}
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                          {logsState.expandedLogIndex === index && (
+                            <tr
+                              key={`${index}-details`}
+                              className="log-details-row"
+                            >
+                              <td colSpan={5}>
+                                <div className="log-details">
+                                  {log.userId && (
+                                    <div className="log-detail-item">
+                                      <strong>User ID:</strong> {log.userId}
+                                    </div>
+                                  )}
+                                  {log.ip && (
+                                    <div className="log-detail-item">
+                                      <strong>IP:</strong> {log.ip}
+                                    </div>
+                                  )}
+                                  {log.userAgent && (
+                                    <div className="log-detail-item">
+                                      <strong>User Agent:</strong>{" "}
+                                      {log.userAgent}
+                                    </div>
+                                  )}
+                                  {log.data &&
+                                    Object.keys(log.data).length > 0 && (
+                                      <div className="log-detail-item">
+                                        <strong>Data:</strong>
+                                        <pre className="log-data-json">
+                                          {JSON.stringify(log.data, null, 2)}
+                                        </pre>
+                                      </div>
+                                    )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </main>
 

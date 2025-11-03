@@ -1,7 +1,11 @@
 package backend
 
 import (
+	"bufio"
+	"encoding/json"
 	"errors"
+	"os"
+	"strings"
 
 	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
@@ -172,7 +176,140 @@ func RecalculateViewerCounts(ctx *vbeam.Context, req RecalculateViewerCountsRequ
 	return
 }
 
+// GetSystemLogsRequest is the request for GetSystemLogs
+type GetSystemLogsRequest struct {
+	Level    *string `json:"level,omitempty"`    // Optional: filter by log level (INFO, WARN, ERROR, DEBUG)
+	Category *string `json:"category,omitempty"` // Optional: filter by category (AUTH, STREAM, API, SYSTEM)
+	Search   *string `json:"search,omitempty"`   // Optional: text search in message
+}
+
+// LogEntry represents a single log entry
+type LogEntry struct {
+	Timestamp string                 `json:"timestamp"`
+	Level     string                 `json:"level"`
+	Category  string                 `json:"category"`
+	Message   string                 `json:"message"`
+	Data      map[string]interface{} `json:"data,omitempty"`
+	UserID    *int                   `json:"userId,omitempty"`
+	IP        string                 `json:"ip,omitempty"`
+	UserAgent string                 `json:"userAgent,omitempty"`
+}
+
+// GetSystemLogsResponse is the response for GetSystemLogs
+type GetSystemLogsResponse struct {
+	Logs       []LogEntry `json:"logs"`
+	TotalCount int        `json:"totalCount"`
+}
+
+// GetSystemLogs retrieves and filters system logs. Only accessible by site admins.
+func GetSystemLogs(ctx *vbeam.Context, req GetSystemLogsRequest) (resp GetSystemLogsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("Authentication required")
+	}
+
+	// Only site admins can access logs
+	if caller.Role != RoleSiteAdmin {
+		return resp, errors.New("Only site admins can access system logs")
+	}
+
+	// Open log file
+	logFile := "logs/stream.log"
+	file, err := os.Open(logFile)
+	if err != nil {
+		LogWarn(LogCategorySystem, "Failed to open log file", map[string]interface{}{
+			"error":       err.Error(),
+			"requestedBy": caller.Id,
+		})
+		return resp, errors.New("Failed to open log file")
+	}
+	defer file.Close()
+
+	// Read and parse log entries
+	var allLogs []LogEntry
+	scanner := bufio.NewScanner(file)
+
+	// Increase buffer size to handle long log lines
+	buf := make([]byte, 0, 64*1024)
+	scanner.Buffer(buf, 1024*1024)
+
+	for scanner.Scan() {
+		line := scanner.Text()
+		if line == "" {
+			continue
+		}
+
+		// Extract JSON portion (log lines may have date prefix before JSON)
+		jsonStart := strings.Index(line, "{")
+		if jsonStart == -1 {
+			// No JSON in this line
+			continue
+		}
+
+		// Parse JSON portion only
+		var entry LogEntry
+		if err := json.Unmarshal([]byte(line[jsonStart:]), &entry); err != nil {
+			// Skip non-JSON lines (like HTTP server logs)
+			continue
+		}
+
+		// Apply filters
+		if req.Level != nil && *req.Level != "" && entry.Level != *req.Level {
+			continue
+		}
+
+		if req.Category != nil && *req.Category != "" && entry.Category != *req.Category {
+			continue
+		}
+
+		if req.Search != nil && *req.Search != "" {
+			searchLower := strings.ToLower(*req.Search)
+			if !strings.Contains(strings.ToLower(entry.Message), searchLower) {
+				continue
+			}
+		}
+
+		allLogs = append(allLogs, entry)
+	}
+
+	if err := scanner.Err(); err != nil {
+		LogErrorSimple(LogCategorySystem, "Error reading log file", map[string]interface{}{
+			"error":       err.Error(),
+			"requestedBy": caller.Id,
+		})
+		return resp, errors.New("Error reading log file")
+	}
+
+	// Reverse array to show newest first (file is chronological oldest-to-newest)
+	for i, j := 0, len(allLogs)-1; i < j; i, j = i+1, j-1 {
+		allLogs[i], allLogs[j] = allLogs[j], allLogs[i]
+	}
+
+	// Limit to last 100 entries
+	totalCount := len(allLogs)
+	if len(allLogs) > 100 {
+		allLogs = allLogs[:100]
+	}
+
+	resp.Logs = allLogs
+	resp.TotalCount = totalCount
+
+	// Log the access
+	LogInfo(LogCategorySystem, "System logs accessed", map[string]interface{}{
+		"requestedBy":  caller.Id,
+		"userEmail":    caller.Email,
+		"filterLevel":  req.Level,
+		"filterCat":    req.Category,
+		"filterSearch": req.Search,
+		"resultCount":  len(allLogs),
+	})
+
+	return
+}
+
 // RegisterAdminMethods registers all admin-related API procedures
 func RegisterAdminMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, RecalculateViewerCounts)
+	vbeam.RegisterProc(app, GetSystemLogs)
 }

@@ -378,6 +378,17 @@ export interface RecalculateViewerCountsResponse {
     message: string
 }
 
+export interface GetSystemLogsRequest {
+    level: string | null
+    category: string | null
+    search: string | null
+}
+
+export interface GetSystemLogsResponse {
+    logs: LogEntry[]
+    totalCount: number
+}
+
 export interface SendEmoteRequest {
     roomId: number
     emote: string
@@ -560,6 +571,17 @@ export interface StudioAnalytics {
     totalStreamMinutes: number
 }
 
+export interface LogEntry {
+    timestamp: string
+    level: string
+    category: string
+    message: string
+    data: Record<string, any>
+    userId: number | null
+    ip: string
+    userAgent: string
+}
+
 export interface TranscoderStatus {
     roomId: string
     streamKey: string
@@ -718,6 +740,10 @@ export async function GetStudioAnalytics(data: GetStudioAnalyticsRequest): Promi
 
 export async function RecalculateViewerCounts(data: RecalculateViewerCountsRequest): Promise<rpc.Response<RecalculateViewerCountsResponse>> {
     return await rpc.call<RecalculateViewerCountsResponse>('RecalculateViewerCounts', JSON.stringify(data));
+}
+
+export async function GetSystemLogs(data: GetSystemLogsRequest): Promise<rpc.Response<GetSystemLogsResponse>> {
+    return await rpc.call<GetSystemLogsResponse>('GetSystemLogs', JSON.stringify(data));
 }
 
 export async function SendEmote(data: SendEmoteRequest): Promise<rpc.Response<SendEmoteResponse>> {
