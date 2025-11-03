@@ -1122,6 +1122,11 @@ block(`
   .confirmation-actions .btn {
     width: 100%;
   }
+
+  .dropdown-menu-right {
+    right: auto;
+    left: 0;
+  }
 }
 `);
 
