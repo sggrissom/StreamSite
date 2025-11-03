@@ -316,9 +316,9 @@ type StudioPerformanceMetrics struct {
 	AvgTimeToFirstFrame int     `json:"avgTimeToFirstFrame"` // ms
 	StartupSuccessRate  float64 `json:"startupSuccessRate"`  // percentage
 	AvgRebufferRatio    float64 `json:"avgRebufferRatio"`    // percentage
-	AvgBitrateMbps       float64 `json:"avgBitrateMbps"`       // Mbps
-	TotalErrors          int     `json:"totalErrors"`
-	AvgErrorsPerSession  float64 `json:"avgErrorsPerSession"`  // average errors per viewing session
+	AvgBitrateMbps      float64 `json:"avgBitrateMbps"`      // Mbps
+	TotalErrors         int     `json:"totalErrors"`
+	AvgErrorsPerSession float64 `json:"avgErrorsPerSession"` // average errors per viewing session
 }
 
 // SitePerformanceMetrics contains aggregated performance metrics across the entire site

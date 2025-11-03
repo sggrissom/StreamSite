@@ -634,18 +634,45 @@ func DeleteStudio(ctx *vbeam.Context, req DeleteStudioRequest) (resp DeleteStudi
 
 	// Cascade delete all related data
 
-	// 1. Delete all rooms and their stream keys
+	// Track cleanup statistics
+	totalSessionsDeleted := 0
+	totalCodesDeleted := 0
+
+	// 1. Delete all rooms and their associated data
 	rooms := ListStudioRooms(ctx.Tx, studio.Id)
 	for _, room := range rooms {
+		// Clean up viewer sessions for this room
+		sessionsDeleted := cleanupViewerSessionsForRoom(ctx.Tx, room.Id)
+		totalSessionsDeleted += sessionsDeleted
+
+		// Clean up access codes for this room
+		codesDeleted := cleanupAccessCodesForRoom(ctx.Tx, room.Id)
+		totalCodesDeleted += codesDeleted
+
+		// Delete camera configuration
+		DeleteCameraConfigData(ctx.Tx, room.Id)
+
+		// Delete room analytics
+		vbolt.Delete(ctx.Tx, RoomAnalyticsBkt, room.Id)
+
 		// Remove stream key lookup
 		vbolt.Delete(ctx.Tx, RoomStreamKeyBkt, room.StreamKey)
+
 		// Unindex room from studio
 		vbolt.SetTargetSingleTerm(ctx.Tx, RoomsByStudioIdx, room.Id, -1)
+
 		// Delete room
 		vbolt.Delete(ctx.Tx, RoomsBkt, room.Id)
 	}
 
-	// 2. Delete all streams
+	// 2. Clean up studio-wide access codes
+	studioCodesDeleted := cleanupAccessCodesForStudio(ctx.Tx, studio.Id)
+	totalCodesDeleted += studioCodesDeleted
+
+	// 3. Delete studio analytics
+	vbolt.Delete(ctx.Tx, StudioAnalyticsBkt, studio.Id)
+
+	// 4. Delete all streams
 	var streamIds []int
 	vbolt.ReadTermTargets(ctx.Tx, StreamsByStudioIdx, studio.Id, &streamIds, vbolt.Window{})
 	for _, streamId := range streamIds {
@@ -659,7 +686,7 @@ func DeleteStudio(ctx *vbeam.Context, req DeleteStudioRequest) (resp DeleteStudi
 		}
 	}
 
-	// 3. Delete all memberships
+	// 5. Delete all memberships
 	memberships := ListStudioMembers(ctx.Tx, studio.Id)
 	for _, membership := range memberships {
 		// Get membership ID (we need to find it by iterating user's memberships)
@@ -677,7 +704,7 @@ func DeleteStudio(ctx *vbeam.Context, req DeleteStudioRequest) (resp DeleteStudi
 		}
 	}
 
-	// 4. Delete the studio itself
+	// 6. Delete the studio itself
 	vbolt.Delete(ctx.Tx, StudiosBkt, studio.Id)
 
 	vbolt.TxCommit(ctx.Tx)
@@ -691,6 +718,8 @@ func DeleteStudio(ctx *vbeam.Context, req DeleteStudioRequest) (resp DeleteStudi
 		"roomsDeleted":       len(rooms),
 		"streamsDeleted":     len(streamIds),
 		"membershipsDeleted": len(memberships),
+		"sessionsDeleted":    totalSessionsDeleted,
+		"codesDeleted":       totalCodesDeleted,
 	})
 
 	return
@@ -1161,6 +1190,128 @@ func RegenerateStreamKey(ctx *vbeam.Context, req RegenerateStreamKeyRequest) (re
 	return
 }
 
+// cleanupAccessCodesForRoom removes all access codes associated with a room
+// and their related data (analytics, sessions, indexes)
+// Returns the number of codes cleaned up
+func cleanupAccessCodesForRoom(tx *vbolt.Tx, roomId int) int {
+	var roomCodes []string
+	vbolt.ReadTermTargets(tx, CodesByRoomIdx, roomId, &roomCodes, vbolt.Window{})
+
+	for _, code := range roomCodes {
+		// Delete code sessions first (handled by cleanupCodeSessions)
+		cleanupCodeSessions(tx, code)
+
+		// Delete code analytics
+		vbolt.Delete(tx, CodeAnalyticsBkt, code)
+
+		// Remove from indexes
+		vbolt.SetTargetSingleTerm(tx, CodesByRoomIdx, code, -1)
+		vbolt.SetTargetSingleTerm(tx, CodesByCreatorIdx, code, -1)
+
+		// Delete the access code itself
+		vbolt.Delete(tx, AccessCodesBkt, code)
+	}
+
+	return len(roomCodes)
+}
+
+// cleanupAccessCodesForStudio removes all access codes associated with a studio
+// (both studio-wide codes and room-specific codes)
+// Returns the number of codes cleaned up
+func cleanupAccessCodesForStudio(tx *vbolt.Tx, studioId int) int {
+	// Clean up studio-wide codes
+	var studioCodes []string
+	vbolt.ReadTermTargets(tx, CodesByStudioIdx, studioId, &studioCodes, vbolt.Window{})
+
+	for _, code := range studioCodes {
+		// Delete code sessions
+		cleanupCodeSessions(tx, code)
+
+		// Delete code analytics
+		vbolt.Delete(tx, CodeAnalyticsBkt, code)
+
+		// Remove from indexes
+		vbolt.SetTargetSingleTerm(tx, CodesByStudioIdx, code, -1)
+		vbolt.SetTargetSingleTerm(tx, CodesByCreatorIdx, code, -1)
+
+		// Delete the access code itself
+		vbolt.Delete(tx, AccessCodesBkt, code)
+	}
+
+	return len(studioCodes)
+}
+
+// cleanupCodeSessions removes all sessions for a specific code
+func cleanupCodeSessions(tx *vbolt.Tx, code string) {
+	var sessionKeys []string
+	vbolt.ReadTermTargets(tx, SessionsByCodeIndex, code, &sessionKeys, vbolt.Window{})
+
+	for _, sessionKey := range sessionKeys {
+		// Note: We don't decrement viewer counts here because that's handled
+		// by cleanupViewerSessionsForRoom which processes all sessions
+
+		// Remove from indexes
+		vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, sessionKey, "")
+
+		// The actual session deletion is handled by cleanupViewerSessionsForRoom
+	}
+}
+
+// cleanupViewerSessionsForRoom removes all viewer sessions for a room
+// and properly decrements viewer counts in analytics
+// Returns the number of sessions cleaned up
+func cleanupViewerSessionsForRoom(tx *vbolt.Tx, roomId int) int {
+	var sessionKeys []string
+	vbolt.ReadTermTargets(tx, SessionsByRoomIndex, roomId, &sessionKeys, vbolt.Window{})
+
+	room := GetRoom(tx, roomId)
+
+	for _, sessionKey := range sessionKeys {
+		var session ViewerSession
+		vbolt.Read(tx, ViewerSessionsBkt, sessionKey, &session)
+		if session.SessionKey == "" {
+			continue
+		}
+
+		// Decrement room analytics
+		var roomAnalytics RoomAnalytics
+		vbolt.Read(tx, RoomAnalyticsBkt, roomId, &roomAnalytics)
+		if roomAnalytics.CurrentViewers > 0 {
+			roomAnalytics.CurrentViewers--
+			vbolt.Write(tx, RoomAnalyticsBkt, roomId, &roomAnalytics)
+		}
+
+		// Decrement studio analytics
+		if room.StudioId > 0 {
+			var studioAnalytics StudioAnalytics
+			vbolt.Read(tx, StudioAnalyticsBkt, room.StudioId, &studioAnalytics)
+			if studioAnalytics.CurrentViewers > 0 {
+				studioAnalytics.CurrentViewers--
+				vbolt.Write(tx, StudioAnalyticsBkt, room.StudioId, &studioAnalytics)
+			}
+		}
+
+		// Decrement code analytics if this is a code session
+		if session.Code != "" {
+			var codeAnalytics CodeAnalytics
+			vbolt.Read(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+			if codeAnalytics.CurrentViewers > 0 {
+				codeAnalytics.CurrentViewers--
+				vbolt.Write(tx, CodeAnalyticsBkt, session.Code, &codeAnalytics)
+			}
+		}
+
+		// Remove from indexes
+		vbolt.SetTargetSingleTerm(tx, SessionsByRoomIndex, sessionKey, -1)
+		vbolt.SetTargetSingleTerm(tx, SessionsByCodeIndex, sessionKey, "")
+
+		// Delete the viewer session
+		vbolt.Delete(tx, ViewerSessionsBkt, sessionKey)
+	}
+
+	return len(sessionKeys)
+}
+
 func DeleteRoom(ctx *vbeam.Context, req DeleteRoomRequest) (resp DeleteRoomResponse, err error) {
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)
@@ -1211,23 +1362,37 @@ func DeleteRoom(ctx *vbeam.Context, req DeleteRoomRequest) (resp DeleteRoomRespo
 	// 2. Remove stream key lookup
 	vbolt.Delete(ctx.Tx, RoomStreamKeyBkt, room.StreamKey)
 
-	// 3. Unindex room from studio
+	// 3. Clean up viewer sessions (must be done before deleting access codes)
+	sessionsDeleted := cleanupViewerSessionsForRoom(ctx.Tx, room.Id)
+
+	// 4. Clean up access codes and their associated data
+	codesDeleted := cleanupAccessCodesForRoom(ctx.Tx, room.Id)
+
+	// 5. Delete camera configuration if exists
+	DeleteCameraConfigData(ctx.Tx, room.Id)
+
+	// 6. Delete room analytics
+	vbolt.Delete(ctx.Tx, RoomAnalyticsBkt, room.Id)
+
+	// 7. Unindex room from studio
 	vbolt.SetTargetSingleTerm(ctx.Tx, RoomsByStudioIdx, room.Id, -1)
 
-	// 4. Delete the room itself
+	// 8. Delete the room itself
 	vbolt.Delete(ctx.Tx, RoomsBkt, room.Id)
 
 	vbolt.TxCommit(ctx.Tx)
 
 	// Log room deletion
 	LogInfo(LogCategorySystem, "Room deleted", map[string]interface{}{
-		"roomId":         room.Id,
-		"roomName":       room.Name,
-		"studioId":       studio.Id,
-		"studioName":     studio.Name,
-		"deletedBy":      caller.Id,
-		"userEmail":      caller.Email,
-		"streamsDeleted": len(streamIds),
+		"roomId":          room.Id,
+		"roomName":        room.Name,
+		"studioId":        studio.Id,
+		"studioName":      studio.Name,
+		"deletedBy":       caller.Id,
+		"userEmail":       caller.Email,
+		"streamsDeleted":  len(streamIds),
+		"sessionsDeleted": sessionsDeleted,
+		"codesDeleted":    codesDeleted,
 	})
 
 	return

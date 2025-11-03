@@ -900,7 +900,9 @@ export function view(
                     <div className="perf-metric-card">
                       <div className="metric-label">Avg Errors Per Session</div>
                       <div className="metric-value">
-                        {formatNumber(performanceState.siteWide.avgErrorsPerSession)}
+                        {formatNumber(
+                          performanceState.siteWide.avgErrorsPerSession,
+                        )}
                       </div>
                       <div className="metric-context">
                         {performanceState.siteWide.totalErrors} errors total
