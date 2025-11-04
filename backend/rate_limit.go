@@ -235,6 +235,12 @@ func (rl *RateLimiter) CheckEmoteSend(identifier string) error {
 	return rl.CheckLimit("emote_send", identifier, 1, 2*time.Second)
 }
 
+// CheckChatSend checks rate limit for sending chat messages
+// Limit: 1 message per 2 seconds per identifier (user/session)
+func (rl *RateLimiter) CheckChatSend(identifier string) error {
+	return rl.CheckLimit("chat_send", identifier, 1, 2*time.Second)
+}
+
 // cleanupLoop runs periodically to remove expired entries and free memory
 func (rl *RateLimiter) cleanupLoop() {
 	ticker := time.NewTicker(5 * time.Minute)

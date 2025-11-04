@@ -1555,6 +1555,12 @@ func HandleStreamUnpublish(ctx *vbeam.Context, req SRSAuthCallback) (resp SRSAut
 
 		RecordStreamStop(appDb, room.Id, room.StudioId)
 
+		// Delete all chat messages for this room (messages are ephemeral)
+		vbolt.WithWriteTx(appDb, func(tx *vbolt.Tx) {
+			DeleteChatMessagesForRoom(tx, room.Id)
+			vbolt.TxCommit(tx)
+		})
+
 		// Stop ABR transcoder
 		if transcoderManager != nil {
 			roomIDStr := fmt.Sprintf("%d", room.Id)

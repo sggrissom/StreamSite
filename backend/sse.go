@@ -376,6 +376,51 @@ func (m *SSEManager) BroadcastEmote(roomID int, emote string) {
 	}
 }
 
+// BroadcastChatMessage sends a new chat message to all viewers of a room
+func (m *SSEManager) BroadcastChatMessage(roomID int, message ChatMessage) {
+	m.mu.RLock()
+	clients := m.clients[roomID]
+	m.mu.RUnlock()
+
+	if len(clients) == 0 {
+		return // No one watching
+	}
+
+	// Serialize message (without session token for privacy)
+	messageCopy := message
+	messageCopy.SessionToken = ""
+	data, err := json.Marshal(messageCopy)
+	if err != nil {
+		LogWarn(LogCategorySystem, "Failed to marshal chat message", map[string]interface{}{
+			"error": err.Error(),
+		})
+		return
+	}
+
+	// Format SSE event
+	sseMessage := fmt.Sprintf("event: chat_message\ndata: %s\n\n", data)
+
+	LogDebug(LogCategorySystem, "Broadcasting chat message", map[string]interface{}{
+		"roomId":    roomID,
+		"messageId": message.Id,
+		"userName":  message.UserName,
+		"clients":   len(clients),
+	})
+
+	// Send to all connected clients
+	for _, client := range clients {
+		select {
+		case <-client.Done:
+			// Client already disconnected
+			continue
+		default:
+			if _, err := fmt.Fprint(client.Writer, sseMessage); err == nil {
+				flushSSE(client.Writer)
+			}
+		}
+	}
+}
+
 // BroadcastTranscoderError notifies viewers that the transcoder has failed
 func (m *SSEManager) BroadcastTranscoderError(roomID int, errorMsg string) {
 	m.mu.RLock()
