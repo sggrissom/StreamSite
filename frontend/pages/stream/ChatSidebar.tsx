@@ -62,7 +62,8 @@ const useChatState = vlens.declareHook((): ChatState => {
         if (state.scrollContainerRef) {
           setTimeout(() => {
             if (state.scrollContainerRef) {
-              state.scrollContainerRef.scrollTop = state.scrollContainerRef.scrollHeight;
+              state.scrollContainerRef.scrollTop =
+                state.scrollContainerRef.scrollHeight;
             }
           }, 50);
         }
@@ -154,7 +155,9 @@ export function ChatSidebar(props: ChatSidebarProps) {
       {/* Input */}
       <div className="chat-input-container">
         {props.isCodeAuth ? (
-          <div className="chat-readonly-notice">🔒 Sign in to send messages</div>
+          <div className="chat-readonly-notice">
+            🔒 Sign in to send messages
+          </div>
         ) : (
           <>
             <div className="chat-input-wrapper">
@@ -166,7 +169,9 @@ export function ChatSidebar(props: ChatSidebarProps) {
                 {...vlens.attrsBindInput(vlens.ref(state, "messageText"))}
                 onKeyDown={state.handleKeyDown}
               />
-              <div className={`chat-char-count ${isOverLimit ? "over-limit" : ""}`}>
+              <div
+                className={`chat-char-count ${isOverLimit ? "over-limit" : ""}`}
+              >
                 {charCount}/{charLimit}
               </div>
             </div>
@@ -179,9 +184,7 @@ export function ChatSidebar(props: ChatSidebarProps) {
                   state.handleSend();
                 }
               }}
-              disabled={
-                state.messageText.trim().length === 0 || isOverLimit
-              }
+              disabled={state.messageText.trim().length === 0 || isOverLimit}
             >
               Send
             </button>

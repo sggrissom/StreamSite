@@ -1246,6 +1246,22 @@ export function view(
     state.setStreamLive(data.room.isActive);
     state.setHlsReady(data.room.isHlsReady || false);
 
+    // Load chat history
+    server
+      .GetChatHistory({
+        roomId: data.room.id,
+        limit: 100,
+      })
+      .then(([resp, err]) => {
+        if (!err && resp?.messages) {
+          state.chatMessages = resp.messages;
+          vlens.scheduleRedraw();
+        }
+      })
+      .catch((err) => {
+        console.warn("Failed to load chat history:", err);
+      });
+
     state.connectSSE();
 
     // Setup metrics reporting
@@ -1365,78 +1381,92 @@ export function view(
         )}
 
         {state.isStreamLive || state.isInOfflineGrace ? (
-          <div className="video-container" ref={state.onContainerRef}>
-            <video
-              ref={state.onVideoRef}
-              autoPlay
-              muted
-              playsInline
-              preload="auto"
-              className="video-player"
-            />
+          <div className="stream-player-wrapper">
+            <div className="video-container" ref={state.onContainerRef}>
+              <video
+                ref={state.onVideoRef}
+                autoPlay
+                muted
+                playsInline
+                preload="auto"
+                className="video-player"
+              />
 
-            {/* Loading overlay when stream is starting */}
-            {state.isStreamLive && !state.isHlsReady && (
-              <div className="stream-loading-overlay">
-                {!state.hlsReadyTimedOut ? (
-                  <>
-                    <div className="loading-spinner"></div>
-                    <div className="loading-message">Preparing stream...</div>
-                  </>
-                ) : (
-                  <>
-                    <div className="loading-error-icon">⚠️</div>
-                    <div className="loading-message">
-                      Stream is taking longer than expected to start
-                    </div>
-                    <div className="loading-hint">
-                      Please check your streaming software and connection
-                    </div>
-                  </>
-                )}
-              </div>
-            )}
-
-            {/* Floating emote overlay */}
-            <div className="emote-overlay">
-              {state.activeEmotes.map((emote) => (
-                <div
-                  key={emote.id}
-                  className="floating-emote"
-                  style={{ left: `${emote.x}%` }}
-                >
-                  {emote.emote}
+              {/* Loading overlay when stream is starting */}
+              {state.isStreamLive && !state.isHlsReady && (
+                <div className="stream-loading-overlay">
+                  {!state.hlsReadyTimedOut ? (
+                    <>
+                      <div className="loading-spinner"></div>
+                      <div className="loading-message">Preparing stream...</div>
+                    </>
+                  ) : (
+                    <>
+                      <div className="loading-error-icon">⚠️</div>
+                      <div className="loading-message">
+                        Stream is taking longer than expected to start
+                      </div>
+                      <div className="loading-hint">
+                        Please check your streaming software and connection
+                      </div>
+                    </>
+                  )}
                 </div>
-              ))}
+              )}
+
+              {/* Floating emote overlay */}
+              <div className="emote-overlay">
+                {state.activeEmotes.map((emote) => (
+                  <div
+                    key={emote.id}
+                    className="floating-emote"
+                    style={{ left: `${emote.x}%` }}
+                  >
+                    {emote.emote}
+                  </div>
+                ))}
+              </div>
+
+              <VideoControls
+                id={`video-controls-${data.room?.id || 0}`}
+                videoElement={state.videoElement}
+                containerElement={state.containerElement}
+                isPlaying={state.isPlaying}
+                isBehindLive={state.isBehindLive}
+                secondsBehindLive={state.secondsBehindLive}
+                viewerCount={state.viewerCount}
+                visible={state.controlsVisible}
+                onJumpToLive={state.jumpToLive}
+                onShowControls={state.showControls}
+                onHideControls={state.hideControls}
+              />
+
+              {/* Emote picker */}
+              <EmotePicker
+                id={`emote-picker-${data.room?.id || 0}`}
+                controlsVisible={state.controlsVisible}
+                onLocalEmote={state.addEmote}
+                onSendEmote={state.sendEmote}
+              />
+
+              {/* Stats overlay */}
+              <StatsOverlay
+                stats={state.streamStats}
+                visible={state.statsVisible}
+              />
             </div>
 
-            <VideoControls
-              id={`video-controls-${data.room?.id || 0}`}
-              videoElement={state.videoElement}
-              containerElement={state.containerElement}
-              isPlaying={state.isPlaying}
-              isBehindLive={state.isBehindLive}
-              secondsBehindLive={state.secondsBehindLive}
-              viewerCount={state.viewerCount}
-              visible={state.controlsVisible}
-              onJumpToLive={state.jumpToLive}
-              onShowControls={state.showControls}
-              onHideControls={state.hideControls}
-            />
-
-            {/* Emote picker */}
-            <EmotePicker
-              id={`emote-picker-${data.room?.id || 0}`}
-              controlsVisible={state.controlsVisible}
-              onLocalEmote={state.addEmote}
-              onSendEmote={state.sendEmote}
-            />
-
-            {/* Stats overlay */}
-            <StatsOverlay
-              stats={state.streamStats}
-              visible={state.statsVisible}
-            />
+            {/* Chat sidebar */}
+            {state.isChatVisible && (
+              <ChatSidebar
+                id={`chat-${data.room?.id || 0}`}
+                roomId={data.room?.id || 0}
+                messages={state.chatMessages}
+                isCodeAuth={data.isCodeAuth || false}
+                onSendMessage={state.sendChatMessage}
+                onClose={state.toggleChat}
+              />
+            )}
           </div>
         ) : (
           <div className="stream-offline">

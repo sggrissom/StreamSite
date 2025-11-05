@@ -240,9 +240,18 @@ block(`
 `);
 
 block(`
-.video-container {
+.stream-player-wrapper {
+  display: flex;
+  gap: 1.5rem;
   margin-top: 2rem;
+}
+`);
+
+block(`
+.video-container {
+  flex: 1;
   position: relative;
+  min-width: 0;
 }
 `);
 
@@ -1088,5 +1097,27 @@ block(`
   font-size: 0.9375rem;
   color: rgba(255, 255, 255, 0.7);
   text-align: center;
+}
+`);
+
+// Chat layout responsive styles
+block(`
+@media (max-width: 1200px) {
+  .stream-container {
+    max-width: 100%;
+    padding: 1rem;
+  }
+}
+`);
+
+block(`
+@media (max-width: 768px) {
+  .stream-player-wrapper {
+    flex-direction: column;
+  }
+
+  .chat-sidebar {
+    width: 100% !important;
+  }
 }
 `);
