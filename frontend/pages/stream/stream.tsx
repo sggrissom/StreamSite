@@ -303,7 +303,26 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     isChatVisible: true, // Default visible on desktop
 
     onVideoRef: (el: HTMLVideoElement | null) => {
-      initializePlayer(state, el);
+      // Cleanup old attachment if element is changing or unmounting
+      if (state.videoElement && state.videoElement !== el) {
+        try {
+          state.videoElement.removeAttribute("src");
+          state.videoElement.load?.();
+        } catch {}
+
+        if (state.hlsInstance?.destroy) {
+          try {
+            state.hlsInstance.destroy();
+          } catch {}
+          state.hlsInstance = null;
+        }
+      }
+
+      // Store new element reference
+      state.videoElement = el;
+
+      // Don't initialize here - let setHlsReady() handle it when truly ready
+      // This prevents premature loading when element attaches during HLS readiness transition
 
       // Set up video click handler
       if (el) {
@@ -398,9 +417,17 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
         }
         state.hlsReadyTimedOut = false;
 
-        // Initialize player now that HLS is ready
+        // Force reload now that HLS is ready
         if (state.isStreamLive && state.videoElement && state.streamUrl) {
-          initializePlayer(state, state.videoElement);
+          if (state.hlsInstance) {
+            // HLS instance exists, just reload source
+            state.hlsInstance.loadSource(state.streamUrl);
+          } else {
+            // No instance yet, force re-init by clearing element ref
+            const el = state.videoElement;
+            state.videoElement = null;
+            initializePlayer(state, el);
+          }
         }
       }
 
@@ -530,6 +557,7 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
       state.eventSource.addEventListener("stream_ready", (e) => {
         state.setHlsReady(true);
+        state.retryCount = 0; // Reset retry count now that HLS is ready
       });
 
       state.eventSource.addEventListener("code_revoked", (e) => {
@@ -997,6 +1025,9 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   // Don't initialize if we don't have a URL yet
   if (!url) return;
 
+  // Don't initialize if stream is live but HLS is not ready yet
+  if (state.isStreamLive && !state.isHlsReady) return;
+
   // if the ref points to the same element, do nothing
   if (el === state.videoElement) return;
 
@@ -1170,6 +1201,7 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
                 if (
                   state.hlsInstance &&
                   state.isStreamLive &&
+                  state.isHlsReady &&
                   state.streamUrl
                 ) {
                   state.hlsInstance.loadSource(state.streamUrl);

@@ -26,10 +26,10 @@ func main() {
 		Outdir:       "release/dist",
 		NoSourceMaps: true,
 		Define: map[string]string{
-			"BROWSER":     "true",
-			"DEBUG":       "false",
-			"VERBOSE":     "false",
-			"SITE_ROOT":    "\"" + cfg.SiteRoot + "\"",
+			"BROWSER":   "true",
+			"DEBUG":     "false",
+			"VERBOSE":   "false",
+			"SITE_ROOT": "\"" + cfg.SiteRoot + "\"",
 		},
 	}
 
