@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"stream/cfg"
 	"time"
 
 	"go.hasen.dev/vbeam/esbuilder"
@@ -16,8 +17,6 @@ func main() {
 	log.Println("Starting frontend build…")
 
 	reportCh := make(chan esbuilder.ESReport, 2)
-
-	siteRoot := cfg.SiteURL
 
 	options := esbuilder.FEBuildOptions{
 		FERoot:       "frontend",
@@ -30,7 +29,7 @@ func main() {
 			"BROWSER":  "true",
 			"DEBUG":    "false",
 			"VERBOSE":  "false",
-			"SITE_URL": siteRoot,
+			"SITE_URL": "\"" + cfg.SiteURL + "\"",
 		},
 	}
 
