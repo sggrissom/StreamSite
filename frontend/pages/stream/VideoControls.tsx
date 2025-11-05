@@ -98,12 +98,13 @@ const useVideoControls = vlens.declareHook(
       },
       onPlayPauseClick: () => {
         if (!videoElement) return;
+
         if (videoElement.paused) {
           videoElement.play().catch((e) => console.warn("Play failed:", e));
         } else {
           videoElement.pause();
+          onShowControls();
         }
-        onShowControls();
       },
       onFullscreenClick: () => {
         if (!containerElement) return;

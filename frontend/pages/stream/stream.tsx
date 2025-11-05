@@ -303,6 +303,9 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     isChatVisible: true, // Default visible on desktop
 
     onVideoRef: (el: HTMLVideoElement | null) => {
+      // If same element, do nothing (avoid re-processing during re-renders)
+      if (el === state.videoElement) return;
+
       // Cleanup old attachment if element is changing or unmounting
       if (state.videoElement && state.videoElement !== el) {
         try {
@@ -321,8 +324,17 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       // Store new element reference
       state.videoElement = el;
 
-      // Don't initialize here - let setHlsReady() handle it when truly ready
-      // This prevents premature loading when element attaches during HLS readiness transition
+      // If element just attached and all conditions are ready, trigger initialization
+      // This handles the case where streamUrl, isStreamLive, isHlsReady were set before element attached
+      if (
+        el &&
+        state.streamUrl &&
+        state.isStreamLive &&
+        state.isHlsReady &&
+        !state.hlsInstance
+      ) {
+        initializePlayer(state, el);
+      }
 
       // Set up video click handler
       if (el) {
@@ -417,17 +429,14 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
         }
         state.hlsReadyTimedOut = false;
 
-        // Force reload now that HLS is ready
+        // Initialize player only if not already initialized
         if (state.isStreamLive && state.videoElement && state.streamUrl) {
-          if (state.hlsInstance) {
-            // HLS instance exists, just reload source
-            state.hlsInstance.loadSource(state.streamUrl);
-          } else {
-            // No instance yet, force re-init by clearing element ref
-            const el = state.videoElement;
-            state.videoElement = null;
-            initializePlayer(state, el);
+          // Only initialize if we don't have an HLS instance yet
+          // If instance already exists, it's already loading/loaded - don't interrupt it
+          if (!state.hlsInstance) {
+            initializePlayer(state, state.videoElement);
           }
+          // If instance exists, it's already initialized - do nothing to avoid race condition
         }
       }
 
@@ -1028,22 +1037,25 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   // Don't initialize if stream is live but HLS is not ready yet
   if (state.isStreamLive && !state.isHlsReady) return;
 
-  // if the ref points to the same element, do nothing
-  if (el === state.videoElement) return;
+  // Check if we're switching elements or reinitializing the same element
+  const isSameElement = el === state.videoElement;
 
-  // cleanup old attachment if ref changed or unmounted
-  if (state.videoElement) {
+  // cleanup old attachment if ref changed or unmounted (but not if same element)
+  if (state.videoElement && !isSameElement) {
     try {
       state.videoElement.removeAttribute("src");
       state.videoElement.load?.();
     } catch {}
   }
+
+  // Always destroy HLS instance before reinitializing
   if (state.hlsInstance?.destroy) {
     try {
       state.hlsInstance.destroy();
     } catch {}
     state.hlsInstance = null;
   }
+
   state.videoElement = el;
 
   // if unmounting, we're done
@@ -1428,7 +1440,6 @@ export function view(
             <div className="video-container" ref={state.onContainerRef}>
               <video
                 ref={state.onVideoRef}
-                autoPlay
                 muted
                 playsInline
                 preload="auto"
