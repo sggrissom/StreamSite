@@ -428,6 +428,24 @@ export interface SendEmoteRequest {
 export interface SendEmoteResponse {
 }
 
+export interface SendChatMessageRequest {
+    roomId: number
+    text: string
+}
+
+export interface SendChatMessageResponse {
+    message: ChatMessage
+}
+
+export interface GetChatHistoryRequest {
+    roomId: number
+    limit: number
+}
+
+export interface GetChatHistoryResponse {
+    messages: ChatMessage[]
+}
+
 export interface GetTranscoderHealthRequest {
 }
 
@@ -701,6 +719,15 @@ export interface BucketEntry {
     value: any
 }
 
+export interface ChatMessage {
+    id: number
+    roomId: number
+    userId: number
+    userName: string
+    text: string
+    timestamp: string
+}
+
 export interface TranscoderStatus {
     roomId: string
     streamKey: string
@@ -883,6 +910,14 @@ export async function GetBucketData(data: GetBucketDataRequest): Promise<rpc.Res
 
 export async function SendEmote(data: SendEmoteRequest): Promise<rpc.Response<SendEmoteResponse>> {
     return await rpc.call<SendEmoteResponse>('SendEmote', JSON.stringify(data));
+}
+
+export async function SendChatMessage(data: SendChatMessageRequest): Promise<rpc.Response<SendChatMessageResponse>> {
+    return await rpc.call<SendChatMessageResponse>('SendChatMessage', JSON.stringify(data));
+}
+
+export async function GetChatHistory(data: GetChatHistoryRequest): Promise<rpc.Response<GetChatHistoryResponse>> {
+    return await rpc.call<GetChatHistoryResponse>('GetChatHistory', JSON.stringify(data));
 }
 
 export async function GetTranscoderHealth(data: GetTranscoderHealthRequest): Promise<rpc.Response<TranscoderHealthResponse>> {

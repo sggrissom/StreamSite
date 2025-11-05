@@ -6,9 +6,12 @@ import { Header, Footer } from "../../layout";
 import { VideoControls } from "./VideoControls";
 import { EmotePicker } from "./EmotePicker";
 import { StatsOverlay, type StreamStats } from "./StatsOverlay";
+import { ChatSidebar } from "./ChatSidebar";
 import "./stream-styles";
+import "./chat-styles";
 
 type Data = server.GetRoomDetailsResponse;
+type ChatMessage = server.ChatMessage;
 
 // Emote animation for floating effects
 type EmoteAnimation = {
@@ -164,6 +167,13 @@ type StreamState = {
   updateStats: () => void;
   startStatsUpdating: () => void;
   stopStatsUpdating: () => void;
+
+  // Chat state
+  chatMessages: ChatMessage[];
+  isChatVisible: boolean;
+  addChatMessage: (msg: ChatMessage) => void;
+  sendChatMessage: (text: string) => void;
+  toggleChat: () => void;
 };
 
 type OrientationState = {
@@ -287,6 +297,10 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     metricsMediaErrors: 0,
     metricsReportInterval: null,
     metricsReported: false,
+
+    // Chat state - Initialize
+    chatMessages: [],
+    isChatVisible: true, // Default visible on desktop
 
     onVideoRef: (el: HTMLVideoElement | null) => {
       initializePlayer(state, el);
@@ -439,6 +453,29 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
           console.warn("Failed to send emote:", err);
         });
     },
+    addChatMessage: (msg: ChatMessage) => {
+      state.chatMessages.push(msg);
+      // Keep only last 200 messages in memory
+      if (state.chatMessages.length > 200) {
+        state.chatMessages = state.chatMessages.slice(-200);
+      }
+      vlens.scheduleRedraw();
+    },
+    sendChatMessage: (text: string) => {
+      // Call API to send message
+      server
+        .SendChatMessage({
+          roomId: state.roomId,
+          text: text,
+        })
+        .catch((err: any) => {
+          console.warn("Failed to send chat message:", err);
+        });
+    },
+    toggleChat: () => {
+      state.isChatVisible = !state.isChatVisible;
+      vlens.scheduleRedraw();
+    },
     showControls: () => {
       state.controlsVisible = true;
       vlens.scheduleRedraw();
@@ -514,6 +551,11 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
         // This is an emote from another viewer - display it
         state.addEmote(emote);
+      });
+
+      state.eventSource.addEventListener("chat_message", (e) => {
+        const message: ChatMessage = JSON.parse(e.data);
+        state.addChatMessage(message);
       });
 
       state.eventSource.onerror = (err) => {
