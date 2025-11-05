@@ -21,7 +21,10 @@ type ChatState = {
   shouldAutoScroll: boolean;
   onScroll: (e: Event) => void;
   handleSend: () => void;
-  handleKeyDown: (e: KeyboardEvent) => void;
+  handleKeyDown: (
+    e: KeyboardEvent,
+    onSendMessage: (text: string) => void,
+  ) => void;
 };
 
 const useChatState = vlens.declareHook((): ChatState => {
@@ -51,29 +54,33 @@ const useChatState = vlens.declareHook((): ChatState => {
     },
 
     handleSend: () => {
-      const text = state.messageText.trim();
-      if (text.length > 0 && text.length <= 500) {
-        // Will be handled by parent component
-        state.messageText = "";
-        vlens.scheduleRedraw();
+      // Just clear the input and scroll
+      state.messageText = "";
+      vlens.scheduleRedraw();
 
-        // Scroll to bottom after sending
-        state.shouldAutoScroll = true;
-        if (state.scrollContainerRef) {
-          setTimeout(() => {
-            if (state.scrollContainerRef) {
-              state.scrollContainerRef.scrollTop =
-                state.scrollContainerRef.scrollHeight;
-            }
-          }, 50);
-        }
+      // Scroll to bottom after sending
+      state.shouldAutoScroll = true;
+      if (state.scrollContainerRef) {
+        setTimeout(() => {
+          if (state.scrollContainerRef) {
+            state.scrollContainerRef.scrollTop =
+              state.scrollContainerRef.scrollHeight;
+          }
+        }, 50);
       }
     },
 
-    handleKeyDown: (e: KeyboardEvent) => {
+    handleKeyDown: (
+      e: KeyboardEvent,
+      onSendMessage: (text: string) => void,
+    ) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        state.handleSend();
+        const text = state.messageText.trim();
+        if (text.length > 0 && text.length <= 500) {
+          onSendMessage(text);
+          state.handleSend();
+        }
       }
     },
   };
@@ -167,7 +174,7 @@ export function ChatSidebar(props: ChatSidebarProps) {
                 maxLength={charLimit}
                 rows={2}
                 {...vlens.attrsBindInput(vlens.ref(state, "messageText"))}
-                onKeyDown={state.handleKeyDown}
+                onKeyDown={(e) => state.handleKeyDown(e, props.onSendMessage)}
               />
               <div
                 className={`chat-char-count ${isOverLimit ? "over-limit" : ""}`}

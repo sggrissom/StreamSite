@@ -463,10 +463,16 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     },
     sendChatMessage: (text: string) => {
       // Call API to send message
+      // Don't add optimistically - SSE will broadcast it back to us
       server
         .SendChatMessage({
           roomId: state.roomId,
           text: text,
+        })
+        .then(([resp, err]) => {
+          if (err) {
+            console.warn("Failed to send chat message:", err);
+          }
         })
         .catch((err: any) => {
           console.warn("Failed to send chat message:", err);
@@ -555,7 +561,12 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
 
       state.eventSource.addEventListener("chat_message", (e) => {
         const message: ChatMessage = JSON.parse(e.data);
-        state.addChatMessage(message);
+
+        // Check if we already have this message (deduplicate)
+        const exists = state.chatMessages.some((msg) => msg.id === message.id);
+        if (!exists) {
+          state.addChatMessage(message);
+        }
       });
 
       state.eventSource.onerror = (err) => {
