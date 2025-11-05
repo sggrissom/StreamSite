@@ -41,10 +41,10 @@ var FEOpts = esbuilder.FEBuildOptions{
 	CopyItems: []string{},
 	Outdir:    FEDist,
 	Define: map[string]string{
-		"BROWSER":  "true",
-		"DEBUG":    "true",
-		"VERBOSE":  "false",
-		"SITE_URL": "\"" + cfg.SiteURL + "\"",
+		"BROWSER":     "true",
+		"DEBUG":       "true",
+		"VERBOSE":     "false",
+		"SITE_ROOT":    "\"" + cfg.SiteRoot + "\"",
 	},
 }
 

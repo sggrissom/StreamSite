@@ -129,11 +129,7 @@ async function submitGenerateCode(
 
   // Show success view with generated code
   state.generatedCode = resp.code || "";
-  const hostname =
-    window.location.hostname === "localhost"
-      ? "localhost:3000"
-      : "stream.grissom.zone";
-  state.shareUrl = `http://${hostname}/watch/${resp.code}`;
+  state.shareUrl = `http://${SITE_ROOT}/watch/${resp.code}`;
 
   // Generate QR code for the share URL
   try {

@@ -94,11 +94,7 @@ function closeStreamKeyModal(modal: StreamKeyModal) {
 async function copyStreamKey(modal: StreamKeyModal) {
   try {
     // Build complete RTMP URL with stream key
-    const hostname =
-      window.location.hostname === "localhost"
-        ? "localhost"
-        : "stream.grissom.zone";
-    const completeUrl = `rtmp://${hostname}:1935/live/${modal.streamKey}`;
+    const completeUrl = `rtmp://${SITE_ROOT}:1935/live/${modal.streamKey}`;
 
     await navigator.clipboard.writeText(completeUrl);
     modal.copySuccess = true;
@@ -830,11 +826,7 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
               <div className="form-group">
                 <label>RTMP Server URL</label>
                 <div className="stream-key-display">
-                  rtmp://
-                  {window.location.hostname === "localhost"
-                    ? "localhost"
-                    : "stream.grissom.zone"}
-                  :1935/live
+                  rtmp://{SITE_ROOT}:1935/live
                 </div>
                 <small className="form-help">
                   Enter this URL in your streaming software's server field

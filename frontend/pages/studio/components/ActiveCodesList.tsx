@@ -208,11 +208,7 @@ async function openQrModal(
   state.qrModal.scopeName = scopeName;
 
   // Generate share URL
-  const hostname =
-    window.location.hostname === "localhost"
-      ? "localhost:3000"
-      : "stream.grissom.zone";
-  state.qrModal.shareUrl = `http://${hostname}/watch/${code}`;
+  state.qrModal.shareUrl = `http://${SITE_ROOT}/watch/${code}`;
 
   // Generate QR code
   try {
