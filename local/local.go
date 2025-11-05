@@ -32,6 +32,8 @@ func StartLocalServer() {
 	appServer.ListenAndServe()
 }
 
+siteRoot := cfg.SiteURL
+
 var FEOpts = esbuilder.FEBuildOptions{
 	FERoot: "frontend",
 	EntryTS: []string{
@@ -44,6 +46,7 @@ var FEOpts = esbuilder.FEBuildOptions{
 		"BROWSER": "true",
 		"DEBUG":   "true",
 		"VERBOSE": "false",
+		"SITE_URL": siteRoot,
 	},
 }
 

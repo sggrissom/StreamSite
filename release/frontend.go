@@ -17,6 +17,8 @@ func main() {
 
 	reportCh := make(chan esbuilder.ESReport, 2)
 
+	siteRoot := cfg.SiteURL
+
 	options := esbuilder.FEBuildOptions{
 		FERoot:       "frontend",
 		EntryTS:      []string{"main.tsx"},
@@ -25,9 +27,10 @@ func main() {
 		Outdir:       "release/dist",
 		NoSourceMaps: true,
 		Define: map[string]string{
-			"BROWSER": "true",
-			"DEBUG":   "false",
-			"VERBOSE": "false",
+			"BROWSER":  "true",
+			"DEBUG":    "false",
+			"VERBOSE":  "false",
+			"SITE_URL": siteRoot,
 		},
 	}
 
