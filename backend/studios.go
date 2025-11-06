@@ -316,6 +316,7 @@ type GetRoomDetailsResponse struct {
 	StudioName    string     `json:"studioName,omitempty"`
 	MyRole        StudioRole `json:"myRole"`
 	MyRoleName    string     `json:"myRoleName"`
+	UserId        int        `json:"userId"`                  // User ID (-1 for anonymous code sessions)
 	IsCodeAuth    bool       `json:"isCodeAuth"`              // True if authenticated via access code
 	CodeExpiresAt *time.Time `json:"codeExpiresAt,omitempty"` // When the access code expires
 }
@@ -871,6 +872,7 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 	resp.StudioName = studio.Name
 	resp.MyRole = access.Role
 	resp.MyRoleName = GetStudioRoleName(access.Role)
+	resp.UserId = caller.Id
 	resp.IsCodeAuth = access.IsCodeAuth
 	resp.CodeExpiresAt = access.CodeExpiresAt
 	return

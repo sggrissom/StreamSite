@@ -1490,7 +1490,9 @@ export function view(
                 secondsBehindLive={state.secondsBehindLive}
                 viewerCount={state.viewerCount}
                 visible={state.controlsVisible}
+                isChatVisible={state.isChatVisible}
                 onJumpToLive={state.jumpToLive}
+                onToggleChat={state.toggleChat}
                 onShowControls={state.showControls}
                 onHideControls={state.hideControls}
               />
@@ -1516,7 +1518,7 @@ export function view(
                 id={`chat-${data.room?.id || 0}`}
                 roomId={data.room?.id || 0}
                 messages={state.chatMessages}
-                isCodeAuth={data.isCodeAuth || false}
+                userId={data.userId || 0}
                 onSendMessage={state.sendChatMessage}
                 onClose={state.toggleChat}
               />

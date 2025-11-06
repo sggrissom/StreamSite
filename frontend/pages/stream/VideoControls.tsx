@@ -15,7 +15,9 @@ type VideoControlsProps = {
   secondsBehindLive: number;
   viewerCount: number;
   visible: boolean;
+  isChatVisible: boolean;
   onJumpToLive: () => void;
+  onToggleChat: () => void;
   onShowControls: () => void;
   onHideControls: () => void;
 };
@@ -492,6 +494,15 @@ export function VideoControls(props: VideoControlsProps) {
             }
             aria-label="Volume"
           />
+
+          {/* Chat toggle button (mobile only) */}
+          <button
+            className="control-btn control-chat mobile-only"
+            onClick={props.onToggleChat}
+            aria-label={props.isChatVisible ? "Hide chat" : "Show chat"}
+          >
+            💬
+          </button>
 
           {/* Picture-in-Picture button (only show if supported) */}
           {state.isPiPSupported && (

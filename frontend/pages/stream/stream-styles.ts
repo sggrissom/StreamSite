@@ -1121,3 +1121,18 @@ block(`
   }
 }
 `);
+
+// Mobile-only chat toggle button
+block(`
+.control-chat.mobile-only {
+  display: none;
+}
+`);
+
+block(`
+@media (max-width: 768px) {
+  .control-chat.mobile-only {
+    display: flex;
+  }
+}
+`);

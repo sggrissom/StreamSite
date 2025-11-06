@@ -162,6 +162,7 @@ export interface GetRoomDetailsResponse {
     studioName: string
     myRole: StudioRole
     myRoleName: string
+    userId: number
     isCodeAuth: boolean
     codeExpiresAt: string | null
 }

@@ -8,7 +8,7 @@ type ChatSidebarProps = {
   id: string;
   roomId: number;
   messages: ChatMessage[];
-  isCodeAuth: boolean;
+  userId: number;
   onSendMessage: (text: string) => void;
   onClose?: () => void; // For mobile
 };
@@ -161,7 +161,7 @@ export function ChatSidebar(props: ChatSidebarProps) {
 
       {/* Input */}
       <div className="chat-input-container">
-        {props.isCodeAuth ? (
+        {props.userId === -1 ? (
           <div className="chat-readonly-notice">
             🔒 Sign in to send messages
           </div>
