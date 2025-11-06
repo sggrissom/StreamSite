@@ -19,7 +19,7 @@ CGO_ENABLED  := 0
 
 build-frontend:
 	@echo "Building frontend..."
-	go run -tags frontend release/frontend.go
+	go run -tags "frontend,release" release/frontend.go
 
 build-go:
 	@echo "Building $(BINARY_NAME)..."
