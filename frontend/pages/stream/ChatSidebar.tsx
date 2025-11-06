@@ -8,7 +8,6 @@ type ChatSidebarProps = {
   id: string;
   roomId: number;
   messages: ChatMessage[];
-  userId: number;
   onSendMessage: (text: string) => void;
   onClose?: () => void; // For mobile
 };
@@ -161,42 +160,32 @@ export function ChatSidebar(props: ChatSidebarProps) {
 
       {/* Input */}
       <div className="chat-input-container">
-        {props.userId === -1 ? (
-          <div className="chat-readonly-notice">
-            🔒 Sign in to send messages
+        <div className="chat-input-wrapper">
+          <textarea
+            className="chat-input"
+            placeholder="Send a message..."
+            maxLength={charLimit}
+            rows={2}
+            {...vlens.attrsBindInput(vlens.ref(state, "messageText"))}
+            onKeyDown={(e) => state.handleKeyDown(e, props.onSendMessage)}
+          />
+          <div className={`chat-char-count ${isOverLimit ? "over-limit" : ""}`}>
+            {charCount}/{charLimit}
           </div>
-        ) : (
-          <>
-            <div className="chat-input-wrapper">
-              <textarea
-                className="chat-input"
-                placeholder="Send a message..."
-                maxLength={charLimit}
-                rows={2}
-                {...vlens.attrsBindInput(vlens.ref(state, "messageText"))}
-                onKeyDown={(e) => state.handleKeyDown(e, props.onSendMessage)}
-              />
-              <div
-                className={`chat-char-count ${isOverLimit ? "over-limit" : ""}`}
-              >
-                {charCount}/{charLimit}
-              </div>
-            </div>
-            <button
-              className="chat-send-btn"
-              onClick={() => {
-                const text = state.messageText.trim();
-                if (text.length > 0 && text.length <= 500) {
-                  props.onSendMessage(text);
-                  state.handleSend();
-                }
-              }}
-              disabled={state.messageText.trim().length === 0 || isOverLimit}
-            >
-              Send
-            </button>
-          </>
-        )}
+        </div>
+        <button
+          className="chat-send-btn"
+          onClick={() => {
+            const text = state.messageText.trim();
+            if (text.length > 0 && text.length <= 500) {
+              props.onSendMessage(text);
+              state.handleSend();
+            }
+          }}
+          disabled={state.messageText.trim().length === 0 || isOverLimit}
+        >
+          Send
+        </button>
       </div>
     </div>
   );

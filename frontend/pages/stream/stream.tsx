@@ -1518,7 +1518,6 @@ export function view(
                 id={`chat-${data.room?.id || 0}`}
                 roomId={data.room?.id || 0}
                 messages={state.chatMessages}
-                userId={data.userId || 0}
                 onSendMessage={state.sendChatMessage}
                 onClose={state.toggleChat}
               />
