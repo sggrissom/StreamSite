@@ -32,6 +32,8 @@ type ControlsState = {
   wakeLock: any | null;
   volume: number;
   isMuted: boolean;
+  isVolumePopupVisible: boolean;
+  isMobile: boolean;
   videoClickHandler: ((e: MouseEvent) => void) | null;
   fullscreenChangeHandler: (() => void) | null;
   keydownHandler: ((e: KeyboardEvent) => void) | null;
@@ -41,6 +43,7 @@ type ControlsState = {
   onPiPClick: () => void;
   onMuteClick: () => void;
   onVolumeChange: (value: number) => void;
+  toggleVolumePopup: () => void;
   enableWakeLock: () => Promise<void>;
   disableWakeLock: () => void;
   checkPiPSupport: () => void;
@@ -80,6 +83,7 @@ const useVideoControls = vlens.declareHook(
     const canFullscreen = !!(
       doc.fullscreenEnabled || doc.webkitFullscreenEnabled
     );
+    const isMobileDevice = window.innerWidth <= 768;
 
     const state: ControlsState = {
       isPiPSupported: false,
@@ -91,6 +95,8 @@ const useVideoControls = vlens.declareHook(
       wakeLock: null,
       volume: volumePrefs.volume,
       isMuted: volumePrefs.isMuted,
+      isVolumePopupVisible: false,
+      isMobile: isMobileDevice,
       videoClickHandler: null,
       fullscreenChangeHandler: null,
       keydownHandler: null,
@@ -195,6 +201,13 @@ const useVideoControls = vlens.declareHook(
       },
       onMuteClick: () => {
         if (!videoElement) return;
+
+        // On mobile, toggle volume popup instead of just muting
+        if (state.isMobile) {
+          state.toggleVolumePopup();
+          return;
+        }
+
         state.isMuted = !state.isMuted;
         videoElement.muted = state.isMuted;
 
@@ -211,6 +224,11 @@ const useVideoControls = vlens.declareHook(
           console.warn("Failed to save volume preferences:", e);
         }
 
+        vlens.scheduleRedraw();
+        onShowControls();
+      },
+      toggleVolumePopup: () => {
+        state.isVolumePopupVisible = !state.isVolumePopupVisible;
         vlens.scheduleRedraw();
         onShowControls();
       },
@@ -437,7 +455,11 @@ export function VideoControls(props: VideoControlsProps) {
             onClick={state.onPlayPauseClick}
             aria-label={props.isPlaying ? "Pause" : "Play"}
           >
-            {props.isPlaying ? "⏸" : "▶"}
+            {props.isPlaying ? (
+              <div className="pause-icon" />
+            ) : (
+              <div className="play-icon" />
+            )}
           </button>
         </div>
 
@@ -482,7 +504,25 @@ export function VideoControls(props: VideoControlsProps) {
             {state.isMuted ? "🔇" : "🔊"}
           </button>
 
-          {/* Volume slider */}
+          {/* Volume popup overlay (mobile only) */}
+          {state.isMobile && state.isVolumePopupVisible && (
+            <div className="volume-popup-overlay">
+              <span className="volume-popup-label">{state.volume}%</span>
+              <input
+                type="range"
+                className="volume-popup-slider"
+                min="0"
+                max="100"
+                value={state.volume}
+                onInput={(e) =>
+                  state.onVolumeChange(parseInt(e.currentTarget.value))
+                }
+                aria-label="Volume"
+              />
+            </div>
+          )}
+
+          {/* Volume slider (desktop only) */}
           <input
             type="range"
             className="volume-slider"

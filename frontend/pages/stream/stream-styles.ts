@@ -478,6 +478,38 @@ block(`
   height: 80px;
   border-radius: 50%;
   font-size: 2rem;
+  position: relative;
+}
+`);
+
+block(`
+.play-icon {
+  width: 0;
+  height: 0;
+  border-style: solid;
+  border-width: 12px 0 12px 20px;
+  border-color: transparent transparent transparent white;
+  margin-left: 4px;
+}
+`);
+
+block(`
+.pause-icon {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: center;
+}
+`);
+
+block(`
+.pause-icon::before,
+.pause-icon::after {
+  content: '';
+  width: 6px;
+  height: 24px;
+  background: white;
+  border-radius: 3px;
 }
 `);
 
@@ -545,6 +577,12 @@ block(`
   border-radius: 50%;
   cursor: pointer;
   margin-top: -5px;
+}
+`);
+
+block(`
+.volume-popup-overlay {
+  display: none;
 }
 `);
 
@@ -776,6 +814,18 @@ block(`
     font-size: 1.75rem;
   }
 
+  .play-icon {
+    border-width: 10px 0 10px 17px;
+    margin-left: 3px;
+  }
+
+  .pause-icon::before,
+  .pause-icon::after {
+    width: 5px;
+    height: 20px;
+    border-radius: 2.5px;
+  }
+
   .control-fullscreen,
   .control-pip,
   .control-mute {
@@ -786,6 +836,74 @@ block(`
 
   .volume-slider {
     display: none;
+  }
+
+  .volume-popup-overlay {
+    position: absolute;
+    bottom: 60px;
+    right: 60px;
+    background: rgba(0, 0, 0, 0.85);
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 12px;
+    padding: 1rem 0.75rem;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.75rem;
+    backdrop-filter: blur(8px);
+    z-index: 20;
+    pointer-events: auto;
+  }
+
+  .volume-popup-overlay.hidden {
+    display: none;
+  }
+
+  .volume-popup-slider {
+    writing-mode: vertical-lr;
+    direction: rtl;
+    width: 4px;
+    height: 100px;
+    cursor: pointer;
+    appearance: none;
+    background: transparent;
+    outline: none;
+  }
+
+  .volume-popup-slider::-webkit-slider-track {
+    width: 4px;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 2px;
+  }
+
+  .volume-popup-slider::-webkit-slider-thumb {
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    background: white;
+    border-radius: 50%;
+    cursor: pointer;
+  }
+
+  .volume-popup-slider::-moz-range-track {
+    width: 4px;
+    background: rgba(255, 255, 255, 0.3);
+    border-radius: 2px;
+  }
+
+  .volume-popup-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    background: white;
+    border-radius: 50%;
+    border: none;
+    cursor: pointer;
+  }
+
+  .volume-popup-label {
+    font-size: 0.75rem;
+    color: white;
+    font-weight: 600;
   }
 
   .control-viewer-badge {
