@@ -495,32 +495,35 @@ export function VideoControls(props: VideoControlsProps) {
 
           <div className="control-spacer"></div>
 
-          {/* Mute/unmute button */}
-          <button
-            className="control-btn control-mute"
-            onClick={state.onMuteClick}
-            aria-label={state.isMuted ? "Unmute" : "Mute"}
-          >
-            {state.isMuted ? "🔇" : "🔊"}
-          </button>
+          {/* Volume control container */}
+          <div style={{ position: "relative" }}>
+            {/* Mute/unmute button */}
+            <button
+              className="control-btn control-mute"
+              onClick={state.onMuteClick}
+              aria-label={state.isMuted ? "Unmute" : "Mute"}
+            >
+              {state.isMuted ? "🔇" : "🔊"}
+            </button>
 
-          {/* Volume popup overlay (mobile only) */}
-          {state.isMobile && state.isVolumePopupVisible && (
-            <div className="volume-popup-overlay">
-              <span className="volume-popup-label">{state.volume}%</span>
-              <input
-                type="range"
-                className="volume-popup-slider"
-                min="0"
-                max="100"
-                value={state.volume}
-                onInput={(e) =>
-                  state.onVolumeChange(parseInt(e.currentTarget.value))
-                }
-                aria-label="Volume"
-              />
-            </div>
-          )}
+            {/* Volume popup overlay (mobile only) */}
+            {state.isMobile && state.isVolumePopupVisible && (
+              <div className="volume-popup-overlay">
+                <span className="volume-popup-label">{state.volume}%</span>
+                <input
+                  type="range"
+                  className="volume-popup-slider"
+                  min="0"
+                  max="100"
+                  value={state.volume}
+                  onInput={(e) =>
+                    state.onVolumeChange(parseInt(e.currentTarget.value))
+                  }
+                  aria-label="Volume"
+                />
+              </div>
+            )}
+          </div>
 
           {/* Volume slider (desktop only) */}
           <input

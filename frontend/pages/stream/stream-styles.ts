@@ -489,7 +489,7 @@ block(`
   border-style: solid;
   border-width: 12px 0 12px 20px;
   border-color: transparent transparent transparent white;
-  margin-left: 4px;
+  margin-left: 6px;
 }
 `);
 
@@ -816,7 +816,7 @@ block(`
 
   .play-icon {
     border-width: 10px 0 10px 17px;
-    margin-left: 3px;
+    margin-left: 5px;
   }
 
   .pause-icon::before,
@@ -840,8 +840,9 @@ block(`
 
   .volume-popup-overlay {
     position: absolute;
-    bottom: 60px;
-    right: 60px;
+    bottom: 100%;
+    right: 0;
+    margin-bottom: 8px;
     background: rgba(0, 0, 0, 0.85);
     border: 2px solid rgba(255, 255, 255, 0.3);
     border-radius: 12px;
