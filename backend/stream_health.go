@@ -50,22 +50,28 @@ func CheckHlsAvailability(hlsBaseDir string, roomId int64) bool {
 		return false
 	}
 
-	// Verify at least one variant directory exists with segments
+	// Verify that multiple variant directories exist with segments
 	// FFmpeg creates directories: 0/ (1080p), 1/ (720p), 2/ (480p)
+	// We require at least 2 variants to be ready to avoid race conditions
+	// where clients try to load variants that don't exist yet
+	readyVariants := 0
 	for i := 0; i < 3; i++ {
 		variantDir := filepath.Join(hlsBaseDir, roomIdStr, fmt.Sprintf("%d", i))
 		if dirInfo, err := os.Stat(variantDir); err == nil && dirInfo.IsDir() {
 			// Check if variant has a stream.m3u8 file
 			variantPlaylist := filepath.Join(variantDir, "stream.m3u8")
-			if _, err := os.Stat(variantPlaylist); err == nil {
-				// Found at least one valid variant - HLS is ready
-				return true
+			if info, err := os.Stat(variantPlaylist); err == nil {
+				// Also verify the playlist is not empty (file is fully written)
+				if info.Size() > 0 {
+					readyVariants++
+				}
 			}
 		}
 	}
 
-	// Master playlist exists but no valid variants yet
-	return false
+	// Require at least 2 out of 3 variants to be ready
+	// This ensures clients won't get 404s when HLS.js tries to load a variant
+	return readyVariants >= 2
 }
 
 // PollForHlsAvailability polls for HLS availability up to maxAttempts times

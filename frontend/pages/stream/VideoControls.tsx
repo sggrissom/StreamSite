@@ -34,6 +34,8 @@ type ControlsState = {
   isMuted: boolean;
   isVolumePopupVisible: boolean;
   isMobile: boolean;
+  hasRestoredPreferences: boolean;
+  playingEventHandler: ((e: Event) => void) | null;
   videoClickHandler: ((e: MouseEvent) => void) | null;
   fullscreenChangeHandler: (() => void) | null;
   keydownHandler: ((e: KeyboardEvent) => void) | null;
@@ -97,6 +99,8 @@ const useVideoControls = vlens.declareHook(
       isMuted: volumePrefs.isMuted,
       isVolumePopupVisible: false,
       isMobile: isMobileDevice,
+      hasRestoredPreferences: false,
+      playingEventHandler: null,
       videoClickHandler: null,
       fullscreenChangeHandler: null,
       keydownHandler: null,
@@ -338,19 +342,36 @@ const useVideoControls = vlens.declareHook(
           );
           state.videoClickHandler = null;
         }
+
+        // Remove playing event listener
+        if (videoElement && state.playingEventHandler) {
+          videoElement.removeEventListener(
+            "playing",
+            state.playingEventHandler as any,
+          );
+          state.playingEventHandler = null;
+        }
       },
     };
 
-    // Video click handler is set up in parent (stream.tsx)
-    // Parent manages visibility state and auto-hide timer
-
-    // Check PiP support when video element changes
     if (videoElement) {
       state.checkPiPSupport();
 
-      // Apply volume settings from state
       videoElement.volume = state.volume / 100;
-      videoElement.muted = state.isMuted;
+
+      // Delay applying muted state until after autoplay succeeds to avoid browser blocking
+      if (!state.hasRestoredPreferences) {
+        state.playingEventHandler = (e: Event) => {
+          if (!state.hasRestoredPreferences && videoElement) {
+            videoElement.muted = state.isMuted;
+            state.hasRestoredPreferences = true;
+            vlens.scheduleRedraw();
+          }
+        };
+        videoElement.addEventListener("playing", state.playingEventHandler);
+      } else {
+        videoElement.muted = state.isMuted;
+      }
 
       // Listen for PiP events
       const handleEnterPiP = () => {

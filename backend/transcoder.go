@@ -174,7 +174,7 @@ func (t *Transcoder) Start() error {
 		// HLS settings
 		"-hls_time", "2",
 		"-hls_list_size", "5",
-		"-hls_flags", "independent_segments+delete_segments+append_list+program_date_time",
+		"-hls_flags", "independent_segments+delete_segments+program_date_time",
 
 		// %v is the variant index (0 for 1080p, 1 for 720p, 2 for 480p)
 		"-hls_segment_filename", filepath.Join(t.outDir, "%v", "seg_%06d.ts"),
@@ -242,9 +242,12 @@ func (t *Transcoder) Stop() {
 	// Give FFmpeg time to flush playlists
 	time.Sleep(500 * time.Millisecond)
 
-	// Optional: Clean up HLS directory to free space
-	// Uncomment if you don't want to keep segments after stream ends
-	// os.RemoveAll(t.outDir)
+	// Clean up HLS directory to free space and prevent stale files
+	if err := os.RemoveAll(t.outDir); err != nil {
+		log.Printf("[Transcoder] Warning: Failed to clean HLS directory for room %s: %v", t.roomID, err)
+	} else {
+		log.Printf("[Transcoder] Cleaned HLS directory for room %s", t.roomID)
+	}
 }
 
 // IsRunning returns true if the FFmpeg process is still active
@@ -304,6 +307,14 @@ func (m *TranscoderManager) Start(roomID, streamKey string) error {
 	if _, exists := m.transcoders[roomID]; exists {
 		log.Printf("[Transcoder] Transcoder already running for room %s", roomID)
 		return nil // Not an error, just ignore
+	}
+
+	// Clean up old HLS files from previous stream sessions
+	// This prevents stale playlists from causing 404 errors
+	hlsDir := filepath.Join(m.config.HLSBaseDir, roomID)
+	if err := os.RemoveAll(hlsDir); err != nil && !os.IsNotExist(err) {
+		log.Printf("[Transcoder] Warning: Failed to clean old HLS directory for room %s: %v", roomID, err)
+		// Continue anyway - not fatal
 	}
 
 	// Create and start transcoder with retry logic

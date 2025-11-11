@@ -869,6 +869,14 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 
 	// Return successful response
 	resp.Room = room
+	// Verify HLS files are actually available on disk before returning ready state
+	// This gives instant auto-play on reload while preventing race conditions during startup
+	if room.IsActive && room.IsHlsReady {
+		// Double-check files actually exist and are ready
+		resp.Room.IsHlsReady = CheckHlsAvailability(cfg.HLSBaseDir, int64(room.Id))
+	} else {
+		resp.Room.IsHlsReady = false
+	}
 	resp.StudioName = studio.Name
 	resp.MyRole = access.Role
 	resp.MyRoleName = GetStudioRoleName(access.Role)
@@ -1450,6 +1458,20 @@ func pollAndBroadcastHlsReady(roomId int, studioId int) {
 			vbolt.Write(tx, RoomsBkt, room.Id, &room)
 			vbolt.TxCommit(tx)
 		})
+
+		// Add additional buffer to ensure filesystem is fully flushed
+		// This is critical for network filesystems (NAS) where writes may be cached
+		time.Sleep(1 * time.Second)
+
+		// Re-verify files are actually available before broadcasting
+		// This prevents race conditions where DB state says ready but files aren't readable yet
+		if !CheckHlsAvailability(cfg.HLSBaseDir, int64(roomId)) {
+			LogWarn(LogCategorySystem, "HLS files not available after marking ready - possible filesystem lag", map[string]interface{}{
+				"room_id": roomId,
+			})
+			// Don't broadcast - files disappeared or aren't actually ready
+			return
+		}
 
 		// Broadcast stream_ready event
 		sseManager.BroadcastStreamReady(roomId, studioId)

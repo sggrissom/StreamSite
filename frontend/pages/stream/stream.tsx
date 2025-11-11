@@ -248,6 +248,21 @@ registerCleanupFunction(() => {
 });
 
 const useStreamPlayer = vlens.declareHook((): StreamState => {
+  // Helper function to try player initialization
+  // Called whenever state changes that might enable initialization
+  const tryInitializePlayer = (state: StreamState) => {
+    // Only initialize if ALL conditions are met and player isn't already initialized
+    if (
+      state.videoElement &&
+      state.streamUrl &&
+      state.isStreamLive &&
+      state.isHlsReady &&
+      !state.hlsInstance
+    ) {
+      initializePlayer(state, state.videoElement);
+    }
+  };
+
   const state: StreamState = {
     videoElement: null,
     containerElement: null,
@@ -324,17 +339,8 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
       // Store new element reference
       state.videoElement = el;
 
-      // If element just attached and all conditions are ready, trigger initialization
-      // This handles the case where streamUrl, isStreamLive, isHlsReady were set before element attached
-      if (
-        el &&
-        state.streamUrl &&
-        state.isStreamLive &&
-        state.isHlsReady &&
-        !state.hlsInstance
-      ) {
-        initializePlayer(state, el);
-      }
+      // Try to initialize player if all conditions are now met
+      tryInitializePlayer(state);
 
       // Set up video click handler
       if (el) {
@@ -357,10 +363,10 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
     setStreamUrl: (url: string) => {
       if (state.streamUrl !== url) {
         state.streamUrl = url;
-        // Reinitialize player with new URL if already attached
-        if (state.videoElement && state.isStreamLive && state.isHlsReady) {
-          initializePlayer(state, state.videoElement);
-        }
+        // Try to initialize player now that URL is set
+        // This provides a safety net for page reload scenarios where video element
+        // might mount before URL is set, ensuring initialization happens either way
+        tryInitializePlayer(state);
       }
     },
     setStreamLive: (live: boolean) => {
@@ -396,9 +402,8 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
           }, 30000);
         }
 
-        if (state.videoElement && state.streamUrl && state.isHlsReady) {
-          initializePlayer(state, state.videoElement);
-        }
+        // Try to initialize player now that stream is live
+        tryInitializePlayer(state);
         // Start checking live edge
         state.startLiveEdgeChecking();
       } else {
@@ -429,15 +434,8 @@ const useStreamPlayer = vlens.declareHook((): StreamState => {
         }
         state.hlsReadyTimedOut = false;
 
-        // Initialize player only if not already initialized
-        if (state.isStreamLive && state.videoElement && state.streamUrl) {
-          // Only initialize if we don't have an HLS instance yet
-          // If instance already exists, it's already loading/loaded - don't interrupt it
-          if (!state.hlsInstance) {
-            initializePlayer(state, state.videoElement);
-          }
-          // If instance exists, it's already initialized - do nothing to avoid race condition
-        }
+        // Try to initialize player now that HLS is ready
+        tryInitializePlayer(state);
       }
 
       vlens.scheduleRedraw();
@@ -1126,6 +1124,9 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
   el.addEventListener("waiting", handleWaiting);
   el.addEventListener("ended", handleEnded);
 
+  // Start muted for autoplay compatibility - preference restored after playback starts
+  el.muted = true;
+
   // init exactly once for this element
   if (el.canPlayType("application/vnd.apple.mpegurl")) {
     // Safari native HLS
@@ -1440,6 +1441,7 @@ export function view(
             <div className="video-container" ref={state.onContainerRef}>
               <video
                 ref={state.onVideoRef}
+                autoPlay
                 muted
                 playsInline
                 preload="auto"
