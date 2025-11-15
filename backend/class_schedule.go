@@ -186,6 +186,29 @@ type CreateClassScheduleResponse struct {
 	ScheduleId int `json:"scheduleId"`
 }
 
+type ListClassSchedulesRequest struct {
+	StudioId *int `json:"studioId"` // Optional: filter by studio
+	RoomId   *int `json:"roomId"`   // Optional: filter by room
+}
+
+type ListClassSchedulesResponse struct {
+	Schedules []ClassSchedule `json:"schedules"`
+}
+
+type ClassInstance struct {
+	StartTime time.Time `json:"startTime"`
+	EndTime   time.Time `json:"endTime"`
+}
+
+type GetScheduleDetailsRequest struct {
+	ScheduleId int `json:"scheduleId"`
+}
+
+type GetScheduleDetailsResponse struct {
+	Schedule          ClassSchedule   `json:"schedule"`
+	UpcomingInstances []ClassInstance `json:"upcomingInstances"`
+}
+
 // API Procedures
 
 func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (resp CreateClassScheduleResponse, err error) {
@@ -285,7 +308,187 @@ func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (re
 	return
 }
 
+func ListClassSchedules(ctx *vbeam.Context, req ListClassSchedulesRequest) (resp ListClassSchedulesResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("authentication required")
+	}
+
+	// Must specify at least one filter
+	if req.StudioId == nil && req.RoomId == nil {
+		return resp, errors.New("must specify studioId or roomId")
+	}
+
+	var scheduleIds []int
+	var studioId int
+
+	if req.RoomId != nil {
+		// Filter by room
+		vbolt.ReadTermTargets(ctx.Tx, SchedulesByRoomIdx, *req.RoomId, &scheduleIds, vbolt.Window{})
+
+		// Get room to find studio for permission check
+		var room Room
+		vbolt.Read(ctx.Tx, RoomsBkt, *req.RoomId, &room)
+		if room.Id == 0 {
+			return resp, errors.New("room not found")
+		}
+		studioId = room.StudioId
+	} else {
+		// Filter by studio
+		studioId = *req.StudioId
+		vbolt.ReadTermTargets(ctx.Tx, SchedulesByStudioIdx, studioId, &scheduleIds, vbolt.Window{})
+
+		// Verify studio exists
+		var studio Studio
+		vbolt.Read(ctx.Tx, StudiosBkt, studioId, &studio)
+		if studio.Id == 0 {
+			return resp, errors.New("studio not found")
+		}
+	}
+
+	// Check permission (Viewer+ required)
+	if !HasStudioPermission(ctx.Tx, caller.Id, studioId, StudioRoleViewer) {
+		return resp, errors.New("viewer permission required")
+	}
+
+	// Load schedules
+	resp.Schedules = make([]ClassSchedule, 0, len(scheduleIds))
+	for _, scheduleId := range scheduleIds {
+		var schedule ClassSchedule
+		vbolt.Read(ctx.Tx, ClassSchedulesBkt, scheduleId, &schedule)
+		if schedule.Id > 0 && schedule.IsActive {
+			resp.Schedules = append(resp.Schedules, schedule)
+		}
+	}
+
+	return
+}
+
+func GetScheduleDetails(ctx *vbeam.Context, req GetScheduleDetailsRequest) (resp GetScheduleDetailsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("authentication required")
+	}
+
+	// Get schedule
+	var schedule ClassSchedule
+	vbolt.Read(ctx.Tx, ClassSchedulesBkt, req.ScheduleId, &schedule)
+	if schedule.Id == 0 {
+		return resp, errors.New("schedule not found")
+	}
+
+	// Check permission (Viewer+ required)
+	if !HasStudioPermission(ctx.Tx, caller.Id, schedule.StudioId, StudioRoleViewer) {
+		return resp, errors.New("viewer permission required")
+	}
+
+	resp.Schedule = schedule
+
+	// Calculate upcoming instances for recurring schedules
+	if schedule.IsRecurring {
+		resp.UpcomingInstances = calculateUpcomingInstances(&schedule, 10)
+	} else {
+		// For one-time schedules, include the single instance if it's in the future
+		if schedule.StartTime.After(time.Now()) {
+			resp.UpcomingInstances = []ClassInstance{
+				{
+					StartTime: schedule.StartTime,
+					EndTime:   schedule.EndTime,
+				},
+			}
+		} else {
+			resp.UpcomingInstances = []ClassInstance{}
+		}
+	}
+
+	return
+}
+
+// Helper function to calculate upcoming instances for recurring schedules
+func calculateUpcomingInstances(schedule *ClassSchedule, count int) []ClassInstance {
+	if !schedule.IsRecurring {
+		return []ClassInstance{}
+	}
+
+	// Parse timezone
+	loc, err := time.LoadLocation(schedule.RecurTimezone)
+	if err != nil {
+		loc = time.UTC
+	}
+
+	// Parse class times
+	startTime, err := time.Parse("15:04", schedule.RecurTimeStart)
+	if err != nil {
+		return []ClassInstance{}
+	}
+	endTime, err := time.Parse("15:04", schedule.RecurTimeEnd)
+	if err != nil {
+		return []ClassInstance{}
+	}
+
+	instances := make([]ClassInstance, 0, count)
+	now := time.Now().In(loc)
+
+	// Start searching from today
+	currentDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
+
+	// Search up to 365 days in the future
+	maxDate := currentDate.Add(365 * 24 * time.Hour)
+	if !schedule.RecurEndDate.IsZero() {
+		endDate := schedule.RecurEndDate.In(loc)
+		if endDate.Before(maxDate) {
+			maxDate = endDate
+		}
+	}
+
+	for currentDate.Before(maxDate) && len(instances) < count {
+		// Check if current date is before recurrence start
+		if currentDate.Before(schedule.RecurStartDate.In(loc)) {
+			currentDate = currentDate.Add(24 * time.Hour)
+			continue
+		}
+
+		// Check if current weekday matches
+		weekday := int(currentDate.Weekday())
+		matchesWeekday := false
+		for _, wd := range schedule.RecurWeekdays {
+			if wd == weekday {
+				matchesWeekday = true
+				break
+			}
+		}
+
+		if matchesWeekday {
+			// Build instance for this day
+			instanceStart := time.Date(
+				currentDate.Year(), currentDate.Month(), currentDate.Day(),
+				startTime.Hour(), startTime.Minute(), 0, 0, loc,
+			)
+			instanceEnd := time.Date(
+				currentDate.Year(), currentDate.Month(), currentDate.Day(),
+				endTime.Hour(), endTime.Minute(), 0, 0, loc,
+			)
+
+			// Only include if it's in the future
+			if instanceEnd.After(now) {
+				instances = append(instances, ClassInstance{
+					StartTime: instanceStart,
+					EndTime:   instanceEnd,
+				})
+			}
+		}
+
+		currentDate = currentDate.Add(24 * time.Hour)
+	}
+
+	return instances
+}
+
 // RegisterClassScheduleMethods registers class schedule API procedures
 func RegisterClassScheduleMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateClassSchedule)
+	vbeam.RegisterProc(app, ListClassSchedules)
+	vbeam.RegisterProc(app, GetScheduleDetails)
 }
