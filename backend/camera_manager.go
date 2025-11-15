@@ -216,7 +216,7 @@ func (m *CameraManager) Stop(roomId int) error {
 			select {
 			case <-done:
 				// Graceful shutdown succeeded
-			case <-time.After(5 * time.Second):
+			case <-time.After(500 * time.Millisecond):
 				// Graceful shutdown timed out, force kill
 				state.Cmd.Process.Kill()
 				LogInfo(LogCategorySystem, "Camera ingest force killed", map[string]interface{}{
