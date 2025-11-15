@@ -1,9 +1,11 @@
 package backend
 
 import (
+	"errors"
 	"stream/cfg"
 	"time"
 
+	"go.hasen.dev/vbeam"
 	"go.hasen.dev/vbolt"
 	"go.hasen.dev/vpack"
 )
@@ -150,3 +152,140 @@ var LogsByScheduleIdx = vbolt.Index(&cfg.Info, "logs_by_schedule", vpack.FInt, v
 // LogsByRoomIdx: roomId (term) -> logId (target)
 // Find all execution logs for a given room
 var LogsByRoomIdx = vbolt.Index(&cfg.Info, "logs_by_room", vpack.FInt, vpack.FInt)
+
+// API Request/Response types
+
+type CreateClassScheduleRequest struct {
+	RoomId      int    `json:"roomId"`
+	Name        string `json:"name"`
+	Description string `json:"description"`
+
+	// Schedule Type
+	IsRecurring bool `json:"isRecurring"`
+
+	// One-Time Fields
+	StartTime time.Time `json:"startTime"`
+	EndTime   time.Time `json:"endTime"`
+
+	// Recurring Fields
+	RecurStartDate time.Time `json:"recurStartDate"`
+	RecurEndDate   time.Time `json:"recurEndDate"`   // Optional
+	RecurWeekdays  []int     `json:"recurWeekdays"`  // [0,2,4] for Sun,Tue,Thu
+	RecurTimeStart string    `json:"recurTimeStart"` // "09:00"
+	RecurTimeEnd   string    `json:"recurTimeEnd"`   // "10:00"
+	RecurTimezone  string    `json:"recurTimezone"`  // "America/New_York"
+
+	// Automation Settings
+	PreRollMinutes  int  `json:"preRollMinutes"`  // Default: 5
+	PostRollMinutes int  `json:"postRollMinutes"` // Default: 2
+	AutoStartCamera bool `json:"autoStartCamera"` // Default: true
+	AutoStopCamera  bool `json:"autoStopCamera"`  // Default: true
+}
+
+type CreateClassScheduleResponse struct {
+	ScheduleId int `json:"scheduleId"`
+}
+
+// API Procedures
+
+func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (resp CreateClassScheduleResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("authentication required")
+	}
+
+	// Get room
+	var room Room
+	vbolt.Read(ctx.Tx, RoomsBkt, req.RoomId, &room)
+	if room.Id == 0 {
+		return resp, errors.New("room not found")
+	}
+
+	// Check permission (Admin+ required)
+	if !HasStudioPermission(ctx.Tx, caller.Id, room.StudioId, StudioRoleAdmin) {
+		return resp, errors.New("admin permission required")
+	}
+
+	// Validate request
+	if req.Name == "" {
+		return resp, errors.New("name required")
+	}
+
+	if req.IsRecurring {
+		// Recurring schedule validation
+		if len(req.RecurWeekdays) == 0 {
+			return resp, errors.New("recurring schedule requires weekdays")
+		}
+		if req.RecurTimeStart == "" || req.RecurTimeEnd == "" {
+			return resp, errors.New("recurring schedule requires start/end times")
+		}
+		if req.RecurTimezone == "" {
+			req.RecurTimezone = "UTC"
+		}
+		if req.RecurStartDate.IsZero() {
+			return resp, errors.New("recurring schedule requires start date")
+		}
+	} else {
+		// One-time schedule validation
+		if req.StartTime.IsZero() || req.EndTime.IsZero() {
+			return resp, errors.New("one-time schedule requires start/end times")
+		}
+		if req.EndTime.Before(req.StartTime) || req.EndTime.Equal(req.StartTime) {
+			return resp, errors.New("end time must be after start time")
+		}
+	}
+
+	// Set defaults
+	if req.PreRollMinutes == 0 {
+		req.PreRollMinutes = 5
+	}
+	if req.PostRollMinutes == 0 {
+		req.PostRollMinutes = 2
+	}
+
+	// Create schedule
+	vbeam.UseWriteTx(ctx)
+
+	schedule := ClassSchedule{
+		Id:              vbolt.NextIntId(ctx.Tx, ClassSchedulesBkt),
+		RoomId:          req.RoomId,
+		StudioId:        room.StudioId,
+		Name:            req.Name,
+		Description:     req.Description,
+		IsRecurring:     req.IsRecurring,
+		StartTime:       req.StartTime,
+		EndTime:         req.EndTime,
+		RecurStartDate:  req.RecurStartDate,
+		RecurEndDate:    req.RecurEndDate,
+		RecurWeekdays:   req.RecurWeekdays,
+		RecurTimeStart:  req.RecurTimeStart,
+		RecurTimeEnd:    req.RecurTimeEnd,
+		RecurTimezone:   req.RecurTimezone,
+		PreRollMinutes:  req.PreRollMinutes,
+		PostRollMinutes: req.PostRollMinutes,
+		AutoStartCamera: req.AutoStartCamera,
+		AutoStopCamera:  req.AutoStopCamera,
+		CreatedBy:       caller.Id,
+		CreatedAt:       time.Now(),
+		UpdatedAt:       time.Now(),
+		IsActive:        true,
+	}
+
+	// Write to database
+	vbolt.Write(ctx.Tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+	// Update indexes
+	vbolt.SetTargetSingleTerm(ctx.Tx, SchedulesByRoomIdx, schedule.Id, schedule.RoomId)
+	vbolt.SetTargetSingleTerm(ctx.Tx, SchedulesByStudioIdx, schedule.Id, schedule.StudioId)
+
+	vbolt.TxCommit(ctx.Tx)
+
+	resp.ScheduleId = schedule.Id
+	return
+}
+
+// RegisterClassScheduleMethods registers class schedule API procedures
+func RegisterClassScheduleMethods(app *vbeam.Application) {
+	vbeam.RegisterProc(app, CreateClassSchedule)
+}

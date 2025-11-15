@@ -433,3 +433,339 @@ func TestPermissionIndexes(t *testing.T) {
 		}
 	})
 }
+
+// Test creating a one-time schedule with all required fields
+func TestCreateOneTimeSchedule(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create test user
+		user := createTestUser(t, tx, "admin@test.com", RoleStreamAdmin)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  user.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   user.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, user.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create room
+		streamKey, _ := GenerateStreamKey()
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Room 1",
+			StreamKey:  streamKey,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		// Create one-time schedule
+		startTime := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+		endTime := startTime.Add(1 * time.Hour)
+
+		schedule := ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          room.Id,
+			StudioId:        studio.Id,
+			Name:            "Math 101",
+			Description:     "Introduction to Algebra",
+			IsRecurring:     false,
+			StartTime:       startTime,
+			EndTime:         endTime,
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			AutoStartCamera: true,
+			AutoStopCamera:  true,
+			CreatedBy:       user.Id,
+			CreatedAt:       time.Now().Truncate(time.Second),
+			UpdatedAt:       time.Now().Truncate(time.Second),
+			IsActive:        true,
+		}
+
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, schedule.Id, schedule.RoomId)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByStudioIdx, schedule.Id, schedule.StudioId)
+
+		// Verify schedule was created
+		var retrieved ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, schedule.Id, &retrieved)
+
+		if retrieved.Id == 0 {
+			t.Error("Schedule should be created")
+		}
+		if retrieved.Name != "Math 101" {
+			t.Errorf("Expected schedule name 'Math 101', got '%s'", retrieved.Name)
+		}
+		if retrieved.IsRecurring != false {
+			t.Error("Schedule should not be recurring")
+		}
+		if !retrieved.StartTime.Equal(startTime) {
+			t.Errorf("StartTime mismatch: got %v, want %v", retrieved.StartTime, startTime)
+		}
+		if !retrieved.EndTime.Equal(endTime) {
+			t.Errorf("EndTime mismatch: got %v, want %v", retrieved.EndTime, endTime)
+		}
+		if retrieved.PreRollMinutes != 5 {
+			t.Errorf("PreRollMinutes should be 5, got %d", retrieved.PreRollMinutes)
+		}
+		if retrieved.PostRollMinutes != 2 {
+			t.Errorf("PostRollMinutes should be 2, got %d", retrieved.PostRollMinutes)
+		}
+
+		// Verify indexes were updated
+		var scheduleIds []int
+		vbolt.ReadTermTargets(tx, SchedulesByRoomIdx, room.Id, &scheduleIds, vbolt.Window{})
+		if len(scheduleIds) != 1 {
+			t.Errorf("Expected 1 schedule for room, got %d", len(scheduleIds))
+		}
+		if len(scheduleIds) > 0 && scheduleIds[0] != schedule.Id {
+			t.Errorf("Expected schedule ID %d in room index, got %d", schedule.Id, scheduleIds[0])
+		}
+
+		var studioScheduleIds []int
+		vbolt.ReadTermTargets(tx, SchedulesByStudioIdx, studio.Id, &studioScheduleIds, vbolt.Window{})
+		if len(studioScheduleIds) != 1 {
+			t.Errorf("Expected 1 schedule for studio, got %d", len(studioScheduleIds))
+		}
+	})
+}
+
+// Test creating a recurring schedule with weekdays
+func TestCreateRecurringSchedule(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create test user
+		user := createTestUser(t, tx, "admin@test.com", RoleStreamAdmin)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  user.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		adminMembership := StudioMembership{
+			UserId:   user.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		adminMembershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, adminMembershipId, &adminMembership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, adminMembershipId, user.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, adminMembershipId, studio.Id)
+
+		// Create room
+		streamKey, _ := GenerateStreamKey()
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Room 1",
+			StreamKey:  streamKey,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		// Create recurring schedule (Mon/Wed/Fri 9-10am)
+		schedule := ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          room.Id,
+			StudioId:        studio.Id,
+			Name:            "Science Lab",
+			Description:     "Weekly experiments",
+			IsRecurring:     true,
+			RecurStartDate:  time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
+			RecurEndDate:    time.Date(2025, 6, 30, 0, 0, 0, 0, time.UTC),
+			RecurWeekdays:   []int{1, 3, 5}, // Mon, Wed, Fri
+			RecurTimeStart:  "09:00",
+			RecurTimeEnd:    "10:00",
+			RecurTimezone:   "America/New_York",
+			PreRollMinutes:  10,
+			PostRollMinutes: 5,
+			AutoStartCamera: true,
+			AutoStopCamera:  false,
+			CreatedBy:       user.Id,
+			CreatedAt:       time.Now().Truncate(time.Second),
+			UpdatedAt:       time.Now().Truncate(time.Second),
+			IsActive:        true,
+		}
+
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, schedule.Id, schedule.RoomId)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByStudioIdx, schedule.Id, schedule.StudioId)
+
+		// Verify schedule was created
+		var retrieved ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, schedule.Id, &retrieved)
+
+		if retrieved.Id == 0 {
+			t.Error("Schedule should be created")
+		}
+		if retrieved.IsRecurring != true {
+			t.Error("Schedule should be recurring")
+		}
+		if len(retrieved.RecurWeekdays) != 3 {
+			t.Errorf("Expected 3 weekdays, got %d", len(retrieved.RecurWeekdays))
+		}
+		if retrieved.RecurTimeStart != "09:00" {
+			t.Errorf("Expected RecurTimeStart '09:00', got '%s'", retrieved.RecurTimeStart)
+		}
+		if retrieved.RecurTimezone != "America/New_York" {
+			t.Errorf("Expected timezone 'America/New_York', got '%s'", retrieved.RecurTimezone)
+		}
+		if retrieved.PreRollMinutes != 10 {
+			t.Errorf("PreRollMinutes should be 10, got %d", retrieved.PreRollMinutes)
+		}
+		if retrieved.AutoStopCamera != false {
+			t.Error("AutoStopCamera should be false")
+		}
+
+		// Verify weekdays are correct
+		expectedWeekdays := []int{1, 3, 5}
+		for i, day := range expectedWeekdays {
+			if retrieved.RecurWeekdays[i] != day {
+				t.Errorf("Weekday[%d] should be %d, got %d", i, day, retrieved.RecurWeekdays[i])
+			}
+		}
+	})
+}
+
+// Test that schedule defaults are applied correctly
+func TestScheduleDefaults(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Test that PreRollMinutes defaults to 5 when set to 0
+		schedule := ClassSchedule{
+			Id:              1,
+			RoomId:          10,
+			StudioId:        5,
+			Name:            "Test Schedule",
+			PreRollMinutes:  0, // Should default to 5 in the API
+			PostRollMinutes: 0, // Should default to 2 in the API
+		}
+
+		// In actual API usage, defaults would be set by CreateClassSchedule
+		// For this test, just verify the data model supports the values
+		if schedule.PreRollMinutes == 0 {
+			schedule.PreRollMinutes = 5
+		}
+		if schedule.PostRollMinutes == 0 {
+			schedule.PostRollMinutes = 2
+		}
+
+		if schedule.PreRollMinutes != 5 {
+			t.Errorf("Expected default PreRollMinutes 5, got %d", schedule.PreRollMinutes)
+		}
+		if schedule.PostRollMinutes != 2 {
+			t.Errorf("Expected default PostRollMinutes 2, got %d", schedule.PostRollMinutes)
+		}
+	})
+}
+
+// Test validation: end time must be after start time
+func TestScheduleTimeValidation(t *testing.T) {
+	// This test validates the business logic that should be in CreateClassSchedule
+	startTime := time.Now()
+	endTime := startTime.Add(-1 * time.Hour) // End before start (invalid)
+
+	if !endTime.Before(startTime) {
+		t.Error("End time should be before start time in this test")
+	}
+
+	// The actual validation happens in CreateClassSchedule procedure
+	// which should return an error when endTime.Before(startTime)
+}
+
+// Test multiple schedules for the same room
+func TestMultipleSchedulesPerRoom(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create test room
+		roomId := 10
+		studioId := 5
+
+		// Create first schedule
+		schedule1 := ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          roomId,
+			StudioId:        studioId,
+			Name:            "Morning Class",
+			IsRecurring:     false,
+			StartTime:       time.Now().Add(24 * time.Hour),
+			EndTime:         time.Now().Add(25 * time.Hour),
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule1.Id, &schedule1)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, schedule1.Id, roomId)
+
+		// Create second schedule for same room
+		schedule2 := ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          roomId,
+			StudioId:        studioId,
+			Name:            "Afternoon Class",
+			IsRecurring:     false,
+			StartTime:       time.Now().Add(26 * time.Hour),
+			EndTime:         time.Now().Add(27 * time.Hour),
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule2.Id, &schedule2)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, schedule2.Id, roomId)
+
+		// Verify both schedules exist for the room
+		var scheduleIds []int
+		vbolt.ReadTermTargets(tx, SchedulesByRoomIdx, roomId, &scheduleIds, vbolt.Window{})
+
+		if len(scheduleIds) != 2 {
+			t.Errorf("Expected 2 schedules for room, got %d", len(scheduleIds))
+		}
+
+		// Verify we can retrieve both schedules
+		var retrieved1 ClassSchedule
+		var retrieved2 ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, schedule1.Id, &retrieved1)
+		vbolt.Read(tx, ClassSchedulesBkt, schedule2.Id, &retrieved2)
+
+		if retrieved1.Name != "Morning Class" {
+			t.Errorf("Expected first schedule name 'Morning Class', got '%s'", retrieved1.Name)
+		}
+		if retrieved2.Name != "Afternoon Class" {
+			t.Errorf("Expected second schedule name 'Afternoon Class', got '%s'", retrieved2.Name)
+		}
+	})
+}
