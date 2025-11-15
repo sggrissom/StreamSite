@@ -67,12 +67,12 @@ func evaluateSchedules(db *vbolt.DB, tx *vbolt.Tx) {
 		}
 
 		// Check if camera should start
-		if shouldStartCamera(&schedule, now) {
+		if shouldStartCamera(tx, &schedule, now) {
 			executeScheduleAction(db, tx, &schedule, "start_camera", now)
 		}
 
 		// Check if camera should stop
-		if shouldStopCamera(&schedule, now) {
+		if shouldStopCamera(tx, &schedule, now) {
 			executeScheduleAction(db, tx, &schedule, "stop_camera", now)
 		}
 
@@ -86,7 +86,7 @@ func evaluateSchedules(db *vbolt.DB, tx *vbolt.Tx) {
 }
 
 // shouldStartCamera determines if a camera should be started for the given schedule
-func shouldStartCamera(schedule *ClassSchedule, now time.Time) bool {
+func shouldStartCamera(tx *vbolt.Tx, schedule *ClassSchedule, now time.Time) bool {
 	// Must have auto-start enabled
 	if !schedule.AutoStartCamera {
 		return false
@@ -113,7 +113,7 @@ func shouldStartCamera(schedule *ClassSchedule, now time.Time) bool {
 }
 
 // shouldStopCamera determines if a camera should be stopped for the given schedule
-func shouldStopCamera(schedule *ClassSchedule, now time.Time) bool {
+func shouldStopCamera(tx *vbolt.Tx, schedule *ClassSchedule, now time.Time) bool {
 	// Must have auto-stop enabled
 	if !schedule.AutoStopCamera {
 		return false
@@ -139,7 +139,7 @@ func shouldStopCamera(schedule *ClassSchedule, now time.Time) bool {
 	// Only stop if we're past the end window
 	if now.After(endWindow) {
 		// Check if another schedule is keeping this camera active
-		if hasOverlappingActiveSchedule(schedule.RoomId, schedule.Id, now) {
+		if hasOverlappingActiveSchedule(tx, schedule.RoomId, schedule.Id, now) {
 			return false
 		}
 		return true
@@ -254,10 +254,37 @@ func recentlyExecutedAction(scheduleId int, action string, now time.Time) bool {
 }
 
 // hasOverlappingActiveSchedule checks if another schedule is keeping the camera active
-func hasOverlappingActiveSchedule(roomId, excludeScheduleId int, now time.Time) bool {
-	// This would query all schedules for the room and check if any overlap with current time
-	// For the initial implementation, we'll return false (conservative approach)
-	// TODO: Implement overlap detection in future iteration
+func hasOverlappingActiveSchedule(tx *vbolt.Tx, roomId, excludeScheduleId int, now time.Time) bool {
+	// Get all schedule IDs for this room
+	var scheduleIds []int
+	vbolt.ReadTermTargets(tx, SchedulesByRoomIdx, roomId, &scheduleIds, vbolt.Window{})
+
+	// Check each schedule to see if it overlaps with current time
+	for _, scheduleId := range scheduleIds {
+		// Skip the schedule we're checking from
+		if scheduleId == excludeScheduleId {
+			continue
+		}
+
+		// Read the schedule
+		var schedule ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, scheduleId, &schedule)
+
+		// Skip inactive schedules or schedules without auto-start
+		if !schedule.IsActive || !schedule.AutoStartCamera {
+			continue
+		}
+
+		// Get the time window for this schedule (including pre/post-roll)
+		startWindow, endWindow := getScheduleTimeWindow(&schedule, now)
+
+		// If this schedule has a valid window and current time falls within it,
+		// then this schedule is keeping the camera active
+		if !startWindow.IsZero() && now.After(startWindow) && now.Before(endWindow) {
+			return true
+		}
+	}
+
 	return false
 }
 
