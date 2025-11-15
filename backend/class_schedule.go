@@ -209,6 +209,44 @@ type GetScheduleDetailsResponse struct {
 	UpcomingInstances []ClassInstance `json:"upcomingInstances"`
 }
 
+type UpdateClassScheduleRequest struct {
+	ScheduleId int `json:"scheduleId"`
+
+	// Optional fields - only update if provided
+	Name        *string `json:"name"`
+	Description *string `json:"description"`
+
+	// One-Time Fields
+	StartTime *time.Time `json:"startTime"`
+	EndTime   *time.Time `json:"endTime"`
+
+	// Recurring Fields
+	RecurStartDate *time.Time `json:"recurStartDate"`
+	RecurEndDate   *time.Time `json:"recurEndDate"`
+	RecurWeekdays  []int      `json:"recurWeekdays"`
+	RecurTimeStart *string    `json:"recurTimeStart"`
+	RecurTimeEnd   *string    `json:"recurTimeEnd"`
+	RecurTimezone  *string    `json:"recurTimezone"`
+
+	// Automation Settings
+	PreRollMinutes  *int  `json:"preRollMinutes"`
+	PostRollMinutes *int  `json:"postRollMinutes"`
+	AutoStartCamera *bool `json:"autoStartCamera"`
+	AutoStopCamera  *bool `json:"autoStopCamera"`
+}
+
+type UpdateClassScheduleResponse struct {
+	Success bool `json:"success"`
+}
+
+type DeleteClassScheduleRequest struct {
+	ScheduleId int `json:"scheduleId"`
+}
+
+type DeleteClassScheduleResponse struct {
+	Success bool `json:"success"`
+}
+
 // API Procedures
 
 func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (resp CreateClassScheduleResponse, err error) {
@@ -486,9 +524,144 @@ func calculateUpcomingInstances(schedule *ClassSchedule, count int) []ClassInsta
 	return instances
 }
 
+func UpdateClassSchedule(ctx *vbeam.Context, req UpdateClassScheduleRequest) (resp UpdateClassScheduleResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("authentication required")
+	}
+
+	// Get existing schedule
+	var schedule ClassSchedule
+	vbolt.Read(ctx.Tx, ClassSchedulesBkt, req.ScheduleId, &schedule)
+	if schedule.Id == 0 {
+		return resp, errors.New("schedule not found")
+	}
+
+	// Check permission (Admin+ required)
+	if !HasStudioPermission(ctx.Tx, caller.Id, schedule.StudioId, StudioRoleAdmin) {
+		return resp, errors.New("admin permission required")
+	}
+
+	// Update only provided fields
+	if req.Name != nil {
+		if *req.Name == "" {
+			return resp, errors.New("name cannot be empty")
+		}
+		schedule.Name = *req.Name
+	}
+
+	if req.Description != nil {
+		schedule.Description = *req.Description
+	}
+
+	// Update one-time schedule fields
+	if req.StartTime != nil {
+		schedule.StartTime = *req.StartTime
+	}
+	if req.EndTime != nil {
+		schedule.EndTime = *req.EndTime
+	}
+
+	// Validate one-time schedule times if both are being modified
+	if !schedule.IsRecurring {
+		if !schedule.StartTime.IsZero() && !schedule.EndTime.IsZero() {
+			if schedule.EndTime.Before(schedule.StartTime) || schedule.EndTime.Equal(schedule.StartTime) {
+				return resp, errors.New("end time must be after start time")
+			}
+		}
+	}
+
+	// Update recurring schedule fields
+	if req.RecurStartDate != nil {
+		schedule.RecurStartDate = *req.RecurStartDate
+	}
+	if req.RecurEndDate != nil {
+		schedule.RecurEndDate = *req.RecurEndDate
+	}
+	if req.RecurWeekdays != nil {
+		if len(req.RecurWeekdays) == 0 && schedule.IsRecurring {
+			return resp, errors.New("recurring schedule requires weekdays")
+		}
+		schedule.RecurWeekdays = req.RecurWeekdays
+	}
+	if req.RecurTimeStart != nil {
+		if *req.RecurTimeStart == "" && schedule.IsRecurring {
+			return resp, errors.New("recurring schedule requires start time")
+		}
+		schedule.RecurTimeStart = *req.RecurTimeStart
+	}
+	if req.RecurTimeEnd != nil {
+		if *req.RecurTimeEnd == "" && schedule.IsRecurring {
+			return resp, errors.New("recurring schedule requires end time")
+		}
+		schedule.RecurTimeEnd = *req.RecurTimeEnd
+	}
+	if req.RecurTimezone != nil {
+		schedule.RecurTimezone = *req.RecurTimezone
+	}
+
+	// Update automation settings
+	if req.PreRollMinutes != nil {
+		schedule.PreRollMinutes = *req.PreRollMinutes
+	}
+	if req.PostRollMinutes != nil {
+		schedule.PostRollMinutes = *req.PostRollMinutes
+	}
+	if req.AutoStartCamera != nil {
+		schedule.AutoStartCamera = *req.AutoStartCamera
+	}
+	if req.AutoStopCamera != nil {
+		schedule.AutoStopCamera = *req.AutoStopCamera
+	}
+
+	// Update timestamp
+	schedule.UpdatedAt = time.Now()
+
+	// Write to database
+	vbeam.UseWriteTx(ctx)
+	vbolt.Write(ctx.Tx, ClassSchedulesBkt, schedule.Id, &schedule)
+	vbolt.TxCommit(ctx.Tx)
+
+	resp.Success = true
+	return
+}
+
+func DeleteClassSchedule(ctx *vbeam.Context, req DeleteClassScheduleRequest) (resp DeleteClassScheduleResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("authentication required")
+	}
+
+	// Get existing schedule
+	var schedule ClassSchedule
+	vbolt.Read(ctx.Tx, ClassSchedulesBkt, req.ScheduleId, &schedule)
+	if schedule.Id == 0 {
+		return resp, errors.New("schedule not found")
+	}
+
+	// Check permission (Admin+ required)
+	if !HasStudioPermission(ctx.Tx, caller.Id, schedule.StudioId, StudioRoleAdmin) {
+		return resp, errors.New("admin permission required")
+	}
+
+	// Soft delete - set IsActive to false
+	vbeam.UseWriteTx(ctx)
+	schedule.IsActive = false
+	schedule.UpdatedAt = time.Now()
+	vbolt.Write(ctx.Tx, ClassSchedulesBkt, schedule.Id, &schedule)
+	vbolt.TxCommit(ctx.Tx)
+
+	resp.Success = true
+	return
+}
+
 // RegisterClassScheduleMethods registers class schedule API procedures
 func RegisterClassScheduleMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateClassSchedule)
 	vbeam.RegisterProc(app, ListClassSchedules)
 	vbeam.RegisterProc(app, GetScheduleDetails)
+	vbeam.RegisterProc(app, UpdateClassSchedule)
+	vbeam.RegisterProc(app, DeleteClassSchedule)
 }

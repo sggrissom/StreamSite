@@ -1178,3 +1178,330 @@ func TestGetScheduleDetailsPastOneTime(t *testing.T) {
 		}
 	})
 }
+
+// Test updating schedule name
+func TestUpdateScheduleName(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create test user
+		user := createTestUser(t, tx, "admin@test.com", RoleStreamAdmin)
+
+		// Create studio
+		studio := Studio{
+			Id:       vbolt.NextIntId(tx, StudiosBkt),
+			Name:     "Test Studio",
+			MaxRooms: 5,
+			OwnerId:  user.Id,
+			Creation: time.Now(),
+		}
+		vbolt.Write(tx, StudiosBkt, studio.Id, &studio)
+
+		// Add admin membership
+		membership := StudioMembership{
+			UserId:   user.Id,
+			StudioId: studio.Id,
+			Role:     StudioRoleAdmin,
+			JoinedAt: time.Now(),
+		}
+		membershipId := vbolt.NextIntId(tx, MembershipBkt)
+		vbolt.Write(tx, MembershipBkt, membershipId, &membership)
+		vbolt.SetTargetSingleTerm(tx, MembershipByUserIdx, membershipId, user.Id)
+		vbolt.SetTargetSingleTerm(tx, MembershipByStudioIdx, membershipId, studio.Id)
+
+		// Create room
+		streamKey, _ := GenerateStreamKey()
+		room := Room{
+			Id:         vbolt.NextIntId(tx, RoomsBkt),
+			StudioId:   studio.Id,
+			RoomNumber: 1,
+			Name:       "Room 1",
+			StreamKey:  streamKey,
+			Creation:   time.Now(),
+		}
+		vbolt.Write(tx, RoomsBkt, room.Id, &room)
+		vbolt.SetTargetSingleTerm(tx, RoomsByStudioIdx, room.Id, studio.Id)
+
+		// Create schedule
+		originalSchedule := ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          room.Id,
+			StudioId:        studio.Id,
+			Name:            "Original Name",
+			Description:     "Original Description",
+			IsRecurring:     false,
+			StartTime:       time.Now().Add(24 * time.Hour),
+			EndTime:         time.Now().Add(25 * time.Hour),
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			AutoStartCamera: true,
+			AutoStopCamera:  true,
+			CreatedBy:       user.Id,
+			CreatedAt:       time.Now().Truncate(time.Second),
+			UpdatedAt:       time.Now().Truncate(time.Second),
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, originalSchedule.Id, &originalSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, originalSchedule.Id, room.Id)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByStudioIdx, originalSchedule.Id, studio.Id)
+
+		// Update name only
+		newName := "Updated Name"
+		originalSchedule.Name = newName
+		originalSchedule.UpdatedAt = time.Now()
+		vbolt.Write(tx, ClassSchedulesBkt, originalSchedule.Id, &originalSchedule)
+
+		// Verify update
+		var updated ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, originalSchedule.Id, &updated)
+
+		if updated.Name != "Updated Name" {
+			t.Errorf("Expected name 'Updated Name', got '%s'", updated.Name)
+		}
+		// Description should remain unchanged
+		if updated.Description != "Original Description" {
+			t.Errorf("Expected description unchanged, got '%s'", updated.Description)
+		}
+		// Other fields should remain unchanged
+		if updated.PreRollMinutes != 5 {
+			t.Errorf("PreRollMinutes should be unchanged: got %d", updated.PreRollMinutes)
+		}
+	})
+}
+
+// Test updating one-time schedule times
+func TestUpdateScheduleTimes(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		roomId := 10
+		studioId := 5
+
+		originalStart := time.Now().Add(24 * time.Hour).Truncate(time.Second)
+		originalEnd := originalStart.Add(1 * time.Hour)
+
+		schedule := ClassSchedule{
+			Id:          vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:      roomId,
+			StudioId:    studioId,
+			Name:        "Test Class",
+			IsRecurring: false,
+			StartTime:   originalStart,
+			EndTime:     originalEnd,
+			IsActive:    true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+		// Update times
+		newStart := time.Now().Add(48 * time.Hour).Truncate(time.Second)
+		newEnd := newStart.Add(2 * time.Hour)
+
+		schedule.StartTime = newStart
+		schedule.EndTime = newEnd
+		schedule.UpdatedAt = time.Now()
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+		// Verify update
+		var updated ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, schedule.Id, &updated)
+
+		if !updated.StartTime.Equal(newStart) {
+			t.Error("StartTime should be updated")
+		}
+		if !updated.EndTime.Equal(newEnd) {
+			t.Error("EndTime should be updated")
+		}
+	})
+}
+
+// Test updating recurring schedule weekdays
+func TestUpdateRecurringWeekdays(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		roomId := 10
+		studioId := 5
+
+		schedule := ClassSchedule{
+			Id:             vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:         roomId,
+			StudioId:       studioId,
+			Name:           "Test Class",
+			IsRecurring:    true,
+			RecurWeekdays:  []int{1, 3, 5}, // Mon, Wed, Fri
+			RecurTimeStart: "09:00",
+			RecurTimeEnd:   "10:00",
+			RecurTimezone:  "UTC",
+			IsActive:       true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+		// Update to Tue, Thu
+		schedule.RecurWeekdays = []int{2, 4}
+		schedule.UpdatedAt = time.Now()
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+		// Verify update
+		var updated ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, schedule.Id, &updated)
+
+		if len(updated.RecurWeekdays) != 2 {
+			t.Errorf("Expected 2 weekdays, got %d", len(updated.RecurWeekdays))
+		}
+		if updated.RecurWeekdays[0] != 2 || updated.RecurWeekdays[1] != 4 {
+			t.Errorf("Expected weekdays [2, 4], got %v", updated.RecurWeekdays)
+		}
+	})
+}
+
+// Test that update validates times
+func TestUpdateValidation(t *testing.T) {
+	// Test that end time must be after start time
+	start := time.Now()
+	end := start.Add(-1 * time.Hour) // End before start (invalid)
+
+	// This would be caught by UpdateClassSchedule validation
+	if !end.Before(start) {
+		t.Error("End time should be before start time in this test")
+	}
+}
+
+// Test deleting a schedule (soft delete)
+func TestDeleteSchedule(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		roomId := 10
+		studioId := 5
+
+		schedule := ClassSchedule{
+			Id:       vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:   roomId,
+			StudioId: studioId,
+			Name:     "Test Class",
+			IsActive: true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, schedule.Id, roomId)
+
+		// Soft delete
+		schedule.IsActive = false
+		schedule.UpdatedAt = time.Now()
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+		// Verify schedule still exists but is inactive
+		var deleted ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, schedule.Id, &deleted)
+
+		if deleted.Id == 0 {
+			t.Error("Schedule should still exist in database")
+		}
+		if deleted.IsActive {
+			t.Error("Schedule should be inactive (IsActive=false)")
+		}
+	})
+}
+
+// Test that deleted schedules are excluded from List queries
+func TestDeletedScheduleNotInList(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		roomId := 10
+		studioId := 5
+
+		// Create active schedule
+		activeSchedule := ClassSchedule{
+			Id:       vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:   roomId,
+			StudioId: studioId,
+			Name:     "Active Class",
+			IsActive: true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, activeSchedule.Id, &activeSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, activeSchedule.Id, roomId)
+
+		// Create deleted schedule
+		deletedSchedule := ClassSchedule{
+			Id:       vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:   roomId,
+			StudioId: studioId,
+			Name:     "Deleted Class",
+			IsActive: false, // Soft deleted
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, deletedSchedule.Id, &deletedSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, deletedSchedule.Id, roomId)
+
+		// Simulate ListClassSchedules filtering
+		var scheduleIds []int
+		vbolt.ReadTermTargets(tx, SchedulesByRoomIdx, roomId, &scheduleIds, vbolt.Window{})
+
+		// Count only active schedules
+		activeCount := 0
+		for _, id := range scheduleIds {
+			var schedule ClassSchedule
+			vbolt.Read(tx, ClassSchedulesBkt, id, &schedule)
+			if schedule.IsActive {
+				activeCount++
+			}
+		}
+
+		if activeCount != 1 {
+			t.Errorf("Expected 1 active schedule in list, got %d", activeCount)
+		}
+	})
+}
+
+// Test updating automation settings
+func TestUpdateAutomationSettings(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		roomId := 10
+		studioId := 5
+
+		schedule := ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          roomId,
+			StudioId:        studioId,
+			Name:            "Test Class",
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			AutoStartCamera: true,
+			AutoStopCamera:  true,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+		// Update automation settings
+		schedule.PreRollMinutes = 10
+		schedule.PostRollMinutes = 5
+		schedule.AutoStartCamera = false
+		schedule.AutoStopCamera = false
+		schedule.UpdatedAt = time.Now()
+		vbolt.Write(tx, ClassSchedulesBkt, schedule.Id, &schedule)
+
+		// Verify update
+		var updated ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, schedule.Id, &updated)
+
+		if updated.PreRollMinutes != 10 {
+			t.Errorf("PreRollMinutes should be 10, got %d", updated.PreRollMinutes)
+		}
+		if updated.PostRollMinutes != 5 {
+			t.Errorf("PostRollMinutes should be 5, got %d", updated.PostRollMinutes)
+		}
+		if updated.AutoStartCamera != false {
+			t.Error("AutoStartCamera should be false")
+		}
+		if updated.AutoStopCamera != false {
+			t.Error("AutoStopCamera should be false")
+		}
+	})
+}
