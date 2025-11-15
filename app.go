@@ -70,6 +70,7 @@ func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	backend.RegisterEmoteMethods(app)
 	backend.RegisterChatMethods(app)
 	backend.RegisterClassScheduleMethods(app)
+	backend.RegisterClassPermissionMethods(app)
 	backend.RegisterRoomStreamProxy(app)
 	backend.RegisterHLSFileServer(app)
 
