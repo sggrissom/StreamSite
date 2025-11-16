@@ -556,6 +556,159 @@ func calculateUpcomingInstances(schedule *ClassSchedule, count int) []ClassInsta
 	return instances
 }
 
+// GetCurrentClassForRoom returns the currently active class for a room, or nil if no class is active.
+// A class is considered active if the current time is within the class time + grace period (15 minutes).
+func GetCurrentClassForRoom(tx *vbolt.Tx, roomId int, now time.Time) *ClassSchedule {
+	// Get all active schedules for this room
+	var scheduleIds []int
+	vbolt.ReadTermTargets(tx, SchedulesByRoomIdx, roomId, &scheduleIds, vbolt.Window{})
+
+	gracePeriod := 15 * time.Minute
+
+	for _, schedId := range scheduleIds {
+		var sched ClassSchedule
+		if !vbolt.Read(tx, ClassSchedulesBkt, schedId, &sched) {
+			continue
+		}
+
+		// Skip inactive schedules
+		if !sched.IsActive {
+			continue
+		}
+
+		// One-time schedule: check if we're within the time window
+		if !sched.IsRecurring {
+			if now.After(sched.StartTime) && now.Before(sched.EndTime.Add(gracePeriod)) {
+				return &sched
+			}
+			continue
+		}
+
+		// Recurring schedule: check if there's a current instance
+		loc, err := time.LoadLocation(sched.RecurTimezone)
+		if err != nil {
+			loc = time.UTC
+		}
+
+		nowInTz := now.In(loc)
+		weekday := int(nowInTz.Weekday())
+
+		// Check if today is a scheduled weekday
+		matchesWeekday := false
+		for _, wd := range sched.RecurWeekdays {
+			if wd == weekday {
+				matchesWeekday = true
+				break
+			}
+		}
+
+		if !matchesWeekday {
+			continue
+		}
+
+		// Check date range
+		if nowInTz.Before(sched.RecurStartDate.In(loc)) {
+			continue
+		}
+		if !sched.RecurEndDate.IsZero() && nowInTz.After(sched.RecurEndDate.In(loc)) {
+			continue
+		}
+
+		// Parse class times
+		startTime, err := time.Parse("15:04", sched.RecurTimeStart)
+		if err != nil {
+			continue
+		}
+		endTime, err := time.Parse("15:04", sched.RecurTimeEnd)
+		if err != nil {
+			continue
+		}
+
+		// Build today's instance
+		instanceStart := time.Date(
+			nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+			startTime.Hour(), startTime.Minute(), 0, 0, loc,
+		)
+		instanceEnd := time.Date(
+			nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+			endTime.Hour(), endTime.Minute(), 0, 0, loc,
+		)
+
+		// Check if we're within the active window (including grace period)
+		if nowInTz.After(instanceStart) && nowInTz.Before(instanceEnd.Add(gracePeriod)) {
+			return &sched
+		}
+	}
+
+	return nil
+}
+
+// GetNextClassForRoom returns the next N upcoming class instances for a room.
+// Returns both one-time and recurring schedule instances, sorted by start time.
+func GetNextClassForRoom(tx *vbolt.Tx, roomId int, now time.Time, limit int) []ClassScheduleWithInstance {
+	// Get all active schedules for this room
+	var scheduleIds []int
+	vbolt.ReadTermTargets(tx, SchedulesByRoomIdx, roomId, &scheduleIds, vbolt.Window{})
+
+	allInstances := make([]ClassScheduleWithInstance, 0)
+
+	for _, schedId := range scheduleIds {
+		var sched ClassSchedule
+		if !vbolt.Read(tx, ClassSchedulesBkt, schedId, &sched) {
+			continue
+		}
+
+		// Skip inactive schedules
+		if !sched.IsActive {
+			continue
+		}
+
+		if !sched.IsRecurring {
+			// One-time schedule: include if in the future
+			if sched.StartTime.After(now) {
+				allInstances = append(allInstances, ClassScheduleWithInstance{
+					Schedule:      sched,
+					InstanceStart: sched.StartTime,
+					InstanceEnd:   sched.EndTime,
+				})
+			}
+		} else {
+			// Recurring schedule: get upcoming instances
+			instances := calculateUpcomingInstances(&sched, limit)
+			for _, inst := range instances {
+				allInstances = append(allInstances, ClassScheduleWithInstance{
+					Schedule:      sched,
+					InstanceStart: inst.StartTime,
+					InstanceEnd:   inst.EndTime,
+				})
+			}
+		}
+	}
+
+	// Sort by start time
+	for i := 0; i < len(allInstances); i++ {
+		for j := i + 1; j < len(allInstances); j++ {
+			if allInstances[j].InstanceStart.Before(allInstances[i].InstanceStart) {
+				allInstances[i], allInstances[j] = allInstances[j], allInstances[i]
+			}
+		}
+	}
+
+	// Limit results
+	if len(allInstances) > limit {
+		allInstances = allInstances[:limit]
+	}
+
+	return allInstances
+}
+
+// ClassScheduleWithInstance combines a schedule with a specific instance time
+type ClassScheduleWithInstance struct {
+	Schedule      ClassSchedule `json:"schedule"`
+	InstanceStart time.Time     `json:"instanceStart"`
+	InstanceEnd   time.Time     `json:"instanceEnd"`
+}
+
 func UpdateClassSchedule(ctx *vbeam.Context, req UpdateClassScheduleRequest) (resp UpdateClassScheduleResponse, err error) {
 	// Check authentication
 	caller, authErr := GetAuthUser(ctx)

@@ -165,6 +165,9 @@ export interface GetRoomDetailsResponse {
     userId: number
     isCodeAuth: boolean
     codeExpiresAt: string | null
+    currentClass: ClassScheduleWithInstance | null
+    nextClass: ClassScheduleWithInstance | null
+    upcomingClasses: ClassScheduleWithInstance[]
 }
 
 export interface GetStudioRoomsForCodeSessionRequest {
@@ -653,6 +656,12 @@ export interface MemberWithDetails {
     roleName: string
 }
 
+export interface ClassScheduleWithInstance {
+    schedule: ClassSchedule
+    instanceStart: string
+    instanceEnd: string
+}
+
 export interface RoomWithStudio {
     id: number
     studioId: number
@@ -663,6 +672,9 @@ export interface RoomWithStudio {
     isHlsReady: boolean
     creation: string
     studioName: string
+    currentClass: ClassScheduleWithInstance | null
+    nextClass: ClassScheduleWithInstance | null
+    todayClassCount: number
 }
 
 export interface StudioMembership {

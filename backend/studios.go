@@ -312,13 +312,16 @@ type GetRoomDetailsRequest struct {
 }
 
 type GetRoomDetailsResponse struct {
-	Room          Room       `json:"room,omitempty"`
-	StudioName    string     `json:"studioName,omitempty"`
-	MyRole        StudioRole `json:"myRole"`
-	MyRoleName    string     `json:"myRoleName"`
-	UserId        int        `json:"userId"`                  // User ID (-1 for anonymous code sessions)
-	IsCodeAuth    bool       `json:"isCodeAuth"`              // True if authenticated via access code
-	CodeExpiresAt *time.Time `json:"codeExpiresAt,omitempty"` // When the access code expires
+	Room            Room                        `json:"room,omitempty"`
+	StudioName      string                      `json:"studioName,omitempty"`
+	MyRole          StudioRole                  `json:"myRole"`
+	MyRoleName      string                      `json:"myRoleName"`
+	UserId          int                         `json:"userId"`                    // User ID (-1 for anonymous code sessions)
+	IsCodeAuth      bool                        `json:"isCodeAuth"`                // True if authenticated via access code
+	CodeExpiresAt   *time.Time                  `json:"codeExpiresAt,omitempty"`   // When the access code expires
+	CurrentClass    *ClassScheduleWithInstance  `json:"currentClass,omitempty"`    // Active class right now
+	NextClass       *ClassScheduleWithInstance  `json:"nextClass,omitempty"`       // Next upcoming class
+	UpcomingClasses []ClassScheduleWithInstance `json:"upcomingClasses,omitempty"` // Next 10 upcoming classes
 }
 
 type GetStudioRoomsForCodeSessionRequest struct {
@@ -333,7 +336,10 @@ type GetStudioRoomsForCodeSessionResponse struct {
 
 type RoomWithStudio struct {
 	Room
-	StudioName string `json:"studioName"`
+	StudioName      string                     `json:"studioName"`
+	CurrentClass    *ClassScheduleWithInstance `json:"currentClass,omitempty"`    // Active class right now
+	NextClass       *ClassScheduleWithInstance `json:"nextClass,omitempty"`       // Next upcoming class
+	TodayClassCount int                        `json:"todayClassCount,omitempty"` // Number of classes today
 }
 
 type ListMyAccessibleRoomsRequest struct {
@@ -883,6 +889,55 @@ func GetRoomDetails(ctx *vbeam.Context, req GetRoomDetailsRequest) (resp GetRoom
 	resp.UserId = caller.Id
 	resp.IsCodeAuth = access.IsCodeAuth
 	resp.CodeExpiresAt = access.CodeExpiresAt
+
+	// Populate class schedule information
+	now := time.Now()
+
+	// Get current active class
+	currentClass := GetCurrentClassForRoom(ctx.Tx, req.RoomId, now)
+	if currentClass != nil {
+		// For recurring classes, we need to calculate the current instance times
+		if currentClass.IsRecurring {
+			loc, _ := time.LoadLocation(currentClass.RecurTimezone)
+			if loc == nil {
+				loc = time.UTC
+			}
+			nowInTz := now.In(loc)
+			startTime, _ := time.Parse("15:04", currentClass.RecurTimeStart)
+			endTime, _ := time.Parse("15:04", currentClass.RecurTimeEnd)
+
+			instanceStart := time.Date(
+				nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+				startTime.Hour(), startTime.Minute(), 0, 0, loc,
+			)
+			instanceEnd := time.Date(
+				nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+				endTime.Hour(), endTime.Minute(), 0, 0, loc,
+			)
+
+			resp.CurrentClass = &ClassScheduleWithInstance{
+				Schedule:      *currentClass,
+				InstanceStart: instanceStart,
+				InstanceEnd:   instanceEnd,
+			}
+		} else {
+			resp.CurrentClass = &ClassScheduleWithInstance{
+				Schedule:      *currentClass,
+				InstanceStart: currentClass.StartTime,
+				InstanceEnd:   currentClass.EndTime,
+			}
+		}
+	}
+
+	// Get next upcoming class
+	nextClasses := GetNextClassForRoom(ctx.Tx, req.RoomId, now, 1)
+	if len(nextClasses) > 0 {
+		resp.NextClass = &nextClasses[0]
+	}
+
+	// Get next 10 upcoming classes
+	resp.UpcomingClasses = GetNextClassForRoom(ctx.Tx, req.RoomId, now, 10)
+
 	return
 }
 
@@ -942,6 +997,67 @@ func ListMyAccessibleRooms(ctx *vbeam.Context, req ListMyAccessibleRoomsRequest)
 				})
 			}
 		}
+	}
+
+	// Populate class schedule information for all rooms
+	now := time.Now()
+	for i := range resp.Rooms {
+		room := &resp.Rooms[i]
+
+		// Get current active class
+		currentClass := GetCurrentClassForRoom(ctx.Tx, room.Id, now)
+		if currentClass != nil {
+			// For recurring classes, we need to calculate the current instance times
+			if currentClass.IsRecurring {
+				loc, _ := time.LoadLocation(currentClass.RecurTimezone)
+				if loc == nil {
+					loc = time.UTC
+				}
+				nowInTz := now.In(loc)
+				startTime, _ := time.Parse("15:04", currentClass.RecurTimeStart)
+				endTime, _ := time.Parse("15:04", currentClass.RecurTimeEnd)
+
+				instanceStart := time.Date(
+					nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+					startTime.Hour(), startTime.Minute(), 0, 0, loc,
+				)
+				instanceEnd := time.Date(
+					nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+					endTime.Hour(), endTime.Minute(), 0, 0, loc,
+				)
+
+				room.CurrentClass = &ClassScheduleWithInstance{
+					Schedule:      *currentClass,
+					InstanceStart: instanceStart,
+					InstanceEnd:   instanceEnd,
+				}
+			} else {
+				room.CurrentClass = &ClassScheduleWithInstance{
+					Schedule:      *currentClass,
+					InstanceStart: currentClass.StartTime,
+					InstanceEnd:   currentClass.EndTime,
+				}
+			}
+		}
+
+		// Get next upcoming class
+		nextClasses := GetNextClassForRoom(ctx.Tx, room.Id, now, 1)
+		if len(nextClasses) > 0 {
+			room.NextClass = &nextClasses[0]
+		}
+
+		// Count today's classes
+		todayClasses := GetNextClassForRoom(ctx.Tx, room.Id, now, 100)
+		todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
+		count := 0
+		for _, cls := range todayClasses {
+			if cls.InstanceStart.Before(todayEnd) {
+				count++
+			} else {
+				break
+			}
+		}
+		room.TodayClassCount = count
 	}
 
 	return
