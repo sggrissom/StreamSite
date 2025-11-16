@@ -87,6 +87,46 @@ const useCountdown = vlens.declareHook((expiresAt: string): CountdownState => {
   return state;
 });
 
+// Format class time as "Today at 3:00 PM" or "Tomorrow at 9:00 AM" or "Mon 12/16 at 6:00 PM"
+function formatClassTime(isoTime: string): string {
+  const classTime = new Date(isoTime);
+  const now = new Date();
+
+  // Get date parts
+  const nowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const classDate = new Date(
+    classTime.getFullYear(),
+    classTime.getMonth(),
+    classTime.getDate(),
+  );
+  const daysDiff = Math.floor(
+    (classDate.getTime() - nowDate.getTime()) / (1000 * 60 * 60 * 24),
+  );
+
+  // Format time
+  const timeStr = classTime.toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+
+  // Format date prefix
+  if (daysDiff === 0) {
+    return `Today at ${timeStr}`;
+  } else if (daysDiff === 1) {
+    return `Tomorrow at ${timeStr}`;
+  } else if (daysDiff < 7) {
+    const dayName = classTime.toLocaleDateString("en-US", { weekday: "short" });
+    return `${dayName} at ${timeStr}`;
+  } else {
+    const dateStr = classTime.toLocaleDateString("en-US", {
+      month: "numeric",
+      day: "numeric",
+    });
+    return `${dateStr} at ${timeStr}`;
+  }
+}
+
 export async function fetch(route: string, prefix: string) {
   // Check if user is authenticated
   let [authResp, authErr] = await server.GetAuthContext({});
@@ -178,34 +218,66 @@ export function view(
               )}
 
               <div className="rooms-grid">
-                {rooms.map((room) => (
-                  <div
-                    key={room.id}
-                    className={`room-card ${room.isActive ? "room-live" : ""}`}
-                  >
-                    <div className="room-header">
-                      <div className="room-studio">{room.studioName}</div>
-                      {room.isActive && (
-                        <span className="room-status active">🔴 Live</span>
+                {rooms.map((room) => {
+                  const currentClass = room.currentClass;
+                  const nextClass = room.nextClass;
+                  const hasClassToday = (room.todayClassCount || 0) > 0;
+
+                  return (
+                    <div
+                      key={room.id}
+                      className={`room-card ${room.isActive ? "room-live" : ""}`}
+                    >
+                      <div className="room-header">
+                        <div className="room-studio">{room.studioName}</div>
+                        {room.isActive && currentClass && (
+                          <span className="room-status active">
+                            🔴 Live: {currentClass.schedule.name}
+                          </span>
+                        )}
+                        {room.isActive && !currentClass && (
+                          <span className="room-status active">🔴 Live</span>
+                        )}
+                      </div>
+
+                      <h3 className="room-name">{room.name}</h3>
+
+                      <div className="room-meta">
+                        <span className="meta-item">
+                          Room #{room.roomNumber}
+                        </span>
+                        {hasClassToday && (
+                          <span className="meta-item class-count">
+                            📅 {room.todayClassCount} class
+                            {room.todayClassCount !== 1 ? "es" : ""} today
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Next class badge */}
+                      {nextClass && !currentClass && (
+                        <div className="next-class-badge">
+                          <span className="next-class-label">Next:</span>
+                          <span className="next-class-name">
+                            {nextClass.schedule.name}
+                          </span>
+                          <span className="next-class-time">
+                            {formatClassTime(nextClass.instanceStart)}
+                          </span>
+                        </div>
                       )}
-                    </div>
 
-                    <h3 className="room-name">{room.name}</h3>
-
-                    <div className="room-meta">
-                      <span className="meta-item">Room #{room.roomNumber}</span>
+                      <div className="room-actions">
+                        <a
+                          href={`/stream/${room.id}`}
+                          className={`btn btn-sm ${room.isActive ? "btn-primary" : "btn-secondary"}`}
+                        >
+                          {room.isActive ? "Watch Stream" : "View Stream"}
+                        </a>
+                      </div>
                     </div>
-
-                    <div className="room-actions">
-                      <a
-                        href={`/stream/${room.id}`}
-                        className={`btn btn-sm ${room.isActive ? "btn-primary" : "btn-secondary"}`}
-                      >
-                        {room.isActive ? "Watch Stream" : "View Stream"}
-                      </a>
-                    </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

@@ -295,6 +295,72 @@ block(`
 `);
 
 block(`
+.live-indicator {
+  text-align: center;
+  margin-bottom: 1.5rem;
+}
+`);
+
+block(`
+.live-badge {
+  display: inline-block;
+  background: rgba(220, 38, 38, 0.1);
+  color: #dc2626;
+  padding: 0.5rem 1.25rem;
+  border-radius: 20px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+}
+`);
+
+block(`
+.meta-item.class-count {
+  color: var(--primary);
+  font-weight: 500;
+}
+`);
+
+block(`
+.next-class-badge {
+  background: var(--bg-secondary, #f8f9fa);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.75rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+`);
+
+block(`
+.next-class-label {
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+`);
+
+block(`
+.next-class-name {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--text);
+}
+`);
+
+block(`
+.next-class-time {
+  font-size: 0.875rem;
+  color: var(--primary);
+  font-weight: 500;
+}
+`);
+
+block(`
 @media (max-width: 768px) {
   .dashboard-container {
     padding: 20px 16px;

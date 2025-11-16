@@ -1249,6 +1249,58 @@ function extractRoomIdFromRoute(route: string): number | null {
   return null;
 }
 
+// Format class end time as "Ends at 3:00 PM" or "Ends in 15 mins"
+function formatEndTime(isoTime: string): string {
+  const endTime = new Date(isoTime);
+  const now = new Date();
+  const minsUntilEnd = Math.floor(
+    (endTime.getTime() - now.getTime()) / (1000 * 60),
+  );
+
+  if (minsUntilEnd <= 0) {
+    return "Class ended";
+  } else if (minsUntilEnd < 60) {
+    return `Ends in ${minsUntilEnd} min${minsUntilEnd !== 1 ? "s" : ""}`;
+  } else {
+    const timeStr = endTime.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    return `Ends at ${timeStr}`;
+  }
+}
+
+// Format class start time as "Starts in 15 mins" or "Starts at 3:00 PM"
+function formatStartTime(isoTime: string): string {
+  const startTime = new Date(isoTime);
+  const now = new Date();
+  const minsUntilStart = Math.floor(
+    (startTime.getTime() - now.getTime()) / (1000 * 60),
+  );
+
+  if (minsUntilStart <= 0) {
+    return "Starting now";
+  } else if (minsUntilStart < 60) {
+    return `Starts in ${minsUntilStart} min${minsUntilStart !== 1 ? "s" : ""}`;
+  } else if (minsUntilStart < 1440) {
+    // Less than 24 hours
+    const hours = Math.floor(minsUntilStart / 60);
+    return `Starts in ${hours} hour${hours !== 1 ? "s" : ""}`;
+  } else {
+    const timeStr = startTime.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+    const dateStr = startTime.toLocaleDateString("en-US", {
+      month: "short",
+      day: "numeric",
+    });
+    return `Starts ${dateStr} at ${timeStr}`;
+  }
+}
+
 export async function fetch(route: string, prefix: string) {
   const roomId = extractRoomIdFromRoute(route);
 
@@ -1365,6 +1417,30 @@ export function view(
               <span className="room-number">Room #{data.room.roomNumber}</span>
             </div>
           </div>
+
+          {/* Class schedule info */}
+          {data.currentClass && (
+            <div className="class-info-banner active">
+              <span className="class-icon">📚</span>
+              <span className="class-name">
+                {data.currentClass.schedule.name}
+              </span>
+              <span className="class-time">
+                {formatEndTime(data.currentClass.instanceEnd)}
+              </span>
+            </div>
+          )}
+
+          {!data.currentClass && data.nextClass && !state.isStreamLive && (
+            <div className="class-info-banner upcoming">
+              <span className="class-icon">📅</span>
+              <span className="class-label">Next class:</span>
+              <span className="class-name">{data.nextClass.schedule.name}</span>
+              <span className="class-time">
+                {formatStartTime(data.nextClass.instanceStart)}
+              </span>
+            </div>
+          )}
         </div>
 
         {data.isCodeAuth && (
