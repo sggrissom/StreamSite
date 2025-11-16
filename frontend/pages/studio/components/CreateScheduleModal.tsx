@@ -93,6 +93,17 @@ const useCreateScheduleModal = vlens.declareHook(
   ): CreateScheduleModalState => {
     const editing = editingSchedule;
 
+    // Detect user's timezone for default
+    let defaultTimezone = "America/New_York";
+    try {
+      const detectedTz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (TIMEZONES.includes(detectedTz)) {
+        defaultTimezone = detectedTz;
+      }
+    } catch (e) {
+      // Fall back to America/New_York if detection fails
+    }
+
     // Initialize from editing schedule if present
     const state: CreateScheduleModalState = {
       roomId: editing?.roomId || defaultRoomId,
@@ -133,7 +144,7 @@ const useCreateScheduleModal = vlens.declareHook(
           : [false, false, false, false, false, false, false],
       recurTimeStart: editing?.recurTimeStart || "",
       recurTimeEnd: editing?.recurTimeEnd || "",
-      recurTimezone: editing?.recurTimezone || "America/New_York",
+      recurTimezone: editing?.recurTimezone || defaultTimezone,
 
       // Camera automation
       preRollMinutes: editing?.preRollMinutes ?? 5,
@@ -181,11 +192,24 @@ function handleTypeChangeToRecurring(state: CreateScheduleModalState) {
 
 function handleStartDateInput(state: CreateScheduleModalState, e: Event) {
   state.startDate = (e.target as HTMLInputElement).value;
+  // Auto-update end date to match start date
+  state.endDate = state.startDate;
   vlens.scheduleRedraw();
 }
 
 function handleStartTimeInput(state: CreateScheduleModalState, e: Event) {
   state.startTime = (e.target as HTMLInputElement).value;
+
+  // Auto-update end time to 30 minutes after start time
+  if (state.startTime) {
+    const [hours, minutes] = state.startTime.split(":").map(Number);
+    const startMinutes = hours * 60 + minutes;
+    const endMinutes = startMinutes + 30; // Add 30 minutes
+    const endHours = Math.floor(endMinutes / 60) % 24;
+    const endMins = endMinutes % 60;
+    state.endTime = `${String(endHours).padStart(2, "0")}:${String(endMins).padStart(2, "0")}`;
+  }
+
   vlens.scheduleRedraw();
 }
 

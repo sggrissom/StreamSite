@@ -158,10 +158,8 @@ function getScheduleStatus(schedule: server.ClassSchedule): {
   if (!schedule.isRecurring) {
     const startTime = new Date(schedule.startTime);
     const endTime = new Date(schedule.endTime);
-    const gracePeriod = 15 * 60 * 1000; // 15 minutes in ms
-    const endWithGrace = new Date(endTime.getTime() + gracePeriod);
 
-    if (now >= startTime && now <= endWithGrace) {
+    if (now >= startTime && now <= endTime) {
       return { label: "Live", className: "live", icon: "🟢" };
     }
 
@@ -178,7 +176,7 @@ function getScheduleStatus(schedule: server.ClassSchedule): {
       };
     }
 
-    if (now > endWithGrace) {
+    if (now > endTime) {
       return { label: "Past", className: "idle", icon: "" };
     }
 
@@ -257,12 +255,8 @@ function getScheduleStatus(schedule: server.ClassSchedule): {
     const classEnd = new Date(nowInTz);
     classEnd.setHours(endHour, endMin, 0, 0);
 
-    // Add grace period (15 minutes)
-    const gracePeriod = 15 * 60 * 1000;
-    const classEndWithGrace = new Date(classEnd.getTime() + gracePeriod);
-
     // Check if currently live
-    if (nowInTz >= classStart && nowInTz <= classEndWithGrace) {
+    if (nowInTz >= classStart && nowInTz <= classEnd) {
       return { label: "Live Now", className: "live", icon: "🟢" };
     }
 

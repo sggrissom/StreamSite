@@ -557,13 +557,11 @@ func calculateUpcomingInstances(schedule *ClassSchedule, count int) []ClassInsta
 }
 
 // GetCurrentClassForRoom returns the currently active class for a room, or nil if no class is active.
-// A class is considered active if the current time is within the class time + grace period (15 minutes).
+// A class is considered active if the current time is within the class time.
 func GetCurrentClassForRoom(tx *vbolt.Tx, roomId int, now time.Time) *ClassSchedule {
 	// Get all active schedules for this room
 	var scheduleIds []int
 	vbolt.ReadTermTargets(tx, SchedulesByRoomIdx, roomId, &scheduleIds, vbolt.Window{})
-
-	gracePeriod := 15 * time.Minute
 
 	for _, schedId := range scheduleIds {
 		var sched ClassSchedule
@@ -578,7 +576,7 @@ func GetCurrentClassForRoom(tx *vbolt.Tx, roomId int, now time.Time) *ClassSched
 
 		// One-time schedule: check if we're within the time window
 		if !sched.IsRecurring {
-			if now.After(sched.StartTime) && now.Before(sched.EndTime.Add(gracePeriod)) {
+			if now.After(sched.StartTime) && now.Before(sched.EndTime) {
 				return &sched
 			}
 			continue
@@ -634,8 +632,8 @@ func GetCurrentClassForRoom(tx *vbolt.Tx, roomId int, now time.Time) *ClassSched
 			endTime.Hour(), endTime.Minute(), 0, 0, loc,
 		)
 
-		// Check if we're within the active window (including grace period)
-		if nowInTz.After(instanceStart) && nowInTz.Before(instanceEnd.Add(gracePeriod)) {
+		// Check if we're within the active window
+		if nowInTz.After(instanceStart) && nowInTz.Before(instanceEnd) {
 			return &sched
 		}
 	}
