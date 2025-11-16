@@ -3,6 +3,7 @@ import * as vlens from "vlens";
 import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
 import { CreateScheduleModal } from "./CreateScheduleModal";
+import { ClassPermissionsModal } from "./ClassPermissionsModal";
 import "./SchedulesSection-styles";
 
 type Studio = {
@@ -30,6 +31,7 @@ type SchedulesSectionState = {
   showCreateModal: boolean;
   editingSchedule: server.ClassSchedule | null;
   deleteConfirmSchedule: server.ClassSchedule | null;
+  permissionsSchedule: server.ClassSchedule | null;
   isDeleting: boolean;
 };
 
@@ -43,6 +45,7 @@ const useSchedulesSection = vlens.declareHook(
       showCreateModal: false,
       editingSchedule: null,
       deleteConfirmSchedule: null,
+      permissionsSchedule: null,
       isDeleting: false,
     };
 
@@ -105,6 +108,19 @@ function openDeleteConfirm(
 
 function closeDeleteConfirm(state: SchedulesSectionState) {
   state.deleteConfirmSchedule = null;
+  vlens.scheduleRedraw();
+}
+
+function openPermissionsModal(
+  state: SchedulesSectionState,
+  schedule: server.ClassSchedule,
+) {
+  state.permissionsSchedule = schedule;
+  vlens.scheduleRedraw();
+}
+
+function closePermissionsModal(state: SchedulesSectionState) {
+  state.permissionsSchedule = null;
   vlens.scheduleRedraw();
 }
 
@@ -422,6 +438,12 @@ export function SchedulesSection(props: SchedulesSectionProps) {
                       <div className="schedule-actions">
                         <button
                           className="btn-schedule"
+                          onClick={() => openPermissionsModal(state, schedule)}
+                        >
+                          Permissions
+                        </button>
+                        <button
+                          className="btn-schedule"
                           onClick={() => openEditModal(state, schedule)}
                         >
                           Edit
@@ -499,6 +521,16 @@ export function SchedulesSection(props: SchedulesSectionProps) {
             </div>
           </div>
         </Modal>
+      )}
+
+      {/* Class Permissions Modal */}
+      {state.permissionsSchedule && (
+        <ClassPermissionsModal
+          isOpen={true}
+          onClose={() => closePermissionsModal(state)}
+          schedule={state.permissionsSchedule}
+          studioId={props.studio.id}
+        />
       )}
     </div>
   );
