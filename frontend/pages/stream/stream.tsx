@@ -1301,6 +1301,85 @@ function formatStartTime(isoTime: string): string {
   }
 }
 
+// Upcoming Schedule Component - Collapsible view of upcoming classes
+type UpcomingScheduleState = {
+  isExpanded: boolean;
+};
+
+const useUpcomingSchedule = vlens.declareHook(
+  (): UpcomingScheduleState => ({
+    isExpanded: false,
+  }),
+);
+
+interface UpcomingScheduleProps {
+  classes: server.ClassScheduleWithInstance[];
+}
+
+function UpcomingSchedule({ classes }: UpcomingScheduleProps) {
+  const state = useUpcomingSchedule();
+
+  // Show first 3 by default, rest when expanded
+  const visibleClasses = state.isExpanded ? classes : classes.slice(0, 3);
+  const hasMore = classes.length > 3;
+
+  return (
+    <div className="upcoming-schedule">
+      <div
+        className="schedule-header"
+        onClick={() => {
+          state.isExpanded = !state.isExpanded;
+          vlens.scheduleRedraw();
+        }}
+      >
+        <span className="schedule-title">
+          📅 Upcoming Schedule ({classes.length})
+        </span>
+        {hasMore && (
+          <span className="schedule-toggle">
+            {state.isExpanded ? "▲ Show less" : "▼ View all"}
+          </span>
+        )}
+      </div>
+      <div className="schedule-list">
+        {visibleClasses.map((classItem, index) => {
+          const startTime = new Date(classItem.instanceStart);
+          const timeStr = startTime.toLocaleTimeString("en-US", {
+            hour: "numeric",
+            minute: "2-digit",
+            hour12: true,
+          });
+          const dateStr = startTime.toLocaleDateString("en-US", {
+            weekday: "short",
+            month: "short",
+            day: "numeric",
+          });
+
+          return (
+            <div
+              key={`${classItem.schedule.id}-${classItem.instanceStart}-${index}`}
+              className="schedule-item"
+            >
+              <div className="schedule-item-time">
+                <div className="time">{timeStr}</div>
+                <div className="date">{dateStr}</div>
+              </div>
+              <div className="schedule-item-details">
+                <div className="class-name">{classItem.schedule.name}</div>
+                {classItem.schedule.description && (
+                  <div className="class-description">
+                    {classItem.schedule.description}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export async function fetch(route: string, prefix: string) {
   const roomId = extractRoomIdFromRoute(route);
 
@@ -1440,6 +1519,11 @@ export function view(
                 {formatStartTime(data.nextClass.instanceStart)}
               </span>
             </div>
+          )}
+
+          {/* Upcoming classes schedule */}
+          {data.upcomingClasses && data.upcomingClasses.length > 0 && (
+            <UpcomingSchedule classes={data.upcomingClasses} />
           )}
         </div>
 

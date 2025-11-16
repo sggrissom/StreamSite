@@ -199,9 +199,107 @@ func ListClassPermissions(ctx *vbeam.Context, req ListClassPermissionsRequest) (
 	return result, nil
 }
 
+// ListMyUpcomingClassesRequest gets upcoming classes across all accessible rooms
+type ListMyUpcomingClassesRequest struct {
+	Limit int `json:"limit"` // Max number of classes to return (default 20)
+}
+
+type UpcomingClassWithRoom struct {
+	Schedule      ClassSchedule `json:"schedule"`
+	InstanceStart time.Time     `json:"instanceStart"`
+	InstanceEnd   time.Time     `json:"instanceEnd"`
+	RoomId        int           `json:"roomId"`
+	RoomName      string        `json:"roomName"`
+	StudioId      int           `json:"studioId"`
+	StudioName    string        `json:"studioName"`
+}
+
+type ListMyUpcomingClassesResponse struct {
+	Classes []UpcomingClassWithRoom `json:"classes"`
+}
+
+// ListMyUpcomingClasses returns upcoming classes across all rooms the user has access to.
+// This shows scheduled classes visible to anyone with room access - class permissions
+// only matter when actually viewing the stream during class time.
+func ListMyUpcomingClasses(ctx *vbeam.Context, req ListMyUpcomingClassesRequest) (resp ListMyUpcomingClassesResponse, err error) {
+	// Validate authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("authentication required")
+	}
+
+	// Default limit
+	limit := req.Limit
+	if limit <= 0 || limit > 50 {
+		limit = 20
+	}
+
+	now := time.Now()
+
+	// Get all studios the user is a member of
+	var studioIds []int
+	vbolt.ReadTermTargets(ctx.Tx, MembershipByUserIdx, caller.Id, &studioIds, vbolt.Window{})
+
+	allClasses := make([]UpcomingClassWithRoom, 0)
+
+	// For each studio, get all rooms and their upcoming classes
+	for _, studioId := range studioIds {
+		// Get studio details
+		var studio Studio
+		if !vbolt.Read(ctx.Tx, StudiosBkt, studioId, &studio) {
+			continue
+		}
+
+		// Get all rooms in this studio
+		var roomIds []int
+		vbolt.ReadTermTargets(ctx.Tx, RoomsByStudioIdx, studioId, &roomIds, vbolt.Window{})
+
+		for _, roomId := range roomIds {
+			// Get room details
+			var room Room
+			if !vbolt.Read(ctx.Tx, RoomsBkt, roomId, &room) {
+				continue
+			}
+
+			// Get upcoming classes for this room
+			upcomingClasses := GetNextClassForRoom(ctx.Tx, roomId, now, limit)
+
+			// Add room and studio info to each class
+			for _, class := range upcomingClasses {
+				allClasses = append(allClasses, UpcomingClassWithRoom{
+					Schedule:      class.Schedule,
+					InstanceStart: class.InstanceStart,
+					InstanceEnd:   class.InstanceEnd,
+					RoomId:        roomId,
+					RoomName:      room.Name,
+					StudioId:      studioId,
+					StudioName:    studio.Name,
+				})
+			}
+		}
+	}
+
+	// Sort all classes by start time
+	for i := 0; i < len(allClasses); i++ {
+		for j := i + 1; j < len(allClasses); j++ {
+			if allClasses[j].InstanceStart.Before(allClasses[i].InstanceStart) {
+				allClasses[i], allClasses[j] = allClasses[j], allClasses[i]
+			}
+		}
+	}
+
+	// Limit results
+	if len(allClasses) > limit {
+		allClasses = allClasses[:limit]
+	}
+
+	return ListMyUpcomingClassesResponse{Classes: allClasses}, nil
+}
+
 // RegisterClassPermissionMethods registers all class permission procedures
 func RegisterClassPermissionMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, GrantClassPermission)
 	vbeam.RegisterProc(app, RevokeClassPermission)
 	vbeam.RegisterProc(app, ListClassPermissions)
+	vbeam.RegisterProc(app, ListMyUpcomingClasses)
 }

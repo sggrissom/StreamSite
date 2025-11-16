@@ -19,6 +19,9 @@ type Room = {
   roomNumber: number;
   isActive: boolean;
   creation: string;
+  currentClass?: server.ClassScheduleWithInstance | null;
+  nextClass?: server.ClassScheduleWithInstance | null;
+  todayClassCount?: number;
 };
 
 type RoomsSectionProps = {
@@ -606,6 +609,29 @@ function stopCameraPolling(manager: CameraIngestManager) {
   manager.isPollingPaused = false;
 }
 
+// Format class start time for display
+function formatClassStartTime(isoTime: string): string {
+  const startTime = new Date(isoTime);
+  const now = new Date();
+  const minsUntilStart = Math.floor(
+    (startTime.getTime() - now.getTime()) / (1000 * 60),
+  );
+
+  if (minsUntilStart < 60) {
+    return `in ${minsUntilStart}m`;
+  } else if (minsUntilStart < 1440) {
+    // Less than 24 hours
+    const hours = Math.floor(minsUntilStart / 60);
+    return `in ${hours}h`;
+  } else {
+    return startTime.toLocaleTimeString("en-US", {
+      hour: "numeric",
+      minute: "2-digit",
+      hour12: true,
+    });
+  }
+}
+
 // ===== Component =====
 export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
   const { studio, rooms, canManageRooms } = props;
@@ -666,6 +692,30 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
 
                   <h3 className="room-name">{room.name}</h3>
 
+                  {/* Class status indicator */}
+                  {room.currentClass && room.isActive && (
+                    <div className="class-status-badge active-class">
+                      <span className="class-icon">📚</span>
+                      <span className="class-label">In Class:</span>
+                      <span className="class-name">
+                        {room.currentClass.schedule.name}
+                      </span>
+                    </div>
+                  )}
+
+                  {!room.currentClass && room.nextClass && !room.isActive && (
+                    <div className="class-status-badge next-class">
+                      <span className="class-icon">📅</span>
+                      <span className="class-label">Next:</span>
+                      <span className="class-name">
+                        {room.nextClass.schedule.name}
+                      </span>
+                      <span className="class-time">
+                        {formatClassStartTime(room.nextClass.instanceStart)}
+                      </span>
+                    </div>
+                  )}
+
                   <div className="room-meta">
                     <span className="meta-item">
                       <span className="meta-label">Created:</span>
@@ -673,6 +723,12 @@ export function RoomsSection(props: RoomsSectionProps): preact.ComponentChild {
                         {new Date(room.creation).toLocaleDateString()}
                       </span>
                     </span>
+                    {room.todayClassCount && room.todayClassCount > 0 && (
+                      <span className="meta-item class-count">
+                        📅 {room.todayClassCount} class
+                        {room.todayClassCount !== 1 ? "es" : ""} today
+                      </span>
+                    )}
                   </div>
 
                   {/* Camera Controls */}

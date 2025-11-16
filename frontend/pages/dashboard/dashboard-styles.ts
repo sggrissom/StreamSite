@@ -361,6 +361,119 @@ block(`
 `);
 
 block(`
+.upcoming-classes-section {
+  margin-top: 4rem;
+  text-align: left;
+}
+`);
+
+block(`
+.upcoming-classes-section .section-title {
+  font-size: 1.75rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0 0 1.5rem;
+  text-align: center;
+}
+`);
+
+block(`
+.upcoming-classes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+`);
+
+block(`
+.upcoming-class-item {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 1.25rem;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  transition: all 0.2s;
+}
+`);
+
+block(`
+.upcoming-class-item:hover {
+  border-color: var(--primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+`);
+
+block(`
+.upcoming-class-item.starting-soon {
+  border-color: var(--accent);
+  background: linear-gradient(135deg, var(--surface) 0%, rgba(var(--accent-rgb, 147, 51, 234), 0.05) 100%);
+}
+`);
+
+block(`
+.class-item-left {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+`);
+
+block(`
+.upcoming-class-item .class-name {
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: var(--text);
+  margin: 0;
+}
+`);
+
+block(`
+.class-location {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.875rem;
+  color: var(--muted);
+}
+`);
+
+block(`
+.class-location .studio-name {
+  font-weight: 500;
+}
+`);
+
+block(`
+.class-location .separator {
+  color: var(--border);
+}
+`);
+
+block(`
+.class-time {
+  font-size: 0.875rem;
+  color: var(--primary);
+  font-weight: 500;
+}
+`);
+
+block(`
+.class-item-right {
+  flex-shrink: 0;
+}
+`);
+
+block(`
+.class-join-btn {
+  white-space: nowrap;
+}
+`);
+
+block(`
 @media (max-width: 768px) {
   .dashboard-container {
     padding: 20px 16px;
@@ -385,6 +498,28 @@ block(`
 
   .dashboard-rooms-section .section-title {
     font-size: 1.5rem;
+  }
+
+  .upcoming-classes-section {
+    margin-top: 3rem;
+  }
+
+  .upcoming-classes-section .section-title {
+    font-size: 1.5rem;
+  }
+
+  .upcoming-class-item {
+    flex-direction: column;
+    align-items: flex-start;
+    padding: 1rem;
+  }
+
+  .class-item-right {
+    width: 100%;
+  }
+
+  .class-join-btn {
+    width: 100%;
   }
 }
 `);

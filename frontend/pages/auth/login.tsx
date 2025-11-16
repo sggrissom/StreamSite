@@ -80,14 +80,24 @@ async function onLoginClicked(form: LoginForm, event: Event) {
       }),
     });
 
+    // Check HTTP status first
+    if (!res.ok) {
+      const errorText = await res.text();
+      form.error = errorText || "Login failed";
+      form.loading = false;
+      vlens.scheduleRedraw();
+      return;
+    }
+
+    // Parse JSON only for successful responses
     const result = await res.json();
     form.loading = false;
 
-    if (result.success) {
+    if (result.token && result.auth) {
       // Redirect to dashboard on success
       window.location.href = "/dashboard";
     } else {
-      form.error = result.error || "Login failed";
+      form.error = "Invalid response from server";
     }
   } catch (error) {
     form.loading = false;

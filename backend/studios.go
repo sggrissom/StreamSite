@@ -234,7 +234,7 @@ type GetStudioDashboardResponse struct {
 	Studio     Studio              `json:"studio,omitempty"`
 	MyRole     StudioRole          `json:"myRole"`
 	MyRoleName string              `json:"myRoleName"`
-	Rooms      []Room              `json:"rooms,omitempty"`
+	Rooms      []RoomWithStudio    `json:"rooms,omitempty"`
 	Members    []MemberWithDetails `json:"members,omitempty"`
 }
 
@@ -522,21 +522,83 @@ func GetStudioDashboard(ctx *vbeam.Context, req GetStudioDashboardRequest) (resp
 	// Get studio (we know it exists from CheckStudioAccess)
 	studio := GetStudioById(ctx.Tx, req.StudioId)
 
-	// Get all rooms for this studio
+	// Get all rooms for this studio with class information
 	var roomIds []int
 	vbolt.ReadTermTargets(ctx.Tx, RoomsByStudioIdx, studio.Id, &roomIds, vbolt.Window{})
 
-	var rooms []Room
+	now := time.Now()
+	var rooms []RoomWithStudio
 	for _, roomId := range roomIds {
 		room := GetRoom(ctx.Tx, roomId)
 		if room.Id != 0 {
-			rooms = append(rooms, room)
+			// Get class information for this room
+			currentClassSched := GetCurrentClassForRoom(ctx.Tx, roomId, now)
+			nextClasses := GetNextClassForRoom(ctx.Tx, roomId, now, 1)
+
+			// Convert current class schedule to ClassScheduleWithInstance
+			var currentClass *ClassScheduleWithInstance
+			if currentClassSched != nil {
+				if !currentClassSched.IsRecurring {
+					currentClass = &ClassScheduleWithInstance{
+						Schedule:      *currentClassSched,
+						InstanceStart: currentClassSched.StartTime,
+						InstanceEnd:   currentClassSched.EndTime,
+					}
+				} else {
+					// For recurring, calculate today's instance
+					loc, _ := time.LoadLocation(currentClassSched.RecurTimezone)
+					if loc == nil {
+						loc = time.UTC
+					}
+					nowInTz := now.In(loc)
+					startTime, _ := time.Parse("15:04", currentClassSched.RecurTimeStart)
+					endTime, _ := time.Parse("15:04", currentClassSched.RecurTimeEnd)
+					instanceStart := time.Date(
+						nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+						startTime.Hour(), startTime.Minute(), 0, 0, loc,
+					)
+					instanceEnd := time.Date(
+						nowInTz.Year(), nowInTz.Month(), nowInTz.Day(),
+						endTime.Hour(), endTime.Minute(), 0, 0, loc,
+					)
+					currentClass = &ClassScheduleWithInstance{
+						Schedule:      *currentClassSched,
+						InstanceStart: instanceStart,
+						InstanceEnd:   instanceEnd,
+					}
+				}
+			}
+
+			var nextClass *ClassScheduleWithInstance
+			if len(nextClasses) > 0 {
+				nextClass = &nextClasses[0]
+			}
+
+			// Count today's classes
+			todayClasses := GetNextClassForRoom(ctx.Tx, roomId, now, 100)
+			todayEnd := time.Date(now.Year(), now.Month(), now.Day(), 23, 59, 59, 0, now.Location())
+			todayClassCount := 0
+			for _, cls := range todayClasses {
+				if cls.InstanceStart.Before(todayEnd) {
+					todayClassCount++
+				} else {
+					break
+				}
+			}
+
+			rooms = append(rooms, RoomWithStudio{
+				Room:            room,
+				StudioName:      studio.Name,
+				CurrentClass:    currentClass,
+				NextClass:       nextClass,
+				TodayClassCount: todayClassCount,
+			})
 		}
 	}
 
 	// If no rooms found, initialize empty slice
 	if rooms == nil {
-		rooms = []Room{}
+		rooms = []RoomWithStudio{}
 	}
 
 	// Get all members for this studio

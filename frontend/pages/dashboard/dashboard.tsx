@@ -11,6 +11,7 @@ type Data = {
   authId: number;
   rooms: server.ListMyAccessibleRoomsResponse | null;
   auth: server.AuthResponse | null;
+  upcomingClasses: server.ListMyUpcomingClassesResponse | null;
 };
 
 // Countdown timer for code expiration
@@ -134,10 +135,16 @@ export async function fetch(route: string, prefix: string) {
   // Get accessible rooms
   let [roomsResp, roomsErr] = await server.ListMyAccessibleRooms({});
 
+  // Get upcoming classes
+  let [classesResp, classesErr] = await server.ListMyUpcomingClasses({
+    limit: 10,
+  });
+
   return rpc.ok<Data>({
     authId: authResp?.id || 0,
     rooms: roomsResp || null,
     auth: authResp || null,
+    upcomingClasses: classesResp || null,
   });
 }
 
@@ -273,6 +280,53 @@ export function view(
                           className={`btn btn-sm ${room.isActive ? "btn-primary" : "btn-secondary"}`}
                         >
                           {room.isActive ? "Watch Stream" : "View Stream"}
+                        </a>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+          {/* My Upcoming Classes Section */}
+          {data.upcomingClasses && data.upcomingClasses.classes.length > 0 && (
+            <div className="upcoming-classes-section">
+              <h2 className="section-title">My Upcoming Classes</h2>
+              <div className="upcoming-classes-list">
+                {data.upcomingClasses.classes.map((classItem, index) => {
+                  const isStartingSoon =
+                    new Date(classItem.instanceStart).getTime() - Date.now() <
+                    1000 * 60 * 60; // Less than 1 hour away
+
+                  return (
+                    <div
+                      key={`${classItem.schedule.id}-${classItem.instanceStart}-${index}`}
+                      className={`upcoming-class-item ${isStartingSoon ? "starting-soon" : ""}`}
+                    >
+                      <div className="class-item-left">
+                        <h3 className="class-name">
+                          {classItem.schedule.name}
+                        </h3>
+                        <div className="class-location">
+                          <span className="studio-name">
+                            {classItem.studioName}
+                          </span>
+                          <span className="separator">•</span>
+                          <span className="room-name">
+                            {classItem.roomName}
+                          </span>
+                        </div>
+                        <div className="class-time">
+                          {formatClassTime(classItem.instanceStart)}
+                        </div>
+                      </div>
+                      <div className="class-item-right">
+                        <a
+                          href={`/stream/${classItem.roomId}`}
+                          className="btn btn-sm btn-secondary class-join-btn"
+                        >
+                          View Room
                         </a>
                       </div>
                     </div>

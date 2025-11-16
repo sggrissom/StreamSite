@@ -113,7 +113,7 @@ export interface GetStudioDashboardResponse {
     studio: Studio
     myRole: StudioRole
     myRoleName: string
-    rooms: Room[]
+    rooms: RoomWithStudio[]
     members: MemberWithDetails[]
 }
 
@@ -547,6 +547,14 @@ export interface ListClassPermissionsResponse {
     permissions: ClassPermissionWithUser[]
 }
 
+export interface ListMyUpcomingClassesRequest {
+    limit: number
+}
+
+export interface ListMyUpcomingClassesResponse {
+    classes: UpcomingClassWithRoom[]
+}
+
 export interface GetTranscoderHealthRequest {
 }
 
@@ -635,33 +643,6 @@ export interface StudioWithOwner {
     memberCount: number
 }
 
-export interface Room {
-    id: number
-    studioId: number
-    roomNumber: number
-    name: string
-    streamKey: string
-    isActive: boolean
-    isHlsReady: boolean
-    creation: string
-}
-
-export interface MemberWithDetails {
-    userId: number
-    studioId: number
-    role: StudioRole
-    joinedAt: string
-    userName: string
-    userEmail: string
-    roleName: string
-}
-
-export interface ClassScheduleWithInstance {
-    schedule: ClassSchedule
-    instanceStart: string
-    instanceEnd: string
-}
-
 export interface RoomWithStudio {
     id: number
     studioId: number
@@ -675,6 +656,33 @@ export interface RoomWithStudio {
     currentClass: ClassScheduleWithInstance | null
     nextClass: ClassScheduleWithInstance | null
     todayClassCount: number
+}
+
+export interface MemberWithDetails {
+    userId: number
+    studioId: number
+    role: StudioRole
+    joinedAt: string
+    userName: string
+    userEmail: string
+    roleName: string
+}
+
+export interface Room {
+    id: number
+    studioId: number
+    roomNumber: number
+    name: string
+    streamKey: string
+    isActive: boolean
+    isHlsReady: boolean
+    creation: string
+}
+
+export interface ClassScheduleWithInstance {
+    schedule: ClassSchedule
+    instanceStart: string
+    instanceEnd: string
 }
 
 export interface StudioMembership {
@@ -872,6 +880,16 @@ export interface ClassPermissionWithUser {
     permission: ClassPermission
     userName: string
     userEmail: string
+}
+
+export interface UpcomingClassWithRoom {
+    schedule: ClassSchedule
+    instanceStart: string
+    instanceEnd: string
+    roomId: number
+    roomName: string
+    studioId: number
+    studioName: string
 }
 
 export interface TranscoderStatus {
@@ -1105,6 +1123,10 @@ export async function RevokeClassPermission(data: RevokeClassPermissionRequest):
 
 export async function ListClassPermissions(data: ListClassPermissionsRequest): Promise<rpc.Response<ListClassPermissionsResponse>> {
     return await rpc.call<ListClassPermissionsResponse>('ListClassPermissions', JSON.stringify(data));
+}
+
+export async function ListMyUpcomingClasses(data: ListMyUpcomingClassesRequest): Promise<rpc.Response<ListMyUpcomingClassesResponse>> {
+    return await rpc.call<ListMyUpcomingClassesResponse>('ListMyUpcomingClasses', JSON.stringify(data));
 }
 
 export async function GetTranscoderHealth(data: GetTranscoderHealthRequest): Promise<rpc.Response<TranscoderHealthResponse>> {
