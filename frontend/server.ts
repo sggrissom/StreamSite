@@ -447,6 +447,103 @@ export interface GetChatHistoryResponse {
     messages: ChatMessage[]
 }
 
+export interface CreateClassScheduleRequest {
+    roomId: number
+    name: string
+    description: string
+    isRecurring: boolean
+    startTime: string
+    endTime: string
+    recurStartDate: string
+    recurEndDate: string
+    recurWeekdays: number[]
+    recurTimeStart: string
+    recurTimeEnd: string
+    recurTimezone: string
+    preRollMinutes: number
+    postRollMinutes: number
+    autoStartCamera: boolean
+    autoStopCamera: boolean
+}
+
+export interface CreateClassScheduleResponse {
+    scheduleId: number
+}
+
+export interface ListClassSchedulesRequest {
+    studioId: number | null
+    roomId: number | null
+}
+
+export interface ListClassSchedulesResponse {
+    schedules: ClassSchedule[]
+}
+
+export interface GetScheduleDetailsRequest {
+    scheduleId: number
+}
+
+export interface GetScheduleDetailsResponse {
+    schedule: ClassSchedule
+    upcomingInstances: ClassInstance[]
+}
+
+export interface UpdateClassScheduleRequest {
+    scheduleId: number
+    name: string | null
+    description: string | null
+    startTime: string | null
+    endTime: string | null
+    recurStartDate: string | null
+    recurEndDate: string | null
+    recurWeekdays: number[]
+    recurTimeStart: string | null
+    recurTimeEnd: string | null
+    recurTimezone: string | null
+    preRollMinutes: number | null
+    postRollMinutes: number | null
+    autoStartCamera: boolean | null
+    autoStopCamera: boolean | null
+}
+
+export interface UpdateClassScheduleResponse {
+    success: boolean
+}
+
+export interface DeleteClassScheduleRequest {
+    scheduleId: number
+}
+
+export interface DeleteClassScheduleResponse {
+    success: boolean
+}
+
+export interface GrantClassPermissionRequest {
+    scheduleId: number
+    userId: number
+    role: number
+}
+
+export interface GrantClassPermissionResponse {
+    permissionId: number
+}
+
+export interface RevokeClassPermissionRequest {
+    permissionId: number
+}
+
+export interface RevokeClassPermissionResponse {
+    success: boolean
+}
+
+export interface ListClassPermissionsRequest {
+    scheduleId: number
+}
+
+export interface ListClassPermissionsResponse {
+    permissions: ClassPermissionWithUser[]
+}
+
 export interface GetTranscoderHealthRequest {
 }
 
@@ -729,12 +826,57 @@ export interface ChatMessage {
     timestamp: string
 }
 
+export interface ClassSchedule {
+    id: number
+    roomId: number
+    studioId: number
+    name: string
+    description: string
+    isRecurring: boolean
+    startTime: string
+    endTime: string
+    recurStartDate: string
+    recurEndDate: string
+    recurWeekdays: number[]
+    recurTimeStart: string
+    recurTimeEnd: string
+    recurTimezone: string
+    preRollMinutes: number
+    postRollMinutes: number
+    autoStartCamera: boolean
+    autoStopCamera: boolean
+    createdBy: number
+    createdAt: string
+    updatedAt: string
+    isActive: boolean
+}
+
+export interface ClassInstance {
+    startTime: string
+    endTime: string
+}
+
+export interface ClassPermissionWithUser {
+    permission: ClassPermission
+    userName: string
+    userEmail: string
+}
+
 export interface TranscoderStatus {
     roomId: string
     streamKey: string
     running: boolean
     startedAt: string
     duration: string
+}
+
+export interface ClassPermission {
+    id: number
+    scheduleId: number
+    userId: number
+    role: number
+    grantedBy: number
+    grantedAt: string
 }
 
 export async function CreateAccount(data: CreateAccountRequest): Promise<rpc.Response<CreateAccountResponse>> {
@@ -919,6 +1061,38 @@ export async function SendChatMessage(data: SendChatMessageRequest): Promise<rpc
 
 export async function GetChatHistory(data: GetChatHistoryRequest): Promise<rpc.Response<GetChatHistoryResponse>> {
     return await rpc.call<GetChatHistoryResponse>('GetChatHistory', JSON.stringify(data));
+}
+
+export async function CreateClassSchedule(data: CreateClassScheduleRequest): Promise<rpc.Response<CreateClassScheduleResponse>> {
+    return await rpc.call<CreateClassScheduleResponse>('CreateClassSchedule', JSON.stringify(data));
+}
+
+export async function ListClassSchedules(data: ListClassSchedulesRequest): Promise<rpc.Response<ListClassSchedulesResponse>> {
+    return await rpc.call<ListClassSchedulesResponse>('ListClassSchedules', JSON.stringify(data));
+}
+
+export async function GetScheduleDetails(data: GetScheduleDetailsRequest): Promise<rpc.Response<GetScheduleDetailsResponse>> {
+    return await rpc.call<GetScheduleDetailsResponse>('GetScheduleDetails', JSON.stringify(data));
+}
+
+export async function UpdateClassSchedule(data: UpdateClassScheduleRequest): Promise<rpc.Response<UpdateClassScheduleResponse>> {
+    return await rpc.call<UpdateClassScheduleResponse>('UpdateClassSchedule', JSON.stringify(data));
+}
+
+export async function DeleteClassSchedule(data: DeleteClassScheduleRequest): Promise<rpc.Response<DeleteClassScheduleResponse>> {
+    return await rpc.call<DeleteClassScheduleResponse>('DeleteClassSchedule', JSON.stringify(data));
+}
+
+export async function GrantClassPermission(data: GrantClassPermissionRequest): Promise<rpc.Response<GrantClassPermissionResponse>> {
+    return await rpc.call<GrantClassPermissionResponse>('GrantClassPermission', JSON.stringify(data));
+}
+
+export async function RevokeClassPermission(data: RevokeClassPermissionRequest): Promise<rpc.Response<RevokeClassPermissionResponse>> {
+    return await rpc.call<RevokeClassPermissionResponse>('RevokeClassPermission', JSON.stringify(data));
+}
+
+export async function ListClassPermissions(data: ListClassPermissionsRequest): Promise<rpc.Response<ListClassPermissionsResponse>> {
+    return await rpc.call<ListClassPermissionsResponse>('ListClassPermissions', JSON.stringify(data));
 }
 
 export async function GetTranscoderHealth(data: GetTranscoderHealthRequest): Promise<rpc.Response<TranscoderHealthResponse>> {

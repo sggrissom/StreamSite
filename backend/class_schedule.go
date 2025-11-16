@@ -163,17 +163,17 @@ type CreateClassScheduleRequest struct {
 	// Schedule Type
 	IsRecurring bool `json:"isRecurring"`
 
-	// One-Time Fields
-	StartTime time.Time `json:"startTime"`
-	EndTime   time.Time `json:"endTime"`
+	// One-Time Fields - sent as ISO strings, parsed to time.Time
+	StartTime string `json:"startTime"`
+	EndTime   string `json:"endTime"`
 
 	// Recurring Fields
-	RecurStartDate time.Time `json:"recurStartDate"`
-	RecurEndDate   time.Time `json:"recurEndDate"`   // Optional
-	RecurWeekdays  []int     `json:"recurWeekdays"`  // [0,2,4] for Sun,Tue,Thu
-	RecurTimeStart string    `json:"recurTimeStart"` // "09:00"
-	RecurTimeEnd   string    `json:"recurTimeEnd"`   // "10:00"
-	RecurTimezone  string    `json:"recurTimezone"`  // "America/New_York"
+	RecurStartDate string `json:"recurStartDate"` // ISO string, parsed to time.Time
+	RecurEndDate   string `json:"recurEndDate"`   // Optional ISO string
+	RecurWeekdays  []int  `json:"recurWeekdays"`  // [0,2,4] for Sun,Tue,Thu
+	RecurTimeStart string `json:"recurTimeStart"` // "09:00"
+	RecurTimeEnd   string `json:"recurTimeEnd"`   // "10:00"
+	RecurTimezone  string `json:"recurTimezone"`  // "America/New_York"
 
 	// Automation Settings
 	PreRollMinutes  int  `json:"preRollMinutes"`  // Default: 5
@@ -216,17 +216,17 @@ type UpdateClassScheduleRequest struct {
 	Name        *string `json:"name"`
 	Description *string `json:"description"`
 
-	// One-Time Fields
-	StartTime *time.Time `json:"startTime"`
-	EndTime   *time.Time `json:"endTime"`
+	// One-Time Fields - sent as ISO strings, parsed to time.Time
+	StartTime *string `json:"startTime"`
+	EndTime   *string `json:"endTime"`
 
 	// Recurring Fields
-	RecurStartDate *time.Time `json:"recurStartDate"`
-	RecurEndDate   *time.Time `json:"recurEndDate"`
-	RecurWeekdays  []int      `json:"recurWeekdays"`
-	RecurTimeStart *string    `json:"recurTimeStart"`
-	RecurTimeEnd   *string    `json:"recurTimeEnd"`
-	RecurTimezone  *string    `json:"recurTimezone"`
+	RecurStartDate *string `json:"recurStartDate"` // ISO string, parsed to time.Time
+	RecurEndDate   *string `json:"recurEndDate"`   // Optional ISO string
+	RecurWeekdays  []int   `json:"recurWeekdays"`
+	RecurTimeStart *string `json:"recurTimeStart"`
+	RecurTimeEnd   *string `json:"recurTimeEnd"`
+	RecurTimezone  *string `json:"recurTimezone"`
 
 	// Automation Settings
 	PreRollMinutes  *int  `json:"preRollMinutes"`
@@ -273,6 +273,10 @@ func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (re
 		return resp, errors.New("name required")
 	}
 
+	// Parse and validate time fields based on schedule type
+	var startTime, endTime time.Time
+	var recurStartDate, recurEndDate time.Time
+
 	if req.IsRecurring {
 		// Recurring schedule validation
 		if len(req.RecurWeekdays) == 0 {
@@ -284,15 +288,43 @@ func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (re
 		if req.RecurTimezone == "" {
 			req.RecurTimezone = "UTC"
 		}
-		if req.RecurStartDate.IsZero() {
+		if req.RecurStartDate == "" {
 			return resp, errors.New("recurring schedule requires start date")
+		}
+
+		// Parse recurring start date
+		var err error
+		recurStartDate, err = time.Parse(time.RFC3339, req.RecurStartDate)
+		if err != nil {
+			return resp, errors.New("invalid recur start date format")
+		}
+
+		// Parse recurring end date (optional)
+		if req.RecurEndDate != "" {
+			recurEndDate, err = time.Parse(time.RFC3339, req.RecurEndDate)
+			if err != nil {
+				return resp, errors.New("invalid recur end date format")
+			}
 		}
 	} else {
 		// One-time schedule validation
-		if req.StartTime.IsZero() || req.EndTime.IsZero() {
+		if req.StartTime == "" || req.EndTime == "" {
 			return resp, errors.New("one-time schedule requires start/end times")
 		}
-		if req.EndTime.Before(req.StartTime) || req.EndTime.Equal(req.StartTime) {
+
+		// Parse one-time start and end times
+		var err error
+		startTime, err = time.Parse(time.RFC3339, req.StartTime)
+		if err != nil {
+			return resp, errors.New("invalid start time format")
+		}
+		endTime, err = time.Parse(time.RFC3339, req.EndTime)
+		if err != nil {
+			return resp, errors.New("invalid end time format")
+		}
+
+		// Validate time ordering
+		if endTime.Before(startTime) || endTime.Equal(startTime) {
 			return resp, errors.New("end time must be after start time")
 		}
 	}
@@ -315,10 +347,10 @@ func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (re
 		Name:            req.Name,
 		Description:     req.Description,
 		IsRecurring:     req.IsRecurring,
-		StartTime:       req.StartTime,
-		EndTime:         req.EndTime,
-		RecurStartDate:  req.RecurStartDate,
-		RecurEndDate:    req.RecurEndDate,
+		StartTime:       startTime,      // Use parsed time
+		EndTime:         endTime,        // Use parsed time
+		RecurStartDate:  recurStartDate, // Use parsed time
+		RecurEndDate:    recurEndDate,   // Use parsed time
 		RecurWeekdays:   req.RecurWeekdays,
 		RecurTimeStart:  req.RecurTimeStart,
 		RecurTimeEnd:    req.RecurTimeEnd,
@@ -555,12 +587,26 @@ func UpdateClassSchedule(ctx *vbeam.Context, req UpdateClassScheduleRequest) (re
 		schedule.Description = *req.Description
 	}
 
-	// Update one-time schedule fields
+	// Update one-time schedule fields (parse from strings)
 	if req.StartTime != nil {
-		schedule.StartTime = *req.StartTime
+		if *req.StartTime == "" {
+			return resp, errors.New("start time cannot be empty")
+		}
+		parsedTime, err := time.Parse(time.RFC3339, *req.StartTime)
+		if err != nil {
+			return resp, errors.New("invalid start time format")
+		}
+		schedule.StartTime = parsedTime
 	}
 	if req.EndTime != nil {
-		schedule.EndTime = *req.EndTime
+		if *req.EndTime == "" {
+			return resp, errors.New("end time cannot be empty")
+		}
+		parsedTime, err := time.Parse(time.RFC3339, *req.EndTime)
+		if err != nil {
+			return resp, errors.New("invalid end time format")
+		}
+		schedule.EndTime = parsedTime
 	}
 
 	// Validate one-time schedule times if both are being modified
@@ -572,12 +618,28 @@ func UpdateClassSchedule(ctx *vbeam.Context, req UpdateClassScheduleRequest) (re
 		}
 	}
 
-	// Update recurring schedule fields
+	// Update recurring schedule fields (parse from strings)
 	if req.RecurStartDate != nil {
-		schedule.RecurStartDate = *req.RecurStartDate
+		if *req.RecurStartDate == "" {
+			return resp, errors.New("recur start date cannot be empty")
+		}
+		parsedTime, err := time.Parse(time.RFC3339, *req.RecurStartDate)
+		if err != nil {
+			return resp, errors.New("invalid recur start date format")
+		}
+		schedule.RecurStartDate = parsedTime
 	}
 	if req.RecurEndDate != nil {
-		schedule.RecurEndDate = *req.RecurEndDate
+		if *req.RecurEndDate != "" {
+			parsedTime, err := time.Parse(time.RFC3339, *req.RecurEndDate)
+			if err != nil {
+				return resp, errors.New("invalid recur end date format")
+			}
+			schedule.RecurEndDate = parsedTime
+		} else {
+			// Allow clearing the end date by setting to zero time
+			schedule.RecurEndDate = time.Time{}
+		}
 	}
 	if req.RecurWeekdays != nil {
 		if len(req.RecurWeekdays) == 0 && schedule.IsRecurring {

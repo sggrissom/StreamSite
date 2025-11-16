@@ -3,6 +3,7 @@ import * as server from "../../server";
 import { Header, Footer } from "../../layout";
 import { StudioHeader } from "./components/StudioHeader";
 import { RoomsSection } from "./components/RoomsSection";
+import { SchedulesSection } from "./components/SchedulesSection";
 import { ActiveCodesList } from "./components/ActiveCodesList";
 import { StudioAnalyticsSection } from "./components/StudioAnalyticsSection";
 import { MembersSection } from "./components/MembersSection";
@@ -92,6 +93,13 @@ export function view(
 
           {/* Rooms Section with all room management */}
           <RoomsSection
+            studio={studio}
+            rooms={rooms}
+            canManageRooms={canManageRooms}
+          />
+
+          {/* Schedules Section with class schedule management */}
+          <SchedulesSection
             studio={studio}
             rooms={rooms}
             canManageRooms={canManageRooms}
