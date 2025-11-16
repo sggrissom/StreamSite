@@ -11,13 +11,78 @@ type RoomAccessResult struct {
 	Allowed       bool       // Whether access is granted
 	Role          StudioRole // User's role in the studio (if allowed)
 	IsCodeAuth    bool       // Whether access is via code (vs studio membership)
+	IsClassAuth   bool       // Whether access is via class permission
 	CodeExpiresAt *time.Time // When code access expires (if IsCodeAuth)
 	DenialReason  string     // Human-readable reason for denial
 }
 
+// CLASS_GRACE_PERIOD is the time after a class ends that users with class permissions can still access
+const CLASS_GRACE_PERIOD = 15 * time.Minute
+
+// CheckClassPermission checks if a user has access to a room via class permissions
+// Returns access result with the user's role from the class permission
+// Only grants access during active class time (with 15-minute grace period after end)
+func CheckClassPermission(tx *vbolt.Tx, userId int, roomId int) RoomAccessResult {
+	if userId <= 0 {
+		return RoomAccessResult{Allowed: false}
+	}
+
+	now := time.Now()
+
+	// Get all permissions for this user
+	var permIds []int
+	vbolt.ReadTermTargets(tx, PermsByUserIdx, userId, &permIds, vbolt.Window{})
+
+	// Check each permission to see if it grants access now
+	for _, permId := range permIds {
+		var perm ClassPermission
+		vbolt.Read(tx, ClassPermissionsBkt, permId, &perm)
+
+		if perm.Id == 0 {
+			continue
+		}
+
+		// Get the schedule for this permission
+		var schedule ClassSchedule
+		vbolt.Read(tx, ClassSchedulesBkt, perm.ScheduleId, &schedule)
+
+		if schedule.Id == 0 || !schedule.IsActive {
+			continue
+		}
+
+		// Check if schedule is for the requested room
+		if schedule.RoomId != roomId {
+			continue
+		}
+
+		// Get the time window when the class is active (includes pre/post-roll)
+		startWindow, endWindow := getScheduleTimeWindow(&schedule, now)
+		if startWindow.IsZero() {
+			continue // Schedule not active today
+		}
+
+		// Add grace period to end window
+		endWithGrace := endWindow.Add(CLASS_GRACE_PERIOD)
+
+		// Check if current time falls within the window (including grace period)
+		if now.After(startWindow) && now.Before(endWithGrace) {
+			// Access granted via class permission
+			return RoomAccessResult{
+				Allowed:     true,
+				Role:        StudioRole(perm.Role),
+				IsCodeAuth:  false,
+				IsClassAuth: true,
+			}
+		}
+	}
+
+	// No active class permissions found
+	return RoomAccessResult{Allowed: false}
+}
+
 // CheckRoomAccess is the single source of truth for room access permissions
 // Handles all access types: anonymous code sessions, logged-in code sessions,
-// studio membership, and site admin privileges
+// class permissions, studio membership, and site admin privileges
 //
 // Parameters:
 //   - tx: Database transaction
@@ -51,7 +116,15 @@ func CheckRoomAccess(tx *vbolt.Tx, user User, roomId int, anonymousSessionToken 
 		return codeAccess
 	}
 
-	// 2. Check studio membership (only for logged-in users)
+	// 2. Check class permissions (only for logged-in users during class time)
+	if user.Id > 0 {
+		classAccess := CheckClassPermission(tx, user.Id, roomId)
+		if classAccess.Allowed {
+			return classAccess
+		}
+	}
+
+	// 3. Check studio membership (only for logged-in users)
 	if user.Id > 0 {
 		role := GetUserStudioRole(tx, user.Id, studio.Id)
 

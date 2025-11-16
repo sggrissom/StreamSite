@@ -1321,3 +1321,529 @@ func TestCheckStudioAccess(t *testing.T) {
 		}
 	})
 }
+
+// TestCheckClassPermission tests the CheckClassPermission function
+func TestCheckClassPermission(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Set up test data
+	var testUser User
+	var testRoom Room
+	var activeSchedule ClassSchedule
+	var permission ClassPermission
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create user
+		testUser = createTestUser(t, tx, "user@test.com", RoleStreamAdmin)
+
+		// Create studio and room
+		studio, room := createTestStudioAndRoom(tx)
+		testRoom = room
+
+		// Create active schedule (happening now)
+		now := time.Now()
+		activeSchedule = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Active Class",
+			IsRecurring:     false,
+			StartTime:       now.Add(-30 * time.Minute), // Started 30 minutes ago
+			EndTime:         now.Add(30 * time.Minute),  // Ends in 30 minutes
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, activeSchedule.Id, &activeSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, activeSchedule.Id, activeSchedule.RoomId)
+
+		// Grant permission to user
+		permission = ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: activeSchedule.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleViewer),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, permission.Id, &permission)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, permission.Id, permission.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, permission.Id, permission.UserId)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Access granted during active class
+	t.Run("ActiveClass", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckClassPermission(tx, testUser.Id, testRoom.Id)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be granted during active class")
+		}
+		if !result.IsClassAuth {
+			t.Error("Expected IsClassAuth to be true")
+		}
+		if result.Role != StudioRoleViewer {
+			t.Errorf("Expected role %d, got %d", StudioRoleViewer, result.Role)
+		}
+	})
+
+	// Test 2: Anonymous user denied
+	t.Run("AnonymousDenied", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckClassPermission(tx, -1, testRoom.Id)
+		})
+
+		if result.Allowed {
+			t.Error("Expected anonymous user to be denied")
+		}
+	})
+
+	// Test 3: Access denied for wrong room
+	t.Run("WrongRoom", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckClassPermission(tx, testUser.Id, 99999)
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied for wrong room")
+		}
+	})
+}
+
+// TestClassPermissionIntegration tests class permissions integrated into CheckRoomAccess
+func TestClassPermissionIntegration(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Set up test data
+	var testUser, otherUser User
+	var testRoom Room
+	var activeSchedule, futureSchedule, pastSchedule ClassSchedule
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create users
+		testUser = createTestUser(t, tx, "user@test.com", RoleStreamAdmin)
+		otherUser = createTestUser(t, tx, "other@test.com", RoleStreamAdmin)
+
+		// Create studio and room
+		studio, room := createTestStudioAndRoom(tx)
+		testRoom = room
+
+		now := time.Now()
+
+		// Create active schedule (happening now)
+		activeSchedule = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Active Class",
+			IsRecurring:     false,
+			StartTime:       now.Add(-30 * time.Minute),
+			EndTime:         now.Add(30 * time.Minute),
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, activeSchedule.Id, &activeSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, activeSchedule.Id, activeSchedule.RoomId)
+
+		// Create future schedule (starts in 2 hours)
+		futureSchedule = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Future Class",
+			IsRecurring:     false,
+			StartTime:       now.Add(2 * time.Hour),
+			EndTime:         now.Add(3 * time.Hour),
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, futureSchedule.Id, &futureSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, futureSchedule.Id, futureSchedule.RoomId)
+
+		// Create past schedule (ended 20 minutes ago - outside grace period)
+		pastSchedule = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Past Class",
+			IsRecurring:     false,
+			StartTime:       now.Add(-2 * time.Hour),
+			EndTime:         now.Add(-20 * time.Minute), // Ended 20 min ago
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, pastSchedule.Id, &pastSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, pastSchedule.Id, pastSchedule.RoomId)
+
+		// Grant active class permission to testUser
+		activePerm := ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: activeSchedule.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleMember),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, activePerm.Id, &activePerm)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, activePerm.Id, activePerm.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, activePerm.Id, activePerm.UserId)
+
+		// Grant future class permission to testUser
+		futurePerm := ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: futureSchedule.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleViewer),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, futurePerm.Id, &futurePerm)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, futurePerm.Id, futurePerm.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, futurePerm.Id, futurePerm.UserId)
+
+		// Grant past class permission to testUser
+		pastPerm := ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: pastSchedule.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleAdmin),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, pastPerm.Id, &pastPerm)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, pastPerm.Id, pastPerm.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, pastPerm.Id, pastPerm.UserId)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test 1: Access granted during active class
+	t.Run("AccessDuringActiveClass", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckRoomAccess(tx, testUser, testRoom.Id, "")
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be granted during active class")
+		}
+		if !result.IsClassAuth {
+			t.Error("Expected IsClassAuth to be true")
+		}
+		if result.Role != StudioRoleMember {
+			t.Errorf("Expected role %d, got %d", StudioRoleMember, result.Role)
+		}
+	})
+
+	// Test 2: Access denied before class starts
+	t.Run("DeniedBeforeClassStarts", func(t *testing.T) {
+		// Create a user with only future class permission
+		var futureOnlyUser User
+		vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+			futureOnlyUser = createTestUser(t, tx, "future@test.com", RoleStreamAdmin)
+
+			perm := ClassPermission{
+				Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+				ScheduleId: futureSchedule.Id,
+				UserId:     futureOnlyUser.Id,
+				Role:       int(StudioRoleViewer),
+				GrantedBy:  testUser.Id,
+				GrantedAt:  time.Now(),
+			}
+			vbolt.Write(tx, ClassPermissionsBkt, perm.Id, &perm)
+			vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, perm.Id, perm.ScheduleId)
+			vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, perm.Id, perm.UserId)
+
+			vbolt.TxCommit(tx)
+		})
+
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckRoomAccess(tx, futureOnlyUser, testRoom.Id, "")
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied before class starts")
+		}
+	})
+
+	// Test 3: User without class permission denied
+	t.Run("NoPermissionDenied", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckRoomAccess(tx, otherUser, testRoom.Id, "")
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied for user without permission")
+		}
+	})
+}
+
+// TestClassPermissionGracePeriod tests the 15-minute grace period after class ends
+func TestClassPermissionGracePeriod(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Set up test data
+	var testUser User
+	var testRoom Room
+	var recentlyEndedSchedule ClassSchedule
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create user
+		testUser = createTestUser(t, tx, "user@test.com", RoleStreamAdmin)
+
+		// Create studio and room
+		studio, room := createTestStudioAndRoom(tx)
+		testRoom = room
+
+		now := time.Now()
+
+		// Create schedule that ended 10 minutes ago (within 15-minute grace period)
+		recentlyEndedSchedule = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Recently Ended Class",
+			IsRecurring:     false,
+			StartTime:       now.Add(-70 * time.Minute),
+			EndTime:         now.Add(-10 * time.Minute), // Ended 10 min ago
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, recentlyEndedSchedule.Id, &recentlyEndedSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, recentlyEndedSchedule.Id, recentlyEndedSchedule.RoomId)
+
+		// Grant permission
+		perm := ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: recentlyEndedSchedule.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleViewer),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, perm.Id, &perm)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, perm.Id, perm.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, perm.Id, perm.UserId)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test: Access granted within grace period
+	t.Run("WithinGracePeriod", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckClassPermission(tx, testUser.Id, testRoom.Id)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be granted within grace period (10 min after class ended)")
+		}
+		if !result.IsClassAuth {
+			t.Error("Expected IsClassAuth to be true")
+		}
+	})
+}
+
+// TestClassPermissionGracePeriodExpired tests access is denied after grace period expires
+func TestClassPermissionGracePeriodExpired(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Set up test data
+	var testUser User
+	var testRoom Room
+	var expiredSchedule ClassSchedule
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create user
+		testUser = createTestUser(t, tx, "user@test.com", RoleStreamAdmin)
+
+		// Create studio and room
+		studio, room := createTestStudioAndRoom(tx)
+		testRoom = room
+
+		now := time.Now()
+
+		// Create schedule that ended 20 minutes ago (past 15-minute grace period)
+		expiredSchedule = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Expired Class",
+			IsRecurring:     false,
+			StartTime:       now.Add(-90 * time.Minute),
+			EndTime:         now.Add(-20 * time.Minute), // Ended 20 min ago
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, expiredSchedule.Id, &expiredSchedule)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, expiredSchedule.Id, expiredSchedule.RoomId)
+
+		// Grant permission
+		perm := ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: expiredSchedule.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleViewer),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, perm.Id, &perm)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, perm.Id, perm.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, perm.Id, perm.UserId)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test: Access denied after grace period expires
+	t.Run("GracePeriodExpired", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckClassPermission(tx, testUser.Id, testRoom.Id)
+		})
+
+		if result.Allowed {
+			t.Error("Expected access to be denied after grace period expires (20 min after class ended)")
+		}
+	})
+}
+
+// TestClassPermissionMultipleSchedules tests handling of multiple overlapping schedules
+func TestClassPermissionMultipleSchedules(t *testing.T) {
+	db := setupTestDB(t)
+	defer db.Close()
+
+	// Set up test data
+	var testUser User
+	var testRoom Room
+	var schedule1, schedule2 ClassSchedule
+
+	vbolt.WithWriteTx(db, func(tx *vbolt.Tx) {
+		// Create user
+		testUser = createTestUser(t, tx, "user@test.com", RoleStreamAdmin)
+
+		// Create studio and room
+		studio, room := createTestStudioAndRoom(tx)
+		testRoom = room
+
+		now := time.Now()
+
+		// Create first schedule (active now with Viewer role)
+		schedule1 = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Class 1",
+			IsRecurring:     false,
+			StartTime:       now.Add(-30 * time.Minute),
+			EndTime:         now.Add(30 * time.Minute),
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule1.Id, &schedule1)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, schedule1.Id, schedule1.RoomId)
+
+		// Create second schedule (also active now with Admin role)
+		schedule2 = ClassSchedule{
+			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
+			RoomId:          testRoom.Id,
+			StudioId:        studio.Id,
+			Name:            "Class 2",
+			IsRecurring:     false,
+			StartTime:       now.Add(-20 * time.Minute),
+			EndTime:         now.Add(40 * time.Minute),
+			PreRollMinutes:  5,
+			PostRollMinutes: 2,
+			CreatedBy:       testUser.Id,
+			CreatedAt:       now,
+			UpdatedAt:       now,
+			IsActive:        true,
+		}
+		vbolt.Write(tx, ClassSchedulesBkt, schedule2.Id, &schedule2)
+		vbolt.SetTargetSingleTerm(tx, SchedulesByRoomIdx, schedule2.Id, schedule2.RoomId)
+
+		// Grant permissions
+		perm1 := ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: schedule1.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleViewer),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, perm1.Id, &perm1)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, perm1.Id, perm1.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, perm1.Id, perm1.UserId)
+
+		perm2 := ClassPermission{
+			Id:         vbolt.NextIntId(tx, ClassPermissionsBkt),
+			ScheduleId: schedule2.Id,
+			UserId:     testUser.Id,
+			Role:       int(StudioRoleAdmin),
+			GrantedBy:  testUser.Id,
+			GrantedAt:  now,
+		}
+		vbolt.Write(tx, ClassPermissionsBkt, perm2.Id, &perm2)
+		vbolt.SetTargetSingleTerm(tx, PermsByScheduleIdx, perm2.Id, perm2.ScheduleId)
+		vbolt.SetTargetSingleTerm(tx, PermsByUserIdx, perm2.Id, perm2.UserId)
+
+		vbolt.TxCommit(tx)
+	})
+
+	// Test: Access granted with first found permission
+	t.Run("MultipleActiveSchedules", func(t *testing.T) {
+		var result RoomAccessResult
+		vbolt.WithReadTx(db, func(tx *vbolt.Tx) {
+			result = CheckClassPermission(tx, testUser.Id, testRoom.Id)
+		})
+
+		if !result.Allowed {
+			t.Error("Expected access to be granted when user has multiple active class permissions")
+		}
+		if !result.IsClassAuth {
+			t.Error("Expected IsClassAuth to be true")
+		}
+		// Should return the first matching permission's role
+		if result.Role != StudioRoleViewer && result.Role != StudioRoleAdmin {
+			t.Errorf("Expected role to be either Viewer or Admin, got %d", result.Role)
+		}
+	})
+}
