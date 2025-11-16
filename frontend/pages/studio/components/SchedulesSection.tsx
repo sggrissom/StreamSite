@@ -169,9 +169,109 @@ function getScheduleStatus(schedule: server.ClassSchedule): {
     return { label: "Upcoming", className: "idle", icon: "" };
   }
 
-  // For recurring schedules - simplified check
-  // TODO: Properly check if today matches weekdays and time is within window
-  return { label: "Recurring", className: "idle", icon: "🔄" };
+  // For recurring schedules - check if currently live
+  try {
+    // Get current time components in the schedule's timezone using proper API
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: schedule.recurTimezone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+
+    const parts = formatter.formatToParts(now);
+    const getPart = (type: string) =>
+      parseInt(parts.find((p) => p.type === type)?.value || "0");
+
+    const year = getPart("year");
+    const month = getPart("month");
+    const day = getPart("day");
+    const hour = getPart("hour");
+    const minute = getPart("minute");
+    const second = getPart("second");
+
+    // Create a date representing "now" in the schedule's timezone
+    // Note: month is 0-indexed in Date constructor
+    const nowInTz = new Date(year, month - 1, day, hour, minute, second);
+    const weekday = nowInTz.getDay(); // 0=Sun, 6=Sat
+
+    // Check if today is a scheduled weekday
+    const isScheduledDay = schedule.recurWeekdays.includes(weekday);
+    if (!isScheduledDay) {
+      return { label: "Recurring", className: "idle", icon: "🔄" };
+    }
+
+    // Check if we're within the recurrence date range (date-only comparison)
+    // Format current date in schedule's timezone as YYYY-MM-DD string
+    const nowDateStr = `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+
+    if (schedule.recurStartDate) {
+      // Extract date-only from ISO string (e.g., "2025-11-15T00:00:00Z" -> "2025-11-15")
+      const startDateStr = schedule.recurStartDate.split("T")[0];
+
+      // String comparison works correctly for ISO date format (YYYY-MM-DD)
+      if (nowDateStr < startDateStr) {
+        return { label: "Recurring", className: "idle", icon: "🔄" };
+      }
+    }
+    if (schedule.recurEndDate) {
+      // Extract date-only from ISO string
+      const endDateStr = schedule.recurEndDate.split("T")[0];
+
+      // String comparison works correctly for ISO date format (YYYY-MM-DD)
+      if (nowDateStr > endDateStr) {
+        return { label: "Past", className: "idle", icon: "" };
+      }
+    }
+
+    // Parse the class time range (HH:MM format)
+    const [startHour, startMin] = schedule.recurTimeStart
+      .split(":")
+      .map(Number);
+    const [endHour, endMin] = schedule.recurTimeEnd.split(":").map(Number);
+
+    // Build today's class time window in the schedule's timezone
+    const classStart = new Date(nowInTz);
+    classStart.setHours(startHour, startMin, 0, 0);
+
+    const classEnd = new Date(nowInTz);
+    classEnd.setHours(endHour, endMin, 0, 0);
+
+    // Add grace period (15 minutes)
+    const gracePeriod = 15 * 60 * 1000;
+    const classEndWithGrace = new Date(classEnd.getTime() + gracePeriod);
+
+    // Check if currently live
+    if (nowInTz >= classStart && nowInTz <= classEndWithGrace) {
+      return { label: "Live Now", className: "live", icon: "🟢" };
+    }
+
+    // Check if upcoming today (within next hour)
+    const oneHour = 60 * 60 * 1000;
+    if (
+      classStart.getTime() - nowInTz.getTime() <= oneHour &&
+      nowInTz < classStart
+    ) {
+      const minutesUntil = Math.floor(
+        (classStart.getTime() - nowInTz.getTime()) / (60 * 1000),
+      );
+      return {
+        label: `Soon (${minutesUntil}min)`,
+        className: "upcoming",
+        icon: "⏰",
+      };
+    }
+
+    return { label: "Recurring", className: "idle", icon: "🔄" };
+  } catch (error) {
+    // If timezone parsing fails, fall back to simple recurring label
+    console.error("Error checking recurring schedule status:", error);
+    return { label: "Recurring", className: "idle", icon: "🔄" };
+  }
 }
 
 function formatSchedulePattern(schedule: server.ClassSchedule): string {

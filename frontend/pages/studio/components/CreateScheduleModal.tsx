@@ -76,6 +76,15 @@ const WEEKDAY_FULL_NAMES = [
   "Saturday",
 ];
 
+// Helper function to convert UTC ISO string to local date string (YYYY-MM-DD)
+function toLocalDateString(isoString: string): string {
+  const date = new Date(isoString);
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 const useCreateScheduleModal = vlens.declareHook(
   (
     cacheKey: string,
@@ -94,7 +103,7 @@ const useCreateScheduleModal = vlens.declareHook(
       // One-time fields
       startDate:
         editing && !editing.isRecurring
-          ? new Date(editing.startTime).toISOString().split("T")[0]
+          ? toLocalDateString(editing.startTime)
           : "",
       startTime:
         editing && !editing.isRecurring
@@ -102,7 +111,7 @@ const useCreateScheduleModal = vlens.declareHook(
           : "",
       endDate:
         editing && !editing.isRecurring
-          ? new Date(editing.endTime).toISOString().split("T")[0]
+          ? toLocalDateString(editing.endTime)
           : "",
       endTime:
         editing && !editing.isRecurring
@@ -112,11 +121,11 @@ const useCreateScheduleModal = vlens.declareHook(
       // Recurring fields
       recurStartDate:
         editing && editing.isRecurring
-          ? new Date(editing.recurStartDate).toISOString().split("T")[0]
+          ? toLocalDateString(editing.recurStartDate)
           : "",
       recurEndDate:
         editing && editing.isRecurring && editing.recurEndDate
-          ? new Date(editing.recurEndDate).toISOString().split("T")[0]
+          ? toLocalDateString(editing.recurEndDate)
           : "",
       recurWeekdays:
         editing && editing.isRecurring
