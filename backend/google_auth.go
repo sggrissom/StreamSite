@@ -136,6 +136,13 @@ func googleCallbackHandler(w http.ResponseWriter, r *http.Request) {
 		})
 
 		if user.Id > 0 {
+			// Log successful Google OAuth account creation
+			LogInfo(LogCategoryAuth, "User account created via Google OAuth", map[string]interface{}{
+				"userId": user.Id,
+				"email":  userInfo.Email,
+				"source": "google_oauth",
+			})
+
 			err = authenticateForUser(user.Id, w)
 			if err != nil {
 				http.Error(w, fmt.Sprintf("Authentication failed: %s", err.Error()), http.StatusInternalServerError)

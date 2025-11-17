@@ -3,7 +3,6 @@ package backend
 import (
 	"context"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -26,10 +25,9 @@ func init() {
 	if envVal := os.Getenv("MAX_CONCURRENT_TRANSCODERS"); envVal != "" {
 		if val, err := strconv.Atoi(envVal); err == nil && val > 0 && val <= 100 {
 			MaxConcurrentTranscoders = val
-			log.Printf("[Transcoder] Using MAX_CONCURRENT_TRANSCODERS=%d from environment", val)
+			LogInfo(LogCategoryStream, fmt.Sprintf("Using MAX_CONCURRENT_TRANSCODERS=%d from environment", val))
 		} else {
-			log.Printf("[Transcoder] Warning: Invalid MAX_CONCURRENT_TRANSCODERS value '%s', using default %d",
-				envVal, MaxConcurrentTranscoders)
+			LogWarn(LogCategoryStream, fmt.Sprintf("Invalid MAX_CONCURRENT_TRANSCODERS value '%s', using default %d", envVal, MaxConcurrentTranscoders))
 		}
 	}
 }
@@ -37,8 +35,8 @@ func init() {
 // InitTranscoder initializes the global transcoder manager
 func InitTranscoder(cfg TranscoderConfig) {
 	transcoderManager = NewTranscoderManager(cfg)
-	log.Printf("[Transcoder] Initialized with HLS dir: %s, RTMP base: %s, max transcoders: %d",
-		cfg.HLSBaseDir, cfg.SRSRTMPBase, MaxConcurrentTranscoders)
+	LogInfo(LogCategoryStream, fmt.Sprintf("Transcoder initialized with HLS dir: %s, RTMP base: %s, max transcoders: %d",
+		cfg.HLSBaseDir, cfg.SRSRTMPBase, MaxConcurrentTranscoders))
 
 	// Clean up any orphaned resources from previous runs
 	transcoderManager.CleanupOrphanedProcesses()
@@ -106,23 +104,23 @@ func (t *Transcoder) StartWithRetry(maxRetries int) error {
 		if attempt > 0 {
 			// Exponential backoff: 1s, 2s, 4s, 8s...
 			delay := time.Duration(1<<uint(attempt-1)) * time.Second
-			log.Printf("[Transcoder] Retry attempt %d/%d for room=%s after %v",
-				attempt, maxRetries, t.roomID, delay)
+			LogInfo(LogCategoryStream, fmt.Sprintf("Transcoder retry attempt %d/%d for room=%s after %v",
+				attempt, maxRetries, t.roomID, delay))
 			time.Sleep(delay)
 		}
 
 		err := t.Start()
 		if err == nil {
 			if attempt > 0 {
-				log.Printf("[Transcoder] Successfully started on retry %d for room=%s",
-					attempt, t.roomID)
+				LogInfo(LogCategoryStream, fmt.Sprintf("Transcoder successfully started on retry %d for room=%s",
+					attempt, t.roomID))
 			}
 			return nil
 		}
 
 		lastErr = err
-		log.Printf("[Transcoder] Start attempt %d failed for room=%s: %v",
-			attempt+1, t.roomID, err)
+		LogWarn(LogCategoryStream, fmt.Sprintf("Transcoder start attempt %d failed for room=%s: %v",
+			attempt+1, t.roomID, err))
 
 		// If it's not a connection error, don't retry
 		if !strings.Contains(err.Error(), "Connection refused") &&
@@ -204,8 +202,8 @@ func (t *Transcoder) Start() error {
 		return fmt.Errorf("failed to start FFmpeg: %w", err)
 	}
 
-	log.Printf("[Transcoder] Started for room=%s key=%s pid=%d input=%s output=%s",
-		t.roomID, t.streamKey, cmd.Process.Pid, t.inputRTMP, t.outDir)
+	LogInfo(LogCategoryStream, fmt.Sprintf("Transcoder started for room=%s key=%s pid=%d input=%s output=%s",
+		t.roomID, t.streamKey, cmd.Process.Pid, t.inputRTMP, t.outDir))
 
 	// Monitor process in background
 	go func() {
@@ -213,8 +211,8 @@ func (t *Transcoder) Start() error {
 		if err != nil && ctx.Err() == nil {
 			// Process died unexpectedly (not from cancellation)
 			duration := time.Since(t.startedAt)
-			log.Printf("[Transcoder] FFmpeg died unexpectedly for room=%s after %v: %v",
-				t.roomID, duration, err)
+			LogErrorSimple(LogCategoryStream, fmt.Sprintf("FFmpeg died unexpectedly for room=%s after %v: %v",
+				t.roomID, duration, err))
 
 			// Notify viewers via SSE
 			if roomID, parseErr := strconv.Atoi(t.roomID); parseErr == nil {
@@ -234,7 +232,7 @@ func (t *Transcoder) Stop() {
 	}
 
 	duration := time.Since(t.startedAt)
-	log.Printf("[Transcoder] Stopping for room=%s (ran for %v)", t.roomID, duration)
+	LogInfo(LogCategoryStream, fmt.Sprintf("Stopping transcoder for room=%s (ran for %v)", t.roomID, duration))
 
 	// Cancel context (sends SIGKILL to FFmpeg)
 	t.cancel()
@@ -244,9 +242,9 @@ func (t *Transcoder) Stop() {
 
 	// Clean up HLS directory to free space and prevent stale files
 	if err := os.RemoveAll(t.outDir); err != nil {
-		log.Printf("[Transcoder] Warning: Failed to clean HLS directory for room %s: %v", t.roomID, err)
+		LogWarn(LogCategoryStream, fmt.Sprintf("Failed to clean HLS directory for room %s: %v", t.roomID, err))
 	} else {
-		log.Printf("[Transcoder] Cleaned HLS directory for room %s", t.roomID)
+		LogInfo(LogCategoryStream, fmt.Sprintf("Cleaned HLS directory for room %s", t.roomID))
 	}
 }
 
@@ -270,8 +268,8 @@ type TranscoderManager struct {
 func NewTranscoderManager(cfg TranscoderConfig) *TranscoderManager {
 	// Ensure HLS base directory exists
 	if err := os.MkdirAll(cfg.HLSBaseDir, 0o755); err != nil {
-		log.Printf("[Transcoder] Warning: Failed to create HLS base directory %s: %v",
-			cfg.HLSBaseDir, err)
+		LogWarn(LogCategoryStream, fmt.Sprintf("Failed to create HLS base directory %s: %v",
+			cfg.HLSBaseDir, err))
 	}
 
 	return &TranscoderManager{
@@ -305,7 +303,7 @@ func (m *TranscoderManager) Start(roomID, streamKey string) error {
 
 	// Don't start duplicate transcoder
 	if _, exists := m.transcoders[roomID]; exists {
-		log.Printf("[Transcoder] Transcoder already running for room %s", roomID)
+		LogDebug(LogCategoryStream, fmt.Sprintf("Transcoder already running for room %s", roomID))
 		return nil // Not an error, just ignore
 	}
 
@@ -313,7 +311,7 @@ func (m *TranscoderManager) Start(roomID, streamKey string) error {
 	// This prevents stale playlists from causing 404 errors
 	hlsDir := filepath.Join(m.config.HLSBaseDir, roomID)
 	if err := os.RemoveAll(hlsDir); err != nil && !os.IsNotExist(err) {
-		log.Printf("[Transcoder] Warning: Failed to clean old HLS directory for room %s: %v", roomID, err)
+		LogWarn(LogCategoryStream, fmt.Sprintf("Failed to clean old HLS directory for room %s: %v", roomID, err))
 		// Continue anyway - not fatal
 	}
 
@@ -324,7 +322,7 @@ func (m *TranscoderManager) Start(roomID, streamKey string) error {
 	}
 
 	m.transcoders[roomID] = tc
-	log.Printf("[Transcoder] Active transcoders: %d", len(m.transcoders))
+	LogInfo(LogCategoryStream, fmt.Sprintf("Active transcoders: %d", len(m.transcoders)))
 
 	return nil
 }
@@ -337,7 +335,7 @@ func (m *TranscoderManager) Stop(roomID string) {
 	if tc, exists := m.transcoders[roomID]; exists {
 		tc.Stop()
 		delete(m.transcoders, roomID)
-		log.Printf("[Transcoder] Active transcoders: %d", len(m.transcoders))
+		LogInfo(LogCategoryStream, fmt.Sprintf("Active transcoders: %d", len(m.transcoders)))
 	}
 }
 
@@ -369,14 +367,14 @@ func (m *TranscoderManager) CleanupOrphanedProcesses() {
 	if err := cmd.Run(); err != nil {
 		// Exit code 1 means no processes found, which is fine
 		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			log.Printf("[Transcoder] No orphaned FFmpeg processes found")
+			LogInfo(LogCategoryStream, "No orphaned FFmpeg processes found")
 			return
 		}
-		log.Printf("[Transcoder] Warning: Failed to cleanup orphaned FFmpeg processes: %v", err)
+		LogWarn(LogCategoryStream, fmt.Sprintf("Failed to cleanup orphaned FFmpeg processes: %v", err))
 		return
 	}
 
-	log.Printf("[Transcoder] Cleaned up orphaned FFmpeg processes")
+	LogInfo(LogCategoryStream, "Cleaned up orphaned FFmpeg processes")
 }
 
 // CleanupOrphanedDirectories removes leftover HLS directories from previous runs
@@ -386,7 +384,7 @@ func (m *TranscoderManager) CleanupOrphanedDirectories() {
 		if os.IsNotExist(err) {
 			return // Directory doesn't exist yet, nothing to clean
 		}
-		log.Printf("[Transcoder] Warning: Failed to read HLS directory for cleanup: %v", err)
+		LogWarn(LogCategoryStream, fmt.Sprintf("Failed to read HLS directory for cleanup: %v", err))
 		return
 	}
 
@@ -398,15 +396,15 @@ func (m *TranscoderManager) CleanupOrphanedDirectories() {
 
 		dirPath := filepath.Join(m.config.HLSBaseDir, entry.Name())
 		if err := os.RemoveAll(dirPath); err != nil {
-			log.Printf("[Transcoder] Warning: Failed to remove orphaned directory %s: %v",
-				dirPath, err)
+			LogWarn(LogCategoryStream, fmt.Sprintf("Failed to remove orphaned directory %s: %v",
+				dirPath, err))
 		} else {
 			cleaned++
 		}
 	}
 
 	if cleaned > 0 {
-		log.Printf("[Transcoder] Cleaned up %d orphaned HLS directories from previous run", cleaned)
+		LogInfo(LogCategoryStream, fmt.Sprintf("Cleaned up %d orphaned HLS directories from previous run", cleaned))
 	}
 }
 

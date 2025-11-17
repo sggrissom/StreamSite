@@ -71,6 +71,12 @@ func CreateRefreshToken(tx *vbolt.Tx, userId int, expiryDuration time.Duration) 
 	vbolt.Write(tx, RefreshTokenByTokenBkt, token.Token, &token.Id)
 	vbolt.SetTargetSingleTerm(tx, RefreshTokenByUserIndex, token.Id, token.UserId)
 
+	// Log token creation
+	LogInfo(LogCategoryAuth, "Refresh token created", map[string]interface{}{
+		"userId":    userId,
+		"expiresAt": token.ExpiresAt,
+	})
+
 	return token, nil
 }
 
@@ -117,6 +123,11 @@ func DeleteRefreshToken(tx *vbolt.Tx, tokenString string) {
 	vbolt.Delete(tx, RefreshTokenBkt, token.Id)
 	vbolt.Delete(tx, RefreshTokenByTokenBkt, token.Token)
 	vbolt.SetTargetSingleTerm(tx, RefreshTokenByUserIndex, token.Id, -1)
+
+	// Log token deletion (logout)
+	LogInfo(LogCategoryAuth, "Refresh token deleted", map[string]interface{}{
+		"userId": token.UserId,
+	})
 }
 
 // DeleteUserRefreshTokens removes all refresh tokens for a user
@@ -125,6 +136,7 @@ func DeleteUserRefreshTokens(tx *vbolt.Tx, userId int) {
 	var tokenIds []int
 	vbolt.ReadTermTargets(tx, RefreshTokenByUserIndex, userId, &tokenIds, vbolt.Window{})
 
+	tokenCount := 0
 	for _, tokenId := range tokenIds {
 		var token RefreshToken
 		vbolt.Read(tx, RefreshTokenBkt, tokenId, &token)
@@ -136,6 +148,15 @@ func DeleteUserRefreshTokens(tx *vbolt.Tx, userId int) {
 		vbolt.Delete(tx, RefreshTokenBkt, token.Id)
 		vbolt.Delete(tx, RefreshTokenByTokenBkt, token.Token)
 		vbolt.SetTargetSingleTerm(tx, RefreshTokenByUserIndex, token.Id, -1)
+		tokenCount++
+	}
+
+	// Log revocation of all user sessions
+	if tokenCount > 0 {
+		LogInfo(LogCategoryAuth, "All user refresh tokens deleted", map[string]interface{}{
+			"userId":     userId,
+			"tokenCount": tokenCount,
+		})
 	}
 }
 

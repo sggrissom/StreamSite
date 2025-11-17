@@ -197,6 +197,12 @@ func CreateAccount(ctx *vbeam.Context, req CreateAccountRequest) (resp CreateAcc
 	resp.Auth = GetAuthResponseFromUser(ctx.Tx, user)
 	vbolt.TxCommit(ctx.Tx)
 
+	// Log successful account creation
+	LogInfo(LogCategoryAuth, "User account created", map[string]interface{}{
+		"userId": user.Id,
+		"email":  req.Email,
+	})
+
 	return
 }
 

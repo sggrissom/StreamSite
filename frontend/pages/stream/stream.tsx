@@ -1017,7 +1017,9 @@ function reportMetrics(state: StreamState) {
     server
       .ReportStreamMetrics({ metrics })
       .then(() => {
-        console.log("Metrics reported successfully", metrics);
+        if (DEBUG) {
+          console.log("Metrics reported successfully", metrics);
+        }
         state.metricsReported = true;
       })
       .catch((err: any) => {
@@ -1076,7 +1078,9 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
       state.metricsTimeToFirstFrame = ttff;
       state.metricsStartupSucceeded = true;
       state.metricsWatchStartTime = Date.now();
-      console.log(`TTFF: ${ttff}ms`);
+      if (DEBUG) {
+        console.log(`TTFF: ${ttff}ms`);
+      }
     }
 
     // Track end of buffering event
@@ -1177,7 +1181,9 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
           state.metricsCurrentQuality = quality;
           state.metricsLastQualitySwitch = Date.now();
 
-          console.log(`Quality switched to ${quality} (${level.height}p)`);
+          if (DEBUG) {
+            console.log(`Quality switched to ${quality} (${level.height}p)`);
+          }
         }
       });
 
@@ -1206,9 +1212,11 @@ function initializePlayer(state: StreamState, el: HTMLVideoElement | null) {
               );
               state.retryCount++;
 
-              console.log(
-                `Manifest load failed, retrying in ${retryDelay}ms (attempt ${state.retryCount})`,
-              );
+              if (DEBUG) {
+                console.log(
+                  `Manifest load failed, retrying in ${retryDelay}ms (attempt ${state.retryCount})`,
+                );
+              }
 
               setTimeout(() => {
                 if (

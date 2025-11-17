@@ -374,6 +374,14 @@ func CreateClassSchedule(ctx *vbeam.Context, req CreateClassScheduleRequest) (re
 
 	vbolt.TxCommit(ctx.Tx)
 
+	// Log successful schedule creation
+	LogInfo(LogCategorySystem, "Class schedule created", map[string]interface{}{
+		"scheduleId":  schedule.Id,
+		"roomId":      schedule.RoomId,
+		"studioId":    schedule.StudioId,
+		"isRecurring": schedule.IsRecurring,
+	})
+
 	resp.ScheduleId = schedule.Id
 	return
 }
@@ -836,6 +844,13 @@ func UpdateClassSchedule(ctx *vbeam.Context, req UpdateClassScheduleRequest) (re
 	vbolt.Write(ctx.Tx, ClassSchedulesBkt, schedule.Id, &schedule)
 	vbolt.TxCommit(ctx.Tx)
 
+	// Log successful schedule update
+	LogInfo(LogCategorySystem, "Class schedule updated", map[string]interface{}{
+		"scheduleId": schedule.Id,
+		"roomId":     schedule.RoomId,
+		"studioId":   schedule.StudioId,
+	})
+
 	resp.Success = true
 	return
 }
@@ -865,6 +880,13 @@ func DeleteClassSchedule(ctx *vbeam.Context, req DeleteClassScheduleRequest) (re
 	schedule.UpdatedAt = time.Now()
 	vbolt.Write(ctx.Tx, ClassSchedulesBkt, schedule.Id, &schedule)
 	vbolt.TxCommit(ctx.Tx)
+
+	// Log successful schedule deletion
+	LogInfo(LogCategorySystem, "Class schedule deleted", map[string]interface{}{
+		"scheduleId": schedule.Id,
+		"roomId":     schedule.RoomId,
+		"studioId":   schedule.StudioId,
+	})
 
 	resp.Success = true
 	return

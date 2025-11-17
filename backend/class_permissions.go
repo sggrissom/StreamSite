@@ -61,6 +61,15 @@ func GrantClassPermission(ctx *vbeam.Context, req GrantClassPermissionRequest) (
 			perm.GrantedAt = time.Now()
 			vbolt.Write(ctx.Tx, ClassPermissionsBkt, perm.Id, &perm)
 			vbolt.TxCommit(ctx.Tx)
+
+			// Log permission update
+			LogInfo(LogCategorySystem, "Class permission updated", map[string]interface{}{
+				"permissionId": perm.Id,
+				"scheduleId":   req.ScheduleId,
+				"userId":       req.UserId,
+				"role":         req.Role,
+			})
+
 			return GrantClassPermissionResponse{PermissionId: perm.Id}, nil
 		}
 	}
@@ -82,6 +91,15 @@ func GrantClassPermission(ctx *vbeam.Context, req GrantClassPermissionRequest) (
 	vbolt.SetTargetSingleTerm(ctx.Tx, PermsByUserIdx, perm.Id, perm.UserId)
 
 	vbolt.TxCommit(ctx.Tx)
+
+	// Log permission grant
+	LogInfo(LogCategorySystem, "Class permission granted", map[string]interface{}{
+		"permissionId": perm.Id,
+		"scheduleId":   req.ScheduleId,
+		"userId":       req.UserId,
+		"role":         req.Role,
+		"grantedBy":    caller.Id,
+	})
 
 	return GrantClassPermissionResponse{PermissionId: perm.Id}, nil
 }
@@ -133,6 +151,14 @@ func RevokeClassPermission(ctx *vbeam.Context, req RevokeClassPermissionRequest)
 	vbolt.SetTargetSingleTerm(ctx.Tx, PermsByUserIdx, perm.Id, -1)
 
 	vbolt.TxCommit(ctx.Tx)
+
+	// Log permission revocation
+	LogInfo(LogCategorySystem, "Class permission revoked", map[string]interface{}{
+		"permissionId": perm.Id,
+		"scheduleId":   perm.ScheduleId,
+		"userId":       perm.UserId,
+		"revokedBy":    caller.Id,
+	})
 
 	return RevokeClassPermissionResponse{Success: true}, nil
 }
