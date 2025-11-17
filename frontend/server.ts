@@ -489,6 +489,7 @@ export interface GetScheduleDetailsRequest {
 export interface GetScheduleDetailsResponse {
     schedule: ClassSchedule
     upcomingInstances: ClassInstance[]
+    permissions: ClassPermissionWithUser[]
 }
 
 export interface UpdateClassScheduleRequest {
@@ -519,6 +520,18 @@ export interface DeleteClassScheduleRequest {
 
 export interface DeleteClassScheduleResponse {
     success: boolean
+}
+
+export interface GetScheduleExecutionLogsRequest {
+    scheduleId: number | null
+    roomId: number | null
+    limit: number
+    offset: number
+}
+
+export interface GetScheduleExecutionLogsResponse {
+    logs: ScheduleExecutionLog[]
+    total: number
 }
 
 export interface GrantClassPermissionRequest {
@@ -882,6 +895,16 @@ export interface ClassPermissionWithUser {
     userEmail: string
 }
 
+export interface ScheduleExecutionLog {
+    id: number
+    scheduleId: number
+    roomId: number
+    action: string
+    timestamp: string
+    success: boolean
+    errorMsg: string
+}
+
 export interface UpcomingClassWithRoom {
     schedule: ClassSchedule
     instanceStart: string
@@ -1111,6 +1134,10 @@ export async function UpdateClassSchedule(data: UpdateClassScheduleRequest): Pro
 
 export async function DeleteClassSchedule(data: DeleteClassScheduleRequest): Promise<rpc.Response<DeleteClassScheduleResponse>> {
     return await rpc.call<DeleteClassScheduleResponse>('DeleteClassSchedule', JSON.stringify(data));
+}
+
+export async function GetScheduleExecutionLogs(data: GetScheduleExecutionLogsRequest): Promise<rpc.Response<GetScheduleExecutionLogsResponse>> {
+    return await rpc.call<GetScheduleExecutionLogsResponse>('GetScheduleExecutionLogs', JSON.stringify(data));
 }
 
 export async function GrantClassPermission(data: GrantClassPermissionRequest): Promise<rpc.Response<GrantClassPermissionResponse>> {

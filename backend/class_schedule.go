@@ -205,8 +205,9 @@ type GetScheduleDetailsRequest struct {
 }
 
 type GetScheduleDetailsResponse struct {
-	Schedule          ClassSchedule   `json:"schedule"`
-	UpcomingInstances []ClassInstance `json:"upcomingInstances"`
+	Schedule          ClassSchedule             `json:"schedule"`
+	UpcomingInstances []ClassInstance           `json:"upcomingInstances"`
+	Permissions       []ClassPermissionWithUser `json:"permissions"`
 }
 
 type UpdateClassScheduleRequest struct {
@@ -245,6 +246,18 @@ type DeleteClassScheduleRequest struct {
 
 type DeleteClassScheduleResponse struct {
 	Success bool `json:"success"`
+}
+
+type GetScheduleExecutionLogsRequest struct {
+	ScheduleId *int `json:"scheduleId"` // Optional: filter by schedule
+	RoomId     *int `json:"roomId"`     // Optional: filter by room
+	Limit      int  `json:"limit"`      // Max results (default 50, max 200)
+	Offset     int  `json:"offset"`     // For pagination
+}
+
+type GetScheduleExecutionLogsResponse struct {
+	Logs  []ScheduleExecutionLog `json:"logs"`
+	Total int                    `json:"total"` // Total count for pagination
 }
 
 // API Procedures
@@ -479,6 +492,26 @@ func GetScheduleDetails(ctx *vbeam.Context, req GetScheduleDetailsRequest) (resp
 		} else {
 			resp.UpcomingInstances = []ClassInstance{}
 		}
+	}
+
+	// Load permissions for this schedule
+	var permIds []int
+	vbolt.ReadTermTargets(ctx.Tx, PermsByScheduleIdx, schedule.Id, &permIds, vbolt.Window{})
+
+	resp.Permissions = make([]ClassPermissionWithUser, 0, len(permIds))
+	for _, permId := range permIds {
+		var perm ClassPermission
+		vbolt.Read(ctx.Tx, ClassPermissionsBkt, permId, &perm)
+
+		// Get user details
+		var user User
+		vbolt.Read(ctx.Tx, UsersBkt, perm.UserId, &user)
+
+		resp.Permissions = append(resp.Permissions, ClassPermissionWithUser{
+			Permission: perm,
+			UserName:   user.Name,
+			UserEmail:  user.Email,
+		})
 	}
 
 	return
@@ -892,6 +925,94 @@ func DeleteClassSchedule(ctx *vbeam.Context, req DeleteClassScheduleRequest) (re
 	return
 }
 
+func GetScheduleExecutionLogs(ctx *vbeam.Context, req GetScheduleExecutionLogsRequest) (resp GetScheduleExecutionLogsResponse, err error) {
+	// Check authentication
+	caller, authErr := GetAuthUser(ctx)
+	if authErr != nil {
+		return resp, errors.New("authentication required")
+	}
+
+	// Set default limit if not provided
+	if req.Limit <= 0 {
+		req.Limit = 50
+	}
+	if req.Limit > 200 {
+		req.Limit = 200
+	}
+
+	// Collect log IDs based on filters
+	var logIds []int
+
+	if req.ScheduleId != nil {
+		// Filter by schedule
+		var schedule ClassSchedule
+		vbolt.Read(ctx.Tx, ClassSchedulesBkt, *req.ScheduleId, &schedule)
+		if schedule.Id == 0 {
+			return resp, errors.New("schedule not found")
+		}
+
+		// Check permission (Viewer+ required)
+		if !HasStudioPermission(ctx.Tx, caller.Id, schedule.StudioId, StudioRoleViewer) {
+			return resp, errors.New("viewer permission required")
+		}
+
+		// Get logs for this schedule
+		vbolt.ReadTermTargets(ctx.Tx, LogsByScheduleIdx, *req.ScheduleId, &logIds, vbolt.Window{})
+	} else if req.RoomId != nil {
+		// Filter by room
+		var room Room
+		vbolt.Read(ctx.Tx, RoomsBkt, *req.RoomId, &room)
+		if room.Id == 0 {
+			return resp, errors.New("room not found")
+		}
+
+		// Check permission (Viewer+ required)
+		if !HasStudioPermission(ctx.Tx, caller.Id, room.StudioId, StudioRoleViewer) {
+			return resp, errors.New("viewer permission required")
+		}
+
+		// Get logs for this room
+		vbolt.ReadTermTargets(ctx.Tx, LogsByRoomIdx, *req.RoomId, &logIds, vbolt.Window{})
+	} else {
+		// No filter - return error (require at least schedule or room filter)
+		return resp, errors.New("scheduleId or roomId filter required")
+	}
+
+	resp.Total = len(logIds)
+
+	// Sort log IDs in descending order (most recent first)
+	// Since IDs are auto-incrementing, higher ID = more recent
+	for i := 0; i < len(logIds)/2; i++ {
+		logIds[i], logIds[len(logIds)-1-i] = logIds[len(logIds)-1-i], logIds[i]
+	}
+
+	// Apply pagination
+	startIdx := req.Offset
+	if startIdx >= len(logIds) {
+		resp.Logs = []ScheduleExecutionLog{}
+		return resp, nil
+	}
+
+	endIdx := startIdx + req.Limit
+	if endIdx > len(logIds) {
+		endIdx = len(logIds)
+	}
+
+	paginatedLogIds := logIds[startIdx:endIdx]
+
+	// Load logs
+	resp.Logs = make([]ScheduleExecutionLog, 0, len(paginatedLogIds))
+	for _, logId := range paginatedLogIds {
+		var log ScheduleExecutionLog
+		vbolt.Read(ctx.Tx, ScheduleLogsBkt, logId, &log)
+		if log.Id > 0 {
+			resp.Logs = append(resp.Logs, log)
+		}
+	}
+
+	return resp, nil
+}
+
 // RegisterClassScheduleMethods registers class schedule API procedures
 func RegisterClassScheduleMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, CreateClassSchedule)
@@ -899,4 +1020,5 @@ func RegisterClassScheduleMethods(app *vbeam.Application) {
 	vbeam.RegisterProc(app, GetScheduleDetails)
 	vbeam.RegisterProc(app, UpdateClassSchedule)
 	vbeam.RegisterProc(app, DeleteClassSchedule)
+	vbeam.RegisterProc(app, GetScheduleExecutionLogs)
 }

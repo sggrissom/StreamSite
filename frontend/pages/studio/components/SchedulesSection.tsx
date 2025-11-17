@@ -4,6 +4,7 @@ import * as server from "../../../server";
 import { Modal } from "../../../components/Modal";
 import { CreateScheduleModal } from "./CreateScheduleModal";
 import { ClassPermissionsModal } from "./ClassPermissionsModal";
+import { ExecutionLogsModal } from "./ExecutionLogsModal";
 import "./SchedulesSection-styles";
 
 type Studio = {
@@ -32,6 +33,7 @@ type SchedulesSectionState = {
   editingSchedule: server.ClassSchedule | null;
   deleteConfirmSchedule: server.ClassSchedule | null;
   permissionsSchedule: server.ClassSchedule | null;
+  logsSchedule: server.ClassSchedule | null;
   isDeleting: boolean;
 };
 
@@ -46,6 +48,7 @@ const useSchedulesSection = vlens.declareHook(
       editingSchedule: null,
       deleteConfirmSchedule: null,
       permissionsSchedule: null,
+      logsSchedule: null,
       isDeleting: false,
     };
 
@@ -121,6 +124,19 @@ function openPermissionsModal(
 
 function closePermissionsModal(state: SchedulesSectionState) {
   state.permissionsSchedule = null;
+  vlens.scheduleRedraw();
+}
+
+function openLogsModal(
+  state: SchedulesSectionState,
+  schedule: server.ClassSchedule,
+) {
+  state.logsSchedule = schedule;
+  vlens.scheduleRedraw();
+}
+
+function closeLogsModal(state: SchedulesSectionState) {
+  state.logsSchedule = null;
   vlens.scheduleRedraw();
 }
 
@@ -438,6 +454,12 @@ export function SchedulesSection(props: SchedulesSectionProps) {
                         </button>
                         <button
                           className="btn-schedule"
+                          onClick={() => openLogsModal(state, schedule)}
+                        >
+                          View Logs
+                        </button>
+                        <button
+                          className="btn-schedule"
                           onClick={() => openEditModal(state, schedule)}
                         >
                           Edit
@@ -524,6 +546,16 @@ export function SchedulesSection(props: SchedulesSectionProps) {
           onClose={() => closePermissionsModal(state)}
           schedule={state.permissionsSchedule}
           studioId={props.studio.id}
+        />
+      )}
+
+      {/* Execution Logs Modal */}
+      {state.logsSchedule && (
+        <ExecutionLogsModal
+          isOpen={true}
+          onClose={() => closeLogsModal(state)}
+          scheduleId={state.logsSchedule.id}
+          title={`Execution Logs: ${state.logsSchedule.name}`}
         />
       )}
     </div>
