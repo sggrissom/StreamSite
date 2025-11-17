@@ -19,7 +19,7 @@ func TestPackClassSchedule(t *testing.T) {
 			Id:              1,
 			RoomId:          10,
 			StudioId:        5,
-			Name:            "Math 101",
+			Name:            "Ballet 3",
 			Description:     "Introduction to Algebra",
 			IsRecurring:     false,
 			StartTime:       time.Now().Add(24 * time.Hour).Truncate(time.Second),
@@ -487,7 +487,7 @@ func TestCreateOneTimeSchedule(t *testing.T) {
 			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
 			RoomId:          room.Id,
 			StudioId:        studio.Id,
-			Name:            "Math 101",
+			Name:            "Ballet 3",
 			Description:     "Introduction to Algebra",
 			IsRecurring:     false,
 			StartTime:       startTime,
@@ -513,8 +513,8 @@ func TestCreateOneTimeSchedule(t *testing.T) {
 		if retrieved.Id == 0 {
 			t.Error("Schedule should be created")
 		}
-		if retrieved.Name != "Math 101" {
-			t.Errorf("Expected schedule name 'Math 101', got '%s'", retrieved.Name)
+		if retrieved.Name != "Ballet 3" {
+			t.Errorf("Expected schedule name 'Ballet 3', got '%s'", retrieved.Name)
 		}
 		if retrieved.IsRecurring != false {
 			t.Error("Schedule should not be recurring")
@@ -832,7 +832,7 @@ func TestListSchedulesByRoom(t *testing.T) {
 			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
 			RoomId:          room1.Id,
 			StudioId:        studio.Id,
-			Name:            "Math 101",
+			Name:            "Ballet 3",
 			IsRecurring:     false,
 			StartTime:       time.Now().Add(24 * time.Hour),
 			EndTime:         time.Now().Add(25 * time.Hour),
@@ -848,7 +848,7 @@ func TestListSchedulesByRoom(t *testing.T) {
 			Id:              vbolt.NextIntId(tx, ClassSchedulesBkt),
 			RoomId:          room1.Id,
 			StudioId:        studio.Id,
-			Name:            "Science 101",
+			Name:            "Jazz 2",
 			IsRecurring:     false,
 			StartTime:       time.Now().Add(48 * time.Hour),
 			EndTime:         time.Now().Add(49 * time.Hour),
@@ -886,21 +886,21 @@ func TestListSchedulesByRoom(t *testing.T) {
 		}
 
 		// Verify correct schedules returned
-		foundMath := false
-		foundScience := false
+		foundBallet := false
+		foundJazz := false
 		for _, id := range scheduleIds {
 			var schedule ClassSchedule
 			vbolt.Read(tx, ClassSchedulesBkt, id, &schedule)
-			if schedule.Name == "Math 101" {
-				foundMath = true
+			if schedule.Name == "Ballet 3" {
+				foundBallet = true
 			}
-			if schedule.Name == "Science 101" {
-				foundScience = true
+			if schedule.Name == "Jazz 2" {
+				foundJazz = true
 			}
 		}
 
-		if !foundMath || !foundScience {
-			t.Error("Should find both Math 101 and Science 101 for room1")
+		if !foundBallet || !foundJazz {
+			t.Error("Should find both Ballet and Jazz for room1")
 		}
 
 		// Query schedules for room2

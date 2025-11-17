@@ -15,7 +15,7 @@ type ClassSchedule struct {
 	Id          int    `json:"id"`
 	RoomId      int    `json:"roomId"`      // Which room this class uses
 	StudioId    int    `json:"studioId"`    // Parent studio (for permissions)
-	Name        string `json:"name"`        // e.g., "Math 101"
+	Name        string `json:"name"`        // e.g., "Ballet 3"
 	Description string `json:"description"` // e.g., "Algebra basics"
 
 	// Schedule Type

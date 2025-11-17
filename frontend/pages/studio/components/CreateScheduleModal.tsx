@@ -519,7 +519,7 @@ export function CreateScheduleModal(props: CreateScheduleModalProps) {
             className="schedule-form-input"
             value={state.name}
             onInput={vlens.cachePartial(handleNameInput, state)}
-            placeholder="e.g., Math 101"
+            placeholder="e.g., Ballet 3"
           />
           {state.errors.name && (
             <div className="schedule-form-error">{state.errors.name}</div>
