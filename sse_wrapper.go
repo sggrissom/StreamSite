@@ -26,5 +26,11 @@ func (w *SSEWrapper) ServeHTTP(rw http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if r.URL.Path == "/healthz" && r.Method == "GET" {
+		rw.WriteHeader(http.StatusOK)
+		rw.Write([]byte("ok"))
+		return
+	}
+
 	w.app.ServeHTTP(rw, r)
 }

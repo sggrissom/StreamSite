@@ -20,7 +20,12 @@ func OpenDB(dbpath string) *vbolt.DB {
 
 func MakeApplicationWithDB() (*vbeam.Application, *vbolt.DB) {
 	// Load environment variables from .env file
-	err := godotenv.Load()
+	var err error
+	if cfg.IsRelease {
+		err = godotenv.Load("/srv/apps/releve/shared/.env")
+	} else {
+		err = godotenv.Load()
+	}
 	if err != nil {
 		log.Printf("Warning: Error loading .env file: %v", err)
 	}

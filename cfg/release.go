@@ -3,7 +3,7 @@
 package cfg
 
 const IsRelease = true
-const DBPath = "/var/lib/stream/data/db.bolt"
+const DBPath = "/srv/apps/releve/shared/data/db.bolt"
 const StaticDir = "static/"
 const SiteURL = "https://releve.live"
 const SiteRoot = "releve.live"
